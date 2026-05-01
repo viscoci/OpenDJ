@@ -1,0 +1,85 @@
+import type { NowPlayingTrack } from '@opendj/core';
+import type { LyricsDocument, LyricsFeedbackKind } from '@opendj/lyrics';
+import type { PlaybackClockSample, PredictedPlaybackPosition, SyncCue } from '@opendj/sync';
+import type { QueueItemSummary } from './queue-summary.js';
+
+/**
+ * Discriminated union of every realtime event broadcast by a SessionRoom /
+ * NodeSessionRoom to connected clients.
+ *
+ * High-frequency progress ticks are intentionally NOT in this union — clients
+ * locally interpolate from the most recent `playback.clock_sampled` /
+ * `playback.corrected` event using `predictPlaybackPosition` from @opendj/sync.
+ *
+ * See docs/agent-brief.md §"Event model".
+ */
+export type SessionEvent =
+  // Queue lifecycle
+  | { type: 'queue.item_requested'; item: QueueItemSummary }
+  | { type: 'queue.item_approved'; itemId: string }
+  | { type: 'queue.item_rejected'; itemId: string }
+  | { type: 'queue.item_removed'; itemId: string }
+  // Now playing + skip
+  | { type: 'now_playing.updated'; track: NowPlayingTrack | null }
+  | { type: 'skip_vote.updated'; itemId: string; votes: number; threshold: number }
+  // Guest slots
+  | { type: 'guest_slots.updated'; activeCount: number; queuedCount: number }
+  // Playback clock + correction (sync layer)
+  | { type: 'playback.clock_sampled'; sample: PlaybackClockSample }
+  | { type: 'playback.corrected'; position: PredictedPlaybackPosition }
+  // Lyrics + cues
+  | { type: 'lyrics.loaded'; trackUri: string; lyrics: LyricsDocument | null }
+  | { type: 'lyrics.feedback_recorded'; trackUri: string; feedbackKind: LyricsFeedbackKind }
+  | { type: 'sync.cue_window_updated'; trackUri: string; cues: SyncCue[] }
+  // Session lifecycle
+  | { type: 'session.ended' };
+
+export type SessionEventType = SessionEvent['type'];
+
+/**
+ * Narrow `SessionEvent` to a specific variant by its discriminant.
+ *
+ * ```ts
+ * if (isEventOfType(event, 'queue.item_requested')) {
+ *   event.item; // QueueItemSummary, narrowed
+ * }
+ * ```
+ */
+export function isEventOfType<T extends SessionEventType>(
+  event: SessionEvent,
+  type: T,
+): event is Extract<SessionEvent, { type: T }> {
+  return event.type === type;
+}
+
+const QUEUE_EVENT_TYPES = new Set<SessionEventType>([
+  'queue.item_requested',
+  'queue.item_approved',
+  'queue.item_rejected',
+  'queue.item_removed',
+  'skip_vote.updated',
+]);
+
+const PLAYBACK_EVENT_TYPES = new Set<SessionEventType>([
+  'now_playing.updated',
+  'playback.clock_sampled',
+  'playback.corrected',
+]);
+
+const LYRICS_EVENT_TYPES = new Set<SessionEventType>([
+  'lyrics.loaded',
+  'lyrics.feedback_recorded',
+  'sync.cue_window_updated',
+]);
+
+export function isQueueEvent(event: SessionEvent): boolean {
+  return QUEUE_EVENT_TYPES.has(event.type);
+}
+
+export function isPlaybackEvent(event: SessionEvent): boolean {
+  return PLAYBACK_EVENT_TYPES.has(event.type);
+}
+
+export function isLyricsEvent(event: SessionEvent): boolean {
+  return LYRICS_EVENT_TYPES.has(event.type);
+}
