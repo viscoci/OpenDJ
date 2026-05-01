@@ -110,35 +110,34 @@ During early development, `opendj-live` may consume `github:viscoci/opendj` work
 
 The original stack is close, but the weak spot is realtime/shared session state. Hundreds of guests watching the same queue should not all poll Postgres or hit normal stateless API routes for every queue/progress update. The hosted layer should treat each live session as a small stateful actor.
 
-| Concern | Choice | Reason |
-|---|---|---|
-| Server framework | **Hono** | Keep. Runs cleanly on Node and Cloudflare Workers; good fit for one route tree across deploy targets. |
-| Runtime | **Node 22 LTS for OSS; Cloudflare Workers for hosted** | Node 20 is still acceptable, but starting new work on Node 22 gives a longer support runway. |
-| Language | **TypeScript strict** | Everywhere, no exceptions. |
-| ORM / SQL | **Drizzle ORM + Postgres.js adapter** | Drizzle keeps schema/type control; Postgres.js works well with Cloudflare Hyperdrive and Node. Avoid `node-postgres` in code that must run in Workers. |
-| Primary database | **Postgres** | Source of truth for accounts, sessions, queue history, billing, and analytics. Hosted recommendation: Neon first for low initial cost + branching/autoscaling; any managed Postgres remains swappable through `DATABASE_URL` + Hyperdrive. |
-| Hosted realtime/cache | **Cloudflare Durable Objects per live session** | One authoritative room actor per session handles WebSockets, hot queue state, guest slots, heartbeats, skip votes, and fan-out. This avoids Redis for hosted while remaining horizontally scalable. |
-| Hosted background work | **Cloudflare Queues + scheduled Workers** | Use Queues for analytics ingestion, provider command retries, token refresh work, billing webhooks, and non-blocking jobs. Use cron only for periodic sweeps. |
-| OSS realtime/cache | **In-process room registry; optional Valkey** | Default self-host should stay cheap and simple. Add Valkey only when the OSS deploy runs more than one app container. |
-| Frontend | **Angular 21 + Capacitor-ready app architecture** | Public repo ships reusable `@opendj/frontend` components plus a basic `@opendj/frontend-template`; private `opendj-live` ships the full hosted SPA. Keep the app web-first, but avoid assumptions that would prevent wrapping it with Capacitor later. Angular now has stronger AI tooling, MCP support, production-ready zoneless change detection, signals, standalone components, and modern control flow. |
-| Frontend state | **Angular signals + resource/httpResource where stable** | Keep state explicit and fast. Avoid heavy global state libraries until real complexity appears. |
-| Native/mobile shell | **Ionic Capacitor, P2** | Use Capacitor as the planned native runtime for iOS/Android wrappers, but do not make native apps block the web/SaaS launch. Ionic UI components may be used where they help mobile polish, but the OpenDJ design system remains authoritative. |
-| DI | **Explicit provider registry / factory functions, not InversifyJS** | Inversify adds decorators/reflection/bundling complexity. A small typed registry is easier for Workers, tests, and agents to reason about. |
-| API contract | **OpenAPI generated from route schemas** | Gives the Angular app, tests, docs, and MCP/dev agents a single contract. |
-| Auth / identity | **OSS `@opendj/auth` package with OAuth/OIDC, email/password fallback, server sessions, and claims** | Hosts and guests are both users. Authorization must check token/session claims at every protected route instead of assuming host-only auth. |
-| Abuse prevention | **OSS `@opendj/abuse` package + realtime room enforcement** | Hosts should be able to leave a session running with minimal babysitting. Abuse detection must operate near real time using request, slot, vote, search, and device/fingerprint signals. |
-| Song synchronization | **`@opendj/sync` timing contracts + adapters** | OSS provides predicted playback positions, normalized progress helpers, and adapter interfaces for lyrics, lighting, and other time-based integrations. Concrete provider/integration implementations can live in `opendj-live` or third-party packages. |
-| Lyrics / karaoke | **`@opendj/lyrics` + LRCLIB adapter as day-one feature** | Lyrics are a core differentiator for the live/TV view. Use LRCLIB as the initial lookup source for synced and unsynced lyrics, cache normalized results, and expose feedback/correction hooks without promising perfect karaoke timing. |
-| Validation | **Valibot or Zod at route boundaries** | Required for safe public APIs. Prefer Valibot if bundle size matters; Zod if agent familiarity and ecosystem matter more. |
-| Tests | **Vitest + Miniflare/Workers test harness + Playwright smoke** | Unit tests for core, Worker integration tests for hosted, browser smoke for guest/host flows. |
-| CI | **GitHub Actions** | Lint + typecheck + test + OSS smoke on push/PR. |
-| AI/dev-agent support | **Angular MCP + local OpenDJ MCP server** | Use MCP for build agents and internal admin tooling, not in the guest request hot path. |
-| License | **MIT** | Good default for OSS adoption. |
+| Concern                | Choice                                                                                               | Reason                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ---------------------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Server framework       | **Hono**                                                                                             | Keep. Runs cleanly on Node and Cloudflare Workers; good fit for one route tree across deploy targets.                                                                                                                                                                                                                                                                                                         |
+| Runtime                | **Node 22 LTS for OSS; Cloudflare Workers for hosted**                                               | Node 20 is still acceptable, but starting new work on Node 22 gives a longer support runway.                                                                                                                                                                                                                                                                                                                  |
+| Language               | **TypeScript strict**                                                                                | Everywhere, no exceptions.                                                                                                                                                                                                                                                                                                                                                                                    |
+| ORM / SQL              | **Drizzle ORM + Postgres.js adapter**                                                                | Drizzle keeps schema/type control; Postgres.js works well with Cloudflare Hyperdrive and Node. Avoid `node-postgres` in code that must run in Workers.                                                                                                                                                                                                                                                        |
+| Primary database       | **Postgres**                                                                                         | Source of truth for accounts, sessions, queue history, billing, and analytics. Hosted recommendation: Neon first for low initial cost + branching/autoscaling; any managed Postgres remains swappable through `DATABASE_URL` + Hyperdrive.                                                                                                                                                                    |
+| Hosted realtime/cache  | **Cloudflare Durable Objects per live session**                                                      | One authoritative room actor per session handles WebSockets, hot queue state, guest slots, heartbeats, skip votes, and fan-out. This avoids Redis for hosted while remaining horizontally scalable.                                                                                                                                                                                                           |
+| Hosted background work | **Cloudflare Queues + scheduled Workers**                                                            | Use Queues for analytics ingestion, provider command retries, token refresh work, billing webhooks, and non-blocking jobs. Use cron only for periodic sweeps.                                                                                                                                                                                                                                                 |
+| OSS realtime/cache     | **In-process room registry; optional Valkey**                                                        | Default self-host should stay cheap and simple. Add Valkey only when the OSS deploy runs more than one app container.                                                                                                                                                                                                                                                                                         |
+| Frontend               | **Angular 21 + Capacitor-ready app architecture**                                                    | Public repo ships reusable `@opendj/frontend` components plus a basic `@opendj/frontend-template`; private `opendj-live` ships the full hosted SPA. Keep the app web-first, but avoid assumptions that would prevent wrapping it with Capacitor later. Angular now has stronger AI tooling, MCP support, production-ready zoneless change detection, signals, standalone components, and modern control flow. |
+| Frontend state         | **Angular signals + resource/httpResource where stable**                                             | Keep state explicit and fast. Avoid heavy global state libraries until real complexity appears.                                                                                                                                                                                                                                                                                                               |
+| Native/mobile shell    | **Ionic Capacitor, P2**                                                                              | Use Capacitor as the planned native runtime for iOS/Android wrappers, but do not make native apps block the web/SaaS launch. Ionic UI components may be used where they help mobile polish, but the OpenDJ design system remains authoritative.                                                                                                                                                               |
+| DI                     | **Explicit provider registry / factory functions, not InversifyJS**                                  | Inversify adds decorators/reflection/bundling complexity. A small typed registry is easier for Workers, tests, and agents to reason about.                                                                                                                                                                                                                                                                    |
+| API contract           | **OpenAPI generated from route schemas**                                                             | Gives the Angular app, tests, docs, and MCP/dev agents a single contract.                                                                                                                                                                                                                                                                                                                                     |
+| Auth / identity        | **OSS `@opendj/auth` package with OAuth/OIDC, email/password fallback, server sessions, and claims** | Hosts and guests are both users. Authorization must check token/session claims at every protected route instead of assuming host-only auth.                                                                                                                                                                                                                                                                   |
+| Abuse prevention       | **OSS `@opendj/abuse` package + realtime room enforcement**                                          | Hosts should be able to leave a session running with minimal babysitting. Abuse detection must operate near real time using request, slot, vote, search, and device/fingerprint signals.                                                                                                                                                                                                                      |
+| Song synchronization   | **`@opendj/sync` timing contracts + adapters**                                                       | OSS provides predicted playback positions, normalized progress helpers, and adapter interfaces for lyrics, lighting, and other time-based integrations. Concrete provider/integration implementations can live in `opendj-live` or third-party packages.                                                                                                                                                      |
+| Lyrics / karaoke       | **`@opendj/lyrics` + LRCLIB adapter as day-one feature**                                             | Lyrics are a core differentiator for the live/TV view. Use LRCLIB as the initial lookup source for synced and unsynced lyrics, cache normalized results, and expose feedback/correction hooks without promising perfect karaoke timing.                                                                                                                                                                       |
+| Validation             | **Valibot or Zod at route boundaries**                                                               | Required for safe public APIs. Prefer Valibot if bundle size matters; Zod if agent familiarity and ecosystem matter more.                                                                                                                                                                                                                                                                                     |
+| Tests                  | **Vitest + Miniflare/Workers test harness + Playwright smoke**                                       | Unit tests for core, Worker integration tests for hosted, browser smoke for guest/host flows.                                                                                                                                                                                                                                                                                                                 |
+| CI                     | **GitHub Actions**                                                                                   | Lint + typecheck + test + OSS smoke on push/PR.                                                                                                                                                                                                                                                                                                                                                               |
+| AI/dev-agent support   | **Angular MCP + local OpenDJ MCP server**                                                            | Use MCP for build agents and internal admin tooling, not in the guest request hot path.                                                                                                                                                                                                                                                                                                                       |
+| License                | **MIT**                                                                                              | Good default for OSS adoption.                                                                                                                                                                                                                                                                                                                                                                                |
 
 ### Explicit stack decision
 
 Use **Durable Objects as the hosted high-speed caching/coordination layer**, not Redis. Redis/Valkey belongs in the OSS scale-out path, not the initial hosted path. The hosted platform already has a stateful edge primitive that maps almost perfectly to “hundreds of clients connected to one live event.”
-
 
 ### Cross-platform app shell decision
 
@@ -372,7 +371,8 @@ Feedback behavior:
 - Guests may optionally report lyrics issues if logged in or if abuse/rate limits allow it.
 - Feedback should create product signals and can suppress a specific lyrics match for an account/session when confidence is low.
 - Do not attempt crowd-edited lyric publishing in P0. Start with feedback capture and local match suppression.
-```
+
+````
 
 ### Helpers
 
@@ -384,7 +384,7 @@ findActiveCues<T extends SyncCue>(positionMs: number, cues: T[]): T[]
 findUpcomingCues<T extends SyncCue>(positionMs: number, cues: T[], windowMs: number): T[]
 lyricsDocumentToSyncCues(document: LyricsDocument): SyncCue[]
 getActiveLyricWindow(position: PredictedPlaybackPosition, lyrics: LyricsDocument, previousCount?: number, nextCount?: number): LyricsLine[]
-```
+````
 
 Prediction rules:
 
@@ -521,7 +521,7 @@ Routes and UI must check granular capabilities before exposing or calling featur
 export type ProviderId = 'spotify' | 'soundtrack' | 'apple-music' | string;
 
 export interface Track {
-  uri: string;           // provider-native URI, e.g. spotify:track:xxx
+  uri: string; // provider-native URI, e.g. spotify:track:xxx
   name: string;
   artist: string;
   albumArt: string | null;
@@ -600,7 +600,7 @@ export const PROVIDER_FEATURES = {
   SyncClockRead: 'sync.clock.read',
 } as const;
 
-export type ProviderFeatureId = typeof PROVIDER_FEATURES[keyof typeof PROVIDER_FEATURES];
+export type ProviderFeatureId = (typeof PROVIDER_FEATURES)[keyof typeof PROVIDER_FEATURES];
 ```
 
 ### Modular provider feature interfaces
@@ -668,11 +668,18 @@ export interface PlaylistSummary {
 }
 
 export interface ISupportsPlaylistsRead {
-  listPlaylists(limit?: number, cursor?: string): Promise<{ items: PlaylistSummary[]; nextCursor?: string }>;
+  listPlaylists(
+    limit?: number,
+    cursor?: string,
+  ): Promise<{ items: PlaylistSummary[]; nextCursor?: string }>;
 }
 
 export interface ISupportsPlaylistTracksRead {
-  listPlaylistTracks(playlistUri: string, limit?: number, cursor?: string): Promise<{ items: Track[]; nextCursor?: string }>;
+  listPlaylistTracks(
+    playlistUri: string,
+    limit?: number,
+    cursor?: string,
+  ): Promise<{ items: Track[]; nextCursor?: string }>;
 }
 
 export interface ISupportsPlaylistTracksAdd {
@@ -685,29 +692,43 @@ export interface ISupportsPlaylistTracksAdd {
 Use feature type guards instead of assuming methods exist from the base provider type.
 
 ```typescript
-export function supportsSearch(provider: IStreamingProvider): provider is IStreamingProvider & ISupportsSearch {
-  return provider.getCapabilities().features[PROVIDER_FEATURES.Search]?.supported === true
-    && typeof (provider as Partial<ISupportsSearch>).search === 'function';
+export function supportsSearch(
+  provider: IStreamingProvider,
+): provider is IStreamingProvider & ISupportsSearch {
+  return (
+    provider.getCapabilities().features[PROVIDER_FEATURES.Search]?.supported === true &&
+    typeof (provider as Partial<ISupportsSearch>).search === 'function'
+  );
 }
 
-export function supportsQueueTrack(provider: IStreamingProvider): provider is IStreamingProvider & ISupportsQueueTrack {
-  return provider.getCapabilities().features[PROVIDER_FEATURES.QueueTrack]?.supported === true
-    && typeof (provider as Partial<ISupportsQueueTrack>).queueTrack === 'function';
+export function supportsQueueTrack(
+  provider: IStreamingProvider,
+): provider is IStreamingProvider & ISupportsQueueTrack {
+  return (
+    provider.getCapabilities().features[PROVIDER_FEATURES.QueueTrack]?.supported === true &&
+    typeof (provider as Partial<ISupportsQueueTrack>).queueTrack === 'function'
+  );
 }
 
 export function supportsVolumeSetAbsolute(
   provider: IStreamingProvider,
 ): provider is IStreamingProvider & ISupportsVolumeSetAbsolute {
-  return provider.getCapabilities().features[PROVIDER_FEATURES.VolumeSetAbsolute]?.supported === true
-    && typeof (provider as Partial<ISupportsVolumeSetAbsolute>).setVolume === 'function';
+  return (
+    provider.getCapabilities().features[PROVIDER_FEATURES.VolumeSetAbsolute]?.supported === true &&
+    typeof (provider as Partial<ISupportsVolumeSetAbsolute>).setVolume === 'function'
+  );
 }
 
-export function supportsVolumeStep(provider: IStreamingProvider): provider is IStreamingProvider & ISupportsVolumeStep {
+export function supportsVolumeStep(
+  provider: IStreamingProvider,
+): provider is IStreamingProvider & ISupportsVolumeStep {
   const features = provider.getCapabilities().features;
-  return features[PROVIDER_FEATURES.VolumeStepUp]?.supported === true
-    && features[PROVIDER_FEATURES.VolumeStepDown]?.supported === true
-    && typeof (provider as Partial<ISupportsVolumeStep>).increaseVolume === 'function'
-    && typeof (provider as Partial<ISupportsVolumeStep>).decreaseVolume === 'function';
+  return (
+    features[PROVIDER_FEATURES.VolumeStepUp]?.supported === true &&
+    features[PROVIDER_FEATURES.VolumeStepDown]?.supported === true &&
+    typeof (provider as Partial<ISupportsVolumeStep>).increaseVolume === 'function' &&
+    typeof (provider as Partial<ISupportsVolumeStep>).decreaseVolume === 'function'
+  );
 }
 ```
 
@@ -766,11 +787,11 @@ export const spotifyCapabilities: ProviderCapabilities = {
 
 ### Providers to implement
 
-| Provider | `providerId` | Search | Queue track | Playlist switch | Now playing | Skip | Volume | Zones | Playlist read | Notes |
-|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| Spotify | `spotify` | ✅ | ✅ | ❌/later | ✅ | ✅ | ✅ | Synthetic default | P1 | Custom fetch wrapper. Do **not** use `spotify-web-api-node`; it is Node-only and unsuitable for Workers. |
-| Soundtrack Your Brand | `soundtrack` | ✅ | ❌ | ✅ | ✅ | Provider-dependent | Provider-dependent | ✅ | P1/P2 | Commercial venue-friendly provider. Model playlist switching separately from queue injection. |
-| Apple Music | `apple-music` | Stub | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | MusicKit JS is browser-oriented. Server provider should start as a stub throwing `NotImplementedError`. |
+| Provider              | `providerId`  | Search | Queue track | Playlist switch | Now playing |               Skip |             Volume |             Zones | Playlist read | Notes                                                                                                    |
+| --------------------- | ------------- | -----: | ----------: | --------------: | ----------: | -----------------: | -----------------: | ----------------: | ------------: | -------------------------------------------------------------------------------------------------------- |
+| Spotify               | `spotify`     |     ✅ |          ✅ |        ❌/later |          ✅ |                 ✅ |                 ✅ | Synthetic default |            P1 | Custom fetch wrapper. Do **not** use `spotify-web-api-node`; it is Node-only and unsuitable for Workers. |
+| Soundtrack Your Brand | `soundtrack`  |     ✅ |          ❌ |              ✅ |          ✅ | Provider-dependent | Provider-dependent |                ✅ |         P1/P2 | Commercial venue-friendly provider. Model playlist switching separately from queue injection.            |
+| Apple Music           | `apple-music` |   Stub |          ❌ |              ❌ |          ❌ |                 ❌ |                 ❌ |                ❌ |            ❌ | MusicKit JS is browser-oriented. Server provider should start as a stub throwing `NotImplementedError`.  |
 
 ### Backend package directory structure
 
@@ -825,11 +846,15 @@ packages/backend/src/
 
 ```typescript
 class StreamingRouter {
-  async getProvider(hostId: string): Promise<IStreamingProvider>
-  async switchProvider(hostId: string, providerId: string, credentials: ProviderCredentials): Promise<void>
-  async queueTrack(hostId: string, track: Track): Promise<QueueResult>
-  async getNowPlaying(hostId: string): Promise<NowPlayingTrack | null>
-  async search(hostId: string, query: string): Promise<Track[]>
+  async getProvider(hostId: string): Promise<IStreamingProvider>;
+  async switchProvider(
+    hostId: string,
+    providerId: string,
+    credentials: ProviderCredentials,
+  ): Promise<void>;
+  async queueTrack(hostId: string, track: Track): Promise<QueueResult>;
+  async getNowPlaying(hostId: string): Promise<NowPlayingTrack | null>;
+  async search(hostId: string, query: string): Promise<Track[]>;
 }
 ```
 
@@ -1180,7 +1205,6 @@ CREATE INDEX abuse_subjects_session_status ON abuse_subjects(session_id, status)
 
 ---
 
-
 ## Authentication, accounts, and claims
 
 OpenDJ must treat hosts and logged-in guests as the same base identity type: `User`. A user may be a host for one account, a guest in another venue's session, or both at the same time. Do not model hosts and guests as separate authentication systems.
@@ -1189,12 +1213,12 @@ OpenDJ must treat hosts and logged-in guests as the same base identity type: `Us
 
 Support these login providers in the OSS auth layer:
 
-| Provider | Purpose | Notes |
-|---|---|---|
-| Google | Preferred social login | OIDC/OAuth provider config; map provider `sub` to `auth_identities.provider_subject`. |
-| Apple | Preferred social login | Preserve Apple private relay emails and treat email as mutable metadata, not stable identity. |
-| Facebook | Optional social login | Same identity model as other OAuth/OIDC providers. |
-| Email/password | Fallback, not preferred | Requires email verification, strong password hashing, login throttling, and recovery flow. |
+| Provider       | Purpose                 | Notes                                                                                         |
+| -------------- | ----------------------- | --------------------------------------------------------------------------------------------- |
+| Google         | Preferred social login  | OIDC/OAuth provider config; map provider `sub` to `auth_identities.provider_subject`.         |
+| Apple          | Preferred social login  | Preserve Apple private relay emails and treat email as mutable metadata, not stable identity. |
+| Facebook       | Optional social login   | Same identity model as other OAuth/OIDC providers.                                            |
+| Email/password | Fallback, not preferred | Requires email verification, strong password hashing, login throttling, and recovery flow.    |
 
 Music-service provider connections such as Spotify are **not** the same as login identities. A user can log in with Google and connect Spotify for playback. Store login identities in `auth_identities`; store music/service integrations in `provider_connections`.
 
@@ -1381,8 +1405,8 @@ canUseAnalytics(account: Account): boolean               // paid only
 ```typescript
 export const HOSTED_FREE_TIER_GUEST_CAP = 12;
 export const DEFAULT_SONGS_PER_GUEST_CAP = 3;
-export const SLOT_HEARTBEAT_TIMEOUT_MS = 5 * 60 * 1000;   // 5 min
-export const SLOT_EXPIRY_SWEEP_INTERVAL_MS = 60 * 1000;    // 60s
+export const SLOT_HEARTBEAT_TIMEOUT_MS = 5 * 60 * 1000; // 5 min
+export const SLOT_EXPIRY_SWEEP_INTERVAL_MS = 60 * 1000; // 60s
 export const SPOTIFY_SCOPES = ['user-read-playback-state', 'user-modify-playback-state'];
 ```
 
@@ -1408,7 +1432,7 @@ async function buildFingerprintHash(): Promise<string> {
   const encoded = new TextEncoder().encode(signals);
   const hashBuffer = await crypto.subtle.digest('SHA-256', encoded);
   return Array.from(new Uint8Array(hashBuffer))
-    .map(b => b.toString(16).padStart(2, '0'))
+    .map((b) => b.toString(16).padStart(2, '0'))
     .join('');
 }
 ```
@@ -1584,6 +1608,7 @@ CORS/cookie rules:
 ## Feature set — complete list
 
 ### Guest experience
+
 - Provider-agnostic language throughout (no "Spotify" in search bars or UI copy)
 - Song search by name / artist
 - Vibe chips for quick genre browsing
@@ -1600,6 +1625,7 @@ CORS/cookie rules:
 - Session states: Empty / Live / Cap reached / Session ended
 
 ### Guest accounts
+
 - Welcome + connect screen: Spotify (prominent), Apple Music, Tidal, YouTube Music, Amazon Music, Google, Apple, Email/handle — plus "Continue as guest" at equal visual weight, always visible
 - OAuth in-progress screen with provider branding
 - Name picker post-connect: pre-filled from provider, optional emoji avatar
@@ -1613,6 +1639,7 @@ CORS/cookie rules:
 ### Host experience
 
 **Onboarding flow**
+
 - Welcome screen with 4-step progress indicator
 - Music service picker: Spotify (recommended), Apple Music, Tidal, SoundCloud (beta)
 - OAuth in-progress with animated progress bar
@@ -1621,6 +1648,7 @@ CORS/cookie rules:
 - No-device warning: clear actionable error if host has no active playback device
 
 **Dashboard — Desktop**
+
 - Empty state with "+ New Session" CTA and connected service indicator
 - Active state: split view — queue management left, pending review right
 - Moderation chips (pill / banner / inline variants)
@@ -1628,15 +1656,18 @@ CORS/cookie rules:
 - Now playing focus panel: enlarged album art, skip controls, live stats
 
 **Dashboard — Mobile**
+
 - Tabs: Now Playing / Pending Review / Settings
 - Recently played strip on Now Playing tab
 
 **Moderation**
+
 - Auto-queue mode vs review mode toggle
 - Per-request approve / reject controls
 - Activity feed: "Song skipped by the room," approval history
 
 **Host Settings (all sections)**
+
 - Show requester name to guests (free) vs on TV display (PRO — separate toggles)
 - Allow anonymous guests (toggle, default ON)
 - Request cap + cooldown between requests
@@ -1645,18 +1676,21 @@ CORS/cookie rules:
 - Danger zone (end session, clear queue)
 
 **Session management**
+
 - New session wizard: name the event, set zone count (if PRO), configure moderation before going live
 - QR code download: PNG + PDF for printing
 - QR share URL copy
 - Session ended / recap state with "Start new session" CTA
 
 **Lyrics / Karaoke**
+
 - Live/TV view shows synced lyrics when available
 - Host setting: show lyrics on TV view on/off
 - Host can report wrong lyrics, bad timing, missing lyrics, or offensive/bad content
 - Lyrics lookup/cache should run in the background after now-playing changes and should never block queue operations
 
 **Host Library — PRO**
+
 - Dedicated "Library" nav item
 - Browse / search playlists by provider
 - Playlist detail with per-track queue injection
@@ -1664,11 +1698,13 @@ CORS/cookie rules:
 - Schedule picker: time window assignment
 
 **Host Account + Billing**
+
 - Profile page: connected service details, display name, logout
 - Billing page: current plan, zone count, billing history
 - Upgrade flow: zone count selector, price preview, payment step
 
 **Branding Studio — PRO**
+
 - Appearance tab: color pickers, logo upload, font picker, background style
 - Templates tab: 6 presets (House Default / Wedding / Late Night / Cafe & Bistro / Sports Bar / Corporate) with mini phone previews
 - Imagery tab: hero background, QR poster banner, TV backdrop
@@ -1676,6 +1712,7 @@ CORS/cookie rules:
 - Live phone preview pane (updates in real time)
 
 **Zone Management — PRO**
+
 - Zone overview grid (1 / 2 / 4 zone layouts)
 - Per-zone card: listener count, queue depth, settings
 - "Sync all zones" with confirmation dialog
@@ -1683,6 +1720,7 @@ CORS/cookie rules:
 - Billing row: 1 zone free; $35/zone/month after
 
 **Analytics — PRO**
+
 - Top requested tracks
 - Request volume over time
 - Skip rate
@@ -1692,12 +1730,14 @@ CORS/cookie rules:
 ### Cross-platform app surfaces
 
 **P0 web**
+
 - Hosted SPA at `app.opendj.live`
 - OSS demo frontend at `localhost:8888`
 - Mobile-responsive guest and host flows
 - Browser QR scan flow remains first-class; no app install required
 
 **P2 native mobile via Capacitor**
+
 - iOS and Android wrappers around the same Angular app shell
 - Native share sheet for session links/QR codes
 - Push notifications for host-only events such as re-auth needed, no active device, abuse protection interventions, or queue review backlog
@@ -1707,11 +1747,13 @@ CORS/cookie rules:
 - Resume/focus snapshot refresh after app backgrounding
 
 **P2/P3 desktop shell**
+
 - Optional host/power-user shell only if it provides real value beyond the browser
 - Must reuse the same Angular app shell and `/api/v1` backend
 - Do not let desktop packaging delay the SaaS/web launch
 
 ### TV view (fullscreen 1920×1080)
+
 - Large album art with color bloom effect
 - Track name + artist
 - "Requested by" attribution (respects host setting — free hides this, PRO shows it)
@@ -1785,6 +1827,7 @@ MODERATION_ENABLED_DEFAULT    # default: false
 ## Monetization tiers
 
 **Free**
+
 - 1 zone
 - Vote-to-skip (all modes)
 - Basic moderation
@@ -1792,6 +1835,7 @@ MODERATION_ENABLED_DEFAULT    # default: false
 - Closeable ads shown to guests after each request
 
 **OpenDJ Pro — $35/zone/month**
+
 - Multi-zone
 - Branding Studio (logo, colors, fonts, templates)
 - Custom URL slug
@@ -1819,6 +1863,7 @@ MODERATION_ENABLED_DEFAULT    # default: false
 ## AGENTS.md to create inside `docs/` and package folders
 
 Create `docs/AGENTS.md` in the public repo, plus smaller package-local `AGENTS.md` files where useful. Include these sections:
+
 1. Explicit dependency graph overview — how `deps.ts`, provider registry, app factory, and runtime adapters fit together
 2. Step-by-step: how to add a new streaming provider
 3. Provider capability matrix (granular feature IDs, modular feature interfaces, and current provider support)
@@ -1830,7 +1875,7 @@ Create `docs/AGENTS.md` in the public repo, plus smaller package-local `AGENTS.m
 6. Realtime room architecture: `RealtimeRoom`, `SessionRoom`, snapshots, events, and replay rules
 7. Lyrics/karaoke architecture: LRCLIB adapter, cache rules, LRC parsing, feedback, and TV/live display fallback behavior
 8. MCP/dev-agent guide: allowed tools, forbidden tools, and how to update OpenAPI/event contracts
-8. Local dev setup: pointer to `ONBOARDING.md`
+9. Local dev setup: pointer to `ONBOARDING.md`
 
 ---
 
@@ -1852,45 +1897,45 @@ The public repo may include extension interfaces, feature-gate contracts, placeh
 
 ## Implementation priorities
 
-| Priority | Work |
-|---|---|
-| P0 | `IStreamingProvider` base interface + modular provider feature interfaces + granular capability descriptors |
-| P0 | `SpotifyProvider` implementing the interface using fetch (no SDK) |
-| P0 | `StreamingRouter` + explicit provider registry wiring |
-| P0 | Public package boundaries: `@opendj/core`, `@opendj/db`, `@opendj/auth`, `@opendj/backend`, `@opendj/realtime`, `@opendj/abuse`, `@opendj/sync`, `@opendj/lyrics`, `@opendj/frontend`, `@opendj/frontend-template`, `@opendj/app-shell` |
-| P0 | Database schema + Drizzle setup + migrations, including `users`, `auth_identities`, `auth_sessions`, `account_memberships`, generic `provider_connections`, `oauth_states`, `action_events`, and `abuse_subjects` |
-| P0 | Realtime room abstraction: `RealtimeRoom`, `SessionSnapshot`, `SessionEvent`, `SessionCommand` |
-| P0 | Song synchronization primitives: `@opendj/sync`, `PlaybackClockSample`, normalized progress helpers, and `SongSyncAdapter` contracts |
-| P0 | Lyrics/karaoke foundation: `@opendj/lyrics`, LRCLIB fetch adapter, LRC parser, lyrics cache, current-lyrics snapshot/event wiring, and feedback capture |
-| P0 | Hosted layer baseline in private `opendj-live`: Workers + Hyperdrive + Durable Objects + Queues |
-| P0 | Hosted subdomain routing and API versioning: `opendj.live`, `app.opendj.live`, `api.opendj.live/api/v1/*` |
-| P0 | Hosted Durable Object `SessionRoom` for per-session WebSocket fan-out, hot snapshots, guest slots, and serialized queue mutations |
-| P0 | OSS `NodeSessionRoom` in-process realtime implementation |
-| P0 | Auth and claims layer: OAuth/OIDC login providers, email/password fallback, session cookies, claim middleware, account membership, logged-in guest support |
-| P0 | Abuse prevention foundation: action signal capture, rolling-window rate limits, risk scoring, host block/unblock, and realtime room enforcement |
-| P0 | Core queue logic: `canEnqueue`, `enforcePerGuestCap`, `dedupeQueue`, `canSkip` |
-| P0 | Generic music-provider OAuth routes with Spotify as first implementation |
-| P0 | Guest identity API + slot schema + expiry job |
-| P0 | Angular 21 OSS frontend template guest request page, built with Capacitor-compatible routing/layout assumptions but shipped as web first (all free-tier states: empty, results, requested, my-requests, queue, track-detail, cap, expired) |
-| P0 | Angular 21 OSS frontend template host dashboard, built with responsive/mobile-first patterns but shipped as web first (desktop + mobile, free-tier/basic functionality) |
-| P0 | Docker Compose OSS demo deploy + smoke test in CI |
-| P1 | Vote-to-skip (all three modes) |
-| P1 | Host onboarding flow (including no-device warning + OAuth error states) |
-| P1 | Soundtrack provider |
-| P1 | QR code generation (PNG + PDF) |
-| P1 | TV fullscreen view with lyrics/karaoke display when synced lyrics are available |
-| P1 | Host settings (all sections) |
-| P1 | Session creation wizard |
-| P1 | Host account + billing pages |
-| P1 | Upgrade flow |
-| P1 | Logged-in guest account UX: account link, profile, request history, provider connections; playlist browser/venues can remain incremental |
-| P2 | Branding Studio |
-| P2 | Zone management |
-| P2 | Host library + playlist scheduling |
-| P2 | Analytics dashboard |
-| P2 | Capacitor iOS/Android app shell in `opendj-live/apps/mobile`, consuming the same Angular app shell and `/api/v1` backend |
-| P2 | Desktop shell experiment only if native mobile proves useful; prefer Capacitor community Electron or a separate Tauri wrapper after evaluating maintenance cost |
-| P2 | `packages/agent-tools` MCP server and repo map tools; dev-only and non-blocking |
+| Priority | Work                                                                                                                                                                                                                                       |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| P0       | `IStreamingProvider` base interface + modular provider feature interfaces + granular capability descriptors                                                                                                                                |
+| P0       | `SpotifyProvider` implementing the interface using fetch (no SDK)                                                                                                                                                                          |
+| P0       | `StreamingRouter` + explicit provider registry wiring                                                                                                                                                                                      |
+| P0       | Public package boundaries: `@opendj/core`, `@opendj/db`, `@opendj/auth`, `@opendj/backend`, `@opendj/realtime`, `@opendj/abuse`, `@opendj/sync`, `@opendj/lyrics`, `@opendj/frontend`, `@opendj/frontend-template`, `@opendj/app-shell`    |
+| P0       | Database schema + Drizzle setup + migrations, including `users`, `auth_identities`, `auth_sessions`, `account_memberships`, generic `provider_connections`, `oauth_states`, `action_events`, and `abuse_subjects`                          |
+| P0       | Realtime room abstraction: `RealtimeRoom`, `SessionSnapshot`, `SessionEvent`, `SessionCommand`                                                                                                                                             |
+| P0       | Song synchronization primitives: `@opendj/sync`, `PlaybackClockSample`, normalized progress helpers, and `SongSyncAdapter` contracts                                                                                                       |
+| P0       | Lyrics/karaoke foundation: `@opendj/lyrics`, LRCLIB fetch adapter, LRC parser, lyrics cache, current-lyrics snapshot/event wiring, and feedback capture                                                                                    |
+| P0       | Hosted layer baseline in private `opendj-live`: Workers + Hyperdrive + Durable Objects + Queues                                                                                                                                            |
+| P0       | Hosted subdomain routing and API versioning: `opendj.live`, `app.opendj.live`, `api.opendj.live/api/v1/*`                                                                                                                                  |
+| P0       | Hosted Durable Object `SessionRoom` for per-session WebSocket fan-out, hot snapshots, guest slots, and serialized queue mutations                                                                                                          |
+| P0       | OSS `NodeSessionRoom` in-process realtime implementation                                                                                                                                                                                   |
+| P0       | Auth and claims layer: OAuth/OIDC login providers, email/password fallback, session cookies, claim middleware, account membership, logged-in guest support                                                                                 |
+| P0       | Abuse prevention foundation: action signal capture, rolling-window rate limits, risk scoring, host block/unblock, and realtime room enforcement                                                                                            |
+| P0       | Core queue logic: `canEnqueue`, `enforcePerGuestCap`, `dedupeQueue`, `canSkip`                                                                                                                                                             |
+| P0       | Generic music-provider OAuth routes with Spotify as first implementation                                                                                                                                                                   |
+| P0       | Guest identity API + slot schema + expiry job                                                                                                                                                                                              |
+| P0       | Angular 21 OSS frontend template guest request page, built with Capacitor-compatible routing/layout assumptions but shipped as web first (all free-tier states: empty, results, requested, my-requests, queue, track-detail, cap, expired) |
+| P0       | Angular 21 OSS frontend template host dashboard, built with responsive/mobile-first patterns but shipped as web first (desktop + mobile, free-tier/basic functionality)                                                                    |
+| P0       | Docker Compose OSS demo deploy + smoke test in CI                                                                                                                                                                                          |
+| P1       | Vote-to-skip (all three modes)                                                                                                                                                                                                             |
+| P1       | Host onboarding flow (including no-device warning + OAuth error states)                                                                                                                                                                    |
+| P1       | Soundtrack provider                                                                                                                                                                                                                        |
+| P1       | QR code generation (PNG + PDF)                                                                                                                                                                                                             |
+| P1       | TV fullscreen view with lyrics/karaoke display when synced lyrics are available                                                                                                                                                            |
+| P1       | Host settings (all sections)                                                                                                                                                                                                               |
+| P1       | Session creation wizard                                                                                                                                                                                                                    |
+| P1       | Host account + billing pages                                                                                                                                                                                                               |
+| P1       | Upgrade flow                                                                                                                                                                                                                               |
+| P1       | Logged-in guest account UX: account link, profile, request history, provider connections; playlist browser/venues can remain incremental                                                                                                   |
+| P2       | Branding Studio                                                                                                                                                                                                                            |
+| P2       | Zone management                                                                                                                                                                                                                            |
+| P2       | Host library + playlist scheduling                                                                                                                                                                                                         |
+| P2       | Analytics dashboard                                                                                                                                                                                                                        |
+| P2       | Capacitor iOS/Android app shell in `opendj-live/apps/mobile`, consuming the same Angular app shell and `/api/v1` backend                                                                                                                   |
+| P2       | Desktop shell experiment only if native mobile proves useful; prefer Capacitor community Electron or a separate Tauri wrapper after evaluating maintenance cost                                                                            |
+| P2       | `packages/agent-tools` MCP server and repo map tools; dev-only and non-blocking                                                                                                                                                            |
 
 ---
 
