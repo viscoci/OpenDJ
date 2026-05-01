@@ -32,6 +32,9 @@ import type {
   PasswordCredentialRepository,
   ProviderConnectionRecord,
   ProviderConnectionRepository,
+  QueueItemRecord,
+  QueueItemRepository,
+  QueueItemStatus,
   Repositories,
   SessionRecord,
   SessionRepository,
@@ -607,6 +610,76 @@ export class InMemoryFingerprintPriorityRepository implements FingerprintPriorit
   }
 }
 
+export class InMemoryQueueItemRepository implements QueueItemRepository {
+  readonly rows = new Map<string, QueueItemRecord>();
+  constructor(private readonly clock: InMemoryClock = systemClock) {}
+
+  async findById(id: string): Promise<QueueItemRecord | null> {
+    return this.rows.get(id) ?? null;
+  }
+
+  async findAllForSession(sessionId: string): Promise<QueueItemRecord[]> {
+    const out: QueueItemRecord[] = [];
+    for (const row of this.rows.values()) {
+      if (row.sessionId === sessionId) out.push(row);
+    }
+    out.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+    return out;
+  }
+
+  async create(input: {
+    sessionId: string;
+    guestId: string;
+    trackUri: string;
+    trackName: string;
+    artistName: string;
+    albumArtUrl?: string | null;
+    durationMs?: number | null;
+    status?: QueueItemStatus;
+  }): Promise<QueueItemRecord> {
+    const id = crypto.randomUUID();
+    const row: QueueItemRecord = {
+      id,
+      sessionId: input.sessionId,
+      guestId: input.guestId,
+      trackUri: input.trackUri,
+      trackName: input.trackName,
+      artistName: input.artistName,
+      albumArtUrl: input.albumArtUrl ?? null,
+      durationMs: input.durationMs ?? null,
+      status: input.status ?? 'pending',
+      skipVotes: 0,
+      createdAt: this.clock.now(),
+      decidedAt: null,
+    };
+    this.rows.set(id, row);
+    return row;
+  }
+
+  async setStatus(input: {
+    id: string;
+    status: QueueItemStatus;
+    decidedAt?: Date | null;
+  }): Promise<QueueItemRecord | null> {
+    const row = this.rows.get(input.id);
+    if (!row) return null;
+    row.status = input.status;
+    if (input.decidedAt !== undefined) row.decidedAt = input.decidedAt;
+    return row;
+  }
+
+  async delete(id: string): Promise<void> {
+    this.rows.delete(id);
+  }
+
+  async incrementSkipVotes(id: string): Promise<number> {
+    const row = this.rows.get(id);
+    if (!row) return 0;
+    row.skipVotes += 1;
+    return row.skipVotes;
+  }
+}
+
 export function createInMemoryRepositories(clock: InMemoryClock = systemClock): Repositories {
   return {
     users: new InMemoryUserRepository(clock),
@@ -621,5 +694,6 @@ export function createInMemoryRepositories(clock: InMemoryClock = systemClock): 
     guests: new InMemoryGuestRepository(clock),
     guestSlots: new InMemoryGuestSlotRepository(clock),
     fingerprintPriority: new InMemoryFingerprintPriorityRepository(clock),
+    queueItems: new InMemoryQueueItemRepository(clock),
   };
 }

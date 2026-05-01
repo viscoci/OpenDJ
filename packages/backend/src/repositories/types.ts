@@ -160,6 +160,46 @@ export interface GuestSlotRepository {
   findFirstQueued(sessionId: string): Promise<GuestSlotRecord | null>;
 }
 
+export type QueueItemStatus = 'pending' | 'approved' | 'queued' | 'playing' | 'rejected';
+
+export interface QueueItemRecord {
+  id: string;
+  sessionId: string;
+  guestId: string;
+  trackUri: string;
+  trackName: string;
+  artistName: string;
+  albumArtUrl: string | null;
+  durationMs: number | null;
+  status: QueueItemStatus;
+  skipVotes: number;
+  createdAt: Date;
+  decidedAt: Date | null;
+}
+
+export interface QueueItemRepository {
+  findById(id: string): Promise<QueueItemRecord | null>;
+  findAllForSession(sessionId: string): Promise<QueueItemRecord[]>;
+  create(input: {
+    sessionId: string;
+    guestId: string;
+    trackUri: string;
+    trackName: string;
+    artistName: string;
+    albumArtUrl?: string | null;
+    durationMs?: number | null;
+    status?: QueueItemStatus;
+  }): Promise<QueueItemRecord>;
+  setStatus(input: {
+    id: string;
+    status: QueueItemStatus;
+    decidedAt?: Date | null;
+  }): Promise<QueueItemRecord | null>;
+  delete(id: string): Promise<void>;
+  /** Atomically increment skip-vote count and return the new value. */
+  incrementSkipVotes(id: string): Promise<number>;
+}
+
 export interface FingerprintPriorityRecord {
   fingerprintHash: string;
   sessionId: string;
@@ -338,4 +378,5 @@ export interface Repositories {
   guests: GuestRepository;
   guestSlots: GuestSlotRepository;
   fingerprintPriority: FingerprintPriorityRepository;
+  queueItems: QueueItemRepository;
 }

@@ -16,6 +16,7 @@ import { DrizzleMembershipRepository } from './memberships.js';
 import { DrizzleOAuthStateRepository } from './oauth-states.js';
 import { DrizzlePasswordCredentialRepository } from './password-credentials.js';
 import { DrizzleProviderConnectionRepository } from './provider-connections.js';
+import { DrizzleQueueItemRepository } from './queue-items.js';
 import { DrizzleSessionRepository } from './sessions.js';
 import { DrizzleUserRepository } from './users.js';
 
@@ -30,6 +31,7 @@ export * from './guest-slots.js';
 export * from './oauth-states.js';
 export * from './password-credentials.js';
 export * from './provider-connections.js';
+export * from './queue-items.js';
 export * from './sessions.js';
 
 export function createDrizzleRepositories(db: Database): Repositories {
@@ -46,5 +48,6 @@ export function createDrizzleRepositories(db: Database): Repositories {
     guests: new DrizzleGuestRepository(db),
     guestSlots: new DrizzleGuestSlotRepository(db),
     fingerprintPriority: new DrizzleFingerprintPriorityRepository(db),
+    queueItems: new DrizzleQueueItemRepository(db),
   };
 }
