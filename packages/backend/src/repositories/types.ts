@@ -93,6 +93,28 @@ export interface SessionRecord {
 export interface SessionRepository {
   findById(id: string): Promise<SessionRecord | null>;
   findByQrSlug(qrSlug: string): Promise<SessionRecord | null>;
+  findByAccount(accountId: string): Promise<SessionRecord[]>;
+  create(input: {
+    accountId: string;
+    name: string;
+    qrSlug: string;
+    guestCapOverride?: number | null;
+    songsPerGuestCap?: number;
+    moderationEnabled?: boolean;
+    voteSkipMode?: 'fixed' | 'percentage' | 'host_approval';
+    voteSkipThreshold?: number;
+  }): Promise<SessionRecord>;
+  update(input: {
+    id: string;
+    guestCapOverride?: number | null;
+    songsPerGuestCap?: number;
+    moderationEnabled?: boolean;
+    voteSkipMode?: 'fixed' | 'percentage' | 'host_approval';
+    voteSkipThreshold?: number;
+    name?: string;
+  }): Promise<SessionRecord | null>;
+  /** Mark a session as ended. Idempotent — if already ended, returns the existing row. */
+  end(id: string, endedAt: Date): Promise<SessionRecord | null>;
 }
 
 export interface GuestRecord {

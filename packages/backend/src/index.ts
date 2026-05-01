@@ -15,3 +15,4 @@ export * from './guest/index.js';
 export * from './providers/index.js';
 export * from './queue/index.js';
 export * from './repositories/index.js';
+export * from './session/index.js';

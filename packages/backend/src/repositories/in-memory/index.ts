@@ -423,6 +423,7 @@ export class InMemoryProviderConnectionRepository implements ProviderConnectionR
 
 export class InMemorySessionRepository implements SessionRepository {
   readonly rows = new Map<string, SessionRecord>();
+  constructor(private readonly clock: InMemoryClock = systemClock) {}
 
   async findById(id: string): Promise<SessionRecord | null> {
     return this.rows.get(id) ?? null;
@@ -433,6 +434,69 @@ export class InMemorySessionRepository implements SessionRepository {
       if (row.qrSlug === qrSlug) return row;
     }
     return null;
+  }
+
+  async findByAccount(accountId: string): Promise<SessionRecord[]> {
+    const out: SessionRecord[] = [];
+    for (const row of this.rows.values()) {
+      if (row.accountId === accountId) out.push(row);
+    }
+    return out;
+  }
+
+  async create(input: {
+    accountId: string;
+    name: string;
+    qrSlug: string;
+    guestCapOverride?: number | null;
+    songsPerGuestCap?: number;
+    moderationEnabled?: boolean;
+    voteSkipMode?: 'fixed' | 'percentage' | 'host_approval';
+    voteSkipThreshold?: number;
+  }): Promise<SessionRecord> {
+    const id = crypto.randomUUID();
+    const row: SessionRecord = {
+      id,
+      accountId: input.accountId,
+      name: input.name,
+      qrSlug: input.qrSlug,
+      guestCapOverride: input.guestCapOverride ?? null,
+      songsPerGuestCap: input.songsPerGuestCap ?? 3,
+      moderationEnabled: input.moderationEnabled ?? false,
+      voteSkipMode: input.voteSkipMode ?? 'fixed',
+      voteSkipThreshold: input.voteSkipThreshold ?? 5,
+      startedAt: this.clock.now(),
+      endedAt: null,
+    };
+    this.rows.set(id, row);
+    return row;
+  }
+
+  async update(input: {
+    id: string;
+    guestCapOverride?: number | null;
+    songsPerGuestCap?: number;
+    moderationEnabled?: boolean;
+    voteSkipMode?: 'fixed' | 'percentage' | 'host_approval';
+    voteSkipThreshold?: number;
+    name?: string;
+  }): Promise<SessionRecord | null> {
+    const row = this.rows.get(input.id);
+    if (!row) return null;
+    if (input.guestCapOverride !== undefined) row.guestCapOverride = input.guestCapOverride;
+    if (input.songsPerGuestCap !== undefined) row.songsPerGuestCap = input.songsPerGuestCap;
+    if (input.moderationEnabled !== undefined) row.moderationEnabled = input.moderationEnabled;
+    if (input.voteSkipMode !== undefined) row.voteSkipMode = input.voteSkipMode;
+    if (input.voteSkipThreshold !== undefined) row.voteSkipThreshold = input.voteSkipThreshold;
+    if (input.name !== undefined) row.name = input.name;
+    return row;
+  }
+
+  async end(id: string, endedAt: Date): Promise<SessionRecord | null> {
+    const row = this.rows.get(id);
+    if (!row) return null;
+    if (row.endedAt === null) row.endedAt = endedAt;
+    return row;
   }
 
   /** Test helper. */
