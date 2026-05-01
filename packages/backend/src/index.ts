@@ -11,4 +11,5 @@ export * from './app.js';
 export * from './config.js';
 export * from './deps.js';
 export * from './auth/index.js';
+export * from './providers/index.js';
 export * from './repositories/index.js';

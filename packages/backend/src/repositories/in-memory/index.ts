@@ -21,6 +21,8 @@ import type {
   MembershipRepository,
   PasswordCredentialRecord,
   PasswordCredentialRepository,
+  ProviderConnectionRecord,
+  ProviderConnectionRepository,
   Repositories,
   UserRecord,
   UserRepository,
@@ -269,6 +271,88 @@ export class InMemoryPasswordCredentialRepository implements PasswordCredentialR
   }
 }
 
+export class InMemoryProviderConnectionRepository implements ProviderConnectionRepository {
+  /** Composite key: `${accountId}:${providerId}` (matches the unique index). */
+  readonly rows = new Map<string, ProviderConnectionRecord>();
+  constructor(private readonly clock: InMemoryClock = systemClock) {}
+
+  async findByAccountAndProvider(
+    accountId: string,
+    providerId: string,
+  ): Promise<ProviderConnectionRecord | null> {
+    return this.rows.get(`${accountId}:${providerId}`) ?? null;
+  }
+
+  async findAllForAccount(accountId: string): Promise<ProviderConnectionRecord[]> {
+    const out: ProviderConnectionRecord[] = [];
+    for (const row of this.rows.values()) {
+      if (row.accountId === accountId) out.push(row);
+    }
+    return out;
+  }
+
+  async upsert(input: {
+    accountId: string;
+    connectedByUserId?: string | null;
+    providerId: string;
+    providerAccountId?: string | null;
+    displayName?: string | null;
+    accessToken: string | null;
+    refreshToken?: string | null;
+    expiresAt?: Date | null;
+    scopes?: string[] | null;
+    tokenType?: string | null;
+  }): Promise<ProviderConnectionRecord> {
+    const key = `${input.accountId}:${input.providerId}`;
+    const now = this.clock.now();
+    const existing = this.rows.get(key);
+    const row: ProviderConnectionRecord = {
+      id: existing?.id ?? crypto.randomUUID(),
+      accountId: input.accountId,
+      connectedByUserId: input.connectedByUserId ?? existing?.connectedByUserId ?? null,
+      providerId: input.providerId,
+      providerAccountId: input.providerAccountId ?? existing?.providerAccountId ?? null,
+      displayName: input.displayName ?? existing?.displayName ?? null,
+      accessToken: input.accessToken,
+      refreshToken: input.refreshToken ?? existing?.refreshToken ?? null,
+      expiresAt: input.expiresAt ?? existing?.expiresAt ?? null,
+      scopes: input.scopes ?? existing?.scopes ?? null,
+      tokenType: input.tokenType ?? existing?.tokenType ?? null,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    };
+    this.rows.set(key, row);
+    return row;
+  }
+
+  async updateTokens(input: {
+    id: string;
+    accessToken: string;
+    refreshToken?: string | null;
+    expiresAt?: Date | null;
+    tokenType?: string | null;
+  }): Promise<void> {
+    for (const row of this.rows.values()) {
+      if (row.id !== input.id) continue;
+      row.accessToken = input.accessToken;
+      if (input.refreshToken !== undefined) row.refreshToken = input.refreshToken;
+      if (input.expiresAt !== undefined) row.expiresAt = input.expiresAt;
+      if (input.tokenType !== undefined) row.tokenType = input.tokenType;
+      row.updatedAt = this.clock.now();
+      return;
+    }
+  }
+
+  async delete(id: string): Promise<void> {
+    for (const [key, row] of this.rows.entries()) {
+      if (row.id === id) {
+        this.rows.delete(key);
+        return;
+      }
+    }
+  }
+}
+
 export function createInMemoryRepositories(clock: InMemoryClock = systemClock): Repositories {
   return {
     users: new InMemoryUserRepository(clock),
@@ -277,5 +361,6 @@ export function createInMemoryRepositories(clock: InMemoryClock = systemClock): 
     authIdentities: new InMemoryAuthIdentityRepository(clock),
     authSessions: new InMemoryAuthSessionRepository(clock),
     passwordCredentials: new InMemoryPasswordCredentialRepository(clock),
+    providerConnections: new InMemoryProviderConnectionRepository(clock),
   };
 }

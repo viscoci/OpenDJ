@@ -11,6 +11,7 @@ import { DrizzleAuthIdentityRepository } from './auth-identities.js';
 import { DrizzleAuthSessionRepository } from './auth-sessions.js';
 import { DrizzleMembershipRepository } from './memberships.js';
 import { DrizzlePasswordCredentialRepository } from './password-credentials.js';
+import { DrizzleProviderConnectionRepository } from './provider-connections.js';
 import { DrizzleUserRepository } from './users.js';
 
 export * from './users.js';
@@ -19,6 +20,7 @@ export * from './memberships.js';
 export * from './auth-identities.js';
 export * from './auth-sessions.js';
 export * from './password-credentials.js';
+export * from './provider-connections.js';
 
 export function createDrizzleRepositories(db: Database): Repositories {
   return {
@@ -28,5 +30,6 @@ export function createDrizzleRepositories(db: Database): Repositories {
     authIdentities: new DrizzleAuthIdentityRepository(db),
     authSessions: new DrizzleAuthSessionRepository(db),
     passwordCredentials: new DrizzlePasswordCredentialRepository(db),
+    providerConnections: new DrizzleProviderConnectionRepository(db),
   };
 }

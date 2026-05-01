@@ -141,6 +141,51 @@ export interface PasswordCredentialRepository {
   resetFailedAttempts(userId: string): Promise<void>;
 }
 
+export interface ProviderConnectionRecord {
+  id: string;
+  accountId: string;
+  connectedByUserId: string | null;
+  providerId: string;
+  providerAccountId: string | null;
+  displayName: string | null;
+  accessToken: string | null;
+  refreshToken: string | null;
+  expiresAt: Date | null;
+  scopes: string[] | null;
+  tokenType: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface ProviderConnectionRepository {
+  findByAccountAndProvider(
+    accountId: string,
+    providerId: string,
+  ): Promise<ProviderConnectionRecord | null>;
+  findAllForAccount(accountId: string): Promise<ProviderConnectionRecord[]>;
+  upsert(input: {
+    accountId: string;
+    connectedByUserId?: string | null;
+    providerId: string;
+    providerAccountId?: string | null;
+    displayName?: string | null;
+    accessToken: string | null;
+    refreshToken?: string | null;
+    expiresAt?: Date | null;
+    scopes?: string[] | null;
+    tokenType?: string | null;
+  }): Promise<ProviderConnectionRecord>;
+  /** Update tokens after refresh. Does not change account / provider association. */
+  updateTokens(input: {
+    id: string;
+    accessToken: string;
+    refreshToken?: string | null;
+    expiresAt?: Date | null;
+    tokenType?: string | null;
+  }): Promise<void>;
+  delete(id: string): Promise<void>;
+}
+
 export interface Repositories {
   users: UserRepository;
   accounts: AccountRepository;
@@ -148,4 +193,5 @@ export interface Repositories {
   authIdentities: AuthIdentityRepository;
   authSessions: AuthSessionRepository;
   passwordCredentials: PasswordCredentialRepository;
+  providerConnections: ProviderConnectionRepository;
 }
