@@ -19,6 +19,8 @@ import type {
   AuthSessionRepository,
   MembershipRecord,
   MembershipRepository,
+  OAuthStateRecord,
+  OAuthStateRepository,
   PasswordCredentialRecord,
   PasswordCredentialRepository,
   ProviderConnectionRecord,
@@ -271,6 +273,60 @@ export class InMemoryPasswordCredentialRepository implements PasswordCredentialR
   }
 }
 
+export class InMemoryOAuthStateRepository implements OAuthStateRepository {
+  readonly rows = new Map<string, OAuthStateRecord>();
+  constructor(private readonly clock: InMemoryClock = systemClock) {}
+
+  async create(input: {
+    state: string;
+    flowKind: 'login' | 'connect-provider';
+    providerId: string;
+    accountId?: string | null;
+    userId?: string | null;
+    redirectTo?: string | null;
+    codeVerifier?: string | null;
+    nonce?: string | null;
+    expiresAt: Date;
+  }): Promise<OAuthStateRecord> {
+    const row: OAuthStateRecord = {
+      state: input.state,
+      flowKind: input.flowKind,
+      providerId: input.providerId,
+      accountId: input.accountId ?? null,
+      userId: input.userId ?? null,
+      redirectTo: input.redirectTo ?? null,
+      codeVerifier: input.codeVerifier ?? null,
+      nonce: input.nonce ?? null,
+      createdAt: this.clock.now(),
+      expiresAt: input.expiresAt,
+    };
+    this.rows.set(input.state, row);
+    return row;
+  }
+
+  async findActive(state: string, nowEpochMs: number): Promise<OAuthStateRecord | null> {
+    const row = this.rows.get(state);
+    if (!row) return null;
+    if (row.expiresAt.getTime() <= nowEpochMs) return null;
+    return row;
+  }
+
+  async delete(state: string): Promise<void> {
+    this.rows.delete(state);
+  }
+
+  async pruneExpired(nowEpochMs: number): Promise<number> {
+    let count = 0;
+    for (const [state, row] of this.rows.entries()) {
+      if (row.expiresAt.getTime() <= nowEpochMs) {
+        this.rows.delete(state);
+        count += 1;
+      }
+    }
+    return count;
+  }
+}
+
 export class InMemoryProviderConnectionRepository implements ProviderConnectionRepository {
   /** Composite key: `${accountId}:${providerId}` (matches the unique index). */
   readonly rows = new Map<string, ProviderConnectionRecord>();
@@ -361,6 +417,7 @@ export function createInMemoryRepositories(clock: InMemoryClock = systemClock): 
     authIdentities: new InMemoryAuthIdentityRepository(clock),
     authSessions: new InMemoryAuthSessionRepository(clock),
     passwordCredentials: new InMemoryPasswordCredentialRepository(clock),
+    oauthStates: new InMemoryOAuthStateRepository(clock),
     providerConnections: new InMemoryProviderConnectionRepository(clock),
   };
 }

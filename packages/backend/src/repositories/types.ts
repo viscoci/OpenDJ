@@ -157,6 +157,40 @@ export interface ProviderConnectionRecord {
   updatedAt: Date;
 }
 
+export interface OAuthStateRecord {
+  state: string;
+  /** 'login' for /api/v1/auth/:provider OAuth, 'connect-provider' for music-provider OAuth. */
+  flowKind: 'login' | 'connect-provider';
+  providerId: string;
+  accountId: string | null;
+  userId: string | null;
+  redirectTo: string | null;
+  codeVerifier: string | null;
+  nonce: string | null;
+  createdAt: Date;
+  expiresAt: Date;
+}
+
+export interface OAuthStateRepository {
+  create(input: {
+    state: string;
+    flowKind: 'login' | 'connect-provider';
+    providerId: string;
+    accountId?: string | null;
+    userId?: string | null;
+    redirectTo?: string | null;
+    codeVerifier?: string | null;
+    nonce?: string | null;
+    expiresAt: Date;
+  }): Promise<OAuthStateRecord>;
+  /** Find a state row that hasn't expired. */
+  findActive(state: string, nowEpochMs: number): Promise<OAuthStateRecord | null>;
+  /** Delete the row. Always called after consumption — single-use semantics. */
+  delete(state: string): Promise<void>;
+  /** Drop expired rows (sweep job). Returns the count deleted. */
+  pruneExpired(nowEpochMs: number): Promise<number>;
+}
+
 export interface ProviderConnectionRepository {
   findByAccountAndProvider(
     accountId: string,
@@ -193,5 +227,6 @@ export interface Repositories {
   authIdentities: AuthIdentityRepository;
   authSessions: AuthSessionRepository;
   passwordCredentials: PasswordCredentialRepository;
+  oauthStates: OAuthStateRepository;
   providerConnections: ProviderConnectionRepository;
 }
