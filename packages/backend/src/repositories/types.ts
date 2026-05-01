@@ -76,6 +76,111 @@ export interface PasswordCredentialRecord {
 
 // ─── Repository interfaces ────────────────────────────────────────────────
 
+export interface SessionRecord {
+  id: string;
+  accountId: string;
+  name: string;
+  qrSlug: string;
+  guestCapOverride: number | null;
+  songsPerGuestCap: number;
+  moderationEnabled: boolean;
+  voteSkipMode: 'fixed' | 'percentage' | 'host_approval';
+  voteSkipThreshold: number;
+  startedAt: Date;
+  endedAt: Date | null;
+}
+
+export interface SessionRepository {
+  findById(id: string): Promise<SessionRecord | null>;
+  findByQrSlug(qrSlug: string): Promise<SessionRecord | null>;
+}
+
+export interface GuestRecord {
+  id: string;
+  sessionId: string;
+  userId: string | null;
+  /** Stored fingerprint hash (already salted by GuestIdentityService). */
+  fingerprint: string;
+  name: string | null;
+  createdAt: Date;
+}
+
+export interface GuestRepository {
+  findBySessionAndFingerprint(sessionId: string, fingerprint: string): Promise<GuestRecord | null>;
+  create(input: {
+    sessionId: string;
+    userId?: string | null;
+    fingerprint: string;
+    name?: string | null;
+  }): Promise<GuestRecord>;
+  /** Link a logged-in user to an existing guest row (used by /api/v1/guest/link-account). */
+  linkUser(guestId: string, userId: string): Promise<void>;
+}
+
+export type GuestSlotStatus = 'active' | 'queued' | 'priority_queued';
+
+export interface GuestSlotRecord {
+  id: string;
+  sessionId: string;
+  fingerprintHash: string;
+  slotToken: string;
+  status: GuestSlotStatus;
+  queuePosition: number | null;
+  lastHeartbeat: Date;
+  createdAt: Date;
+}
+
+export interface GuestSlotRepository {
+  findBySessionAndFingerprint(
+    sessionId: string,
+    fingerprintHash: string,
+  ): Promise<GuestSlotRecord | null>;
+  findBySlotToken(slotToken: string): Promise<GuestSlotRecord | null>;
+  countByStatus(sessionId: string, status: GuestSlotStatus): Promise<number>;
+  create(input: {
+    sessionId: string;
+    fingerprintHash: string;
+    slotToken: string;
+    status: GuestSlotStatus;
+    queuePosition?: number | null;
+  }): Promise<GuestSlotRecord>;
+  touchHeartbeat(id: string, nowEpochMs: number): Promise<void>;
+  setStatus(input: {
+    id: string;
+    status: GuestSlotStatus;
+    queuePosition?: number | null;
+  }): Promise<void>;
+  delete(id: string): Promise<void>;
+  /**
+   * Find slots whose `last_heartbeat` is older than the cutoff and which are
+   * currently `active`. Used by the expiry sweep.
+   */
+  findActiveStaleSince(sessionId: string, cutoff: Date): Promise<GuestSlotRecord[]>;
+  /** Oldest queued slot for the session — used by promotion-on-free. */
+  findFirstQueued(sessionId: string): Promise<GuestSlotRecord | null>;
+}
+
+export interface FingerprintPriorityRecord {
+  fingerprintHash: string;
+  sessionId: string;
+  releasedAt: Date;
+  expiresAt: Date;
+}
+
+export interface FingerprintPriorityRepository {
+  find(
+    sessionId: string,
+    fingerprintHash: string,
+    nowEpochMs: number,
+  ): Promise<FingerprintPriorityRecord | null>;
+  upsert(input: {
+    sessionId: string;
+    fingerprintHash: string;
+    expiresAt: Date;
+  }): Promise<FingerprintPriorityRecord>;
+  delete(sessionId: string, fingerprintHash: string): Promise<void>;
+}
+
 export interface UserRepository {
   findById(id: string): Promise<UserRecord | null>;
   findByPrimaryEmail(email: string): Promise<UserRecord | null>;
@@ -229,4 +334,8 @@ export interface Repositories {
   passwordCredentials: PasswordCredentialRepository;
   oauthStates: OAuthStateRepository;
   providerConnections: ProviderConnectionRepository;
+  sessions: SessionRepository;
+  guests: GuestRepository;
+  guestSlots: GuestSlotRepository;
+  fingerprintPriority: FingerprintPriorityRepository;
 }

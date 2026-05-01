@@ -9,10 +9,14 @@ import type { Repositories } from '../types.js';
 import { DrizzleAccountRepository } from './accounts.js';
 import { DrizzleAuthIdentityRepository } from './auth-identities.js';
 import { DrizzleAuthSessionRepository } from './auth-sessions.js';
+import { DrizzleFingerprintPriorityRepository } from './fingerprint-priority.js';
+import { DrizzleGuestRepository } from './guests.js';
+import { DrizzleGuestSlotRepository } from './guest-slots.js';
 import { DrizzleMembershipRepository } from './memberships.js';
 import { DrizzleOAuthStateRepository } from './oauth-states.js';
 import { DrizzlePasswordCredentialRepository } from './password-credentials.js';
 import { DrizzleProviderConnectionRepository } from './provider-connections.js';
+import { DrizzleSessionRepository } from './sessions.js';
 import { DrizzleUserRepository } from './users.js';
 
 export * from './users.js';
@@ -20,9 +24,13 @@ export * from './accounts.js';
 export * from './memberships.js';
 export * from './auth-identities.js';
 export * from './auth-sessions.js';
+export * from './fingerprint-priority.js';
+export * from './guests.js';
+export * from './guest-slots.js';
 export * from './oauth-states.js';
 export * from './password-credentials.js';
 export * from './provider-connections.js';
+export * from './sessions.js';
 
 export function createDrizzleRepositories(db: Database): Repositories {
   return {
@@ -34,5 +42,9 @@ export function createDrizzleRepositories(db: Database): Repositories {
     passwordCredentials: new DrizzlePasswordCredentialRepository(db),
     oauthStates: new DrizzleOAuthStateRepository(db),
     providerConnections: new DrizzleProviderConnectionRepository(db),
+    sessions: new DrizzleSessionRepository(db),
+    guests: new DrizzleGuestRepository(db),
+    guestSlots: new DrizzleGuestSlotRepository(db),
+    fingerprintPriority: new DrizzleFingerprintPriorityRepository(db),
   };
 }

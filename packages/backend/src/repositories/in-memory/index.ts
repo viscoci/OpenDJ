@@ -17,6 +17,13 @@ import type {
   AuthIdentityRepository,
   AuthSessionRecord,
   AuthSessionRepository,
+  FingerprintPriorityRecord,
+  FingerprintPriorityRepository,
+  GuestRecord,
+  GuestRepository,
+  GuestSlotRecord,
+  GuestSlotRepository,
+  GuestSlotStatus,
   MembershipRecord,
   MembershipRepository,
   OAuthStateRecord,
@@ -26,6 +33,8 @@ import type {
   ProviderConnectionRecord,
   ProviderConnectionRepository,
   Repositories,
+  SessionRecord,
+  SessionRepository,
   UserRecord,
   UserRepository,
 } from '../types.js';
@@ -409,6 +418,195 @@ export class InMemoryProviderConnectionRepository implements ProviderConnectionR
   }
 }
 
+export class InMemorySessionRepository implements SessionRepository {
+  readonly rows = new Map<string, SessionRecord>();
+
+  async findById(id: string): Promise<SessionRecord | null> {
+    return this.rows.get(id) ?? null;
+  }
+
+  async findByQrSlug(qrSlug: string): Promise<SessionRecord | null> {
+    for (const row of this.rows.values()) {
+      if (row.qrSlug === qrSlug) return row;
+    }
+    return null;
+  }
+
+  /** Test helper. */
+  seed(record: SessionRecord): void {
+    this.rows.set(record.id, record);
+  }
+}
+
+export class InMemoryGuestRepository implements GuestRepository {
+  readonly rows = new Map<string, GuestRecord>();
+  constructor(private readonly clock: InMemoryClock = systemClock) {}
+
+  async findBySessionAndFingerprint(
+    sessionId: string,
+    fingerprint: string,
+  ): Promise<GuestRecord | null> {
+    for (const row of this.rows.values()) {
+      if (row.sessionId === sessionId && row.fingerprint === fingerprint) return row;
+    }
+    return null;
+  }
+
+  async create(input: {
+    sessionId: string;
+    userId?: string | null;
+    fingerprint: string;
+    name?: string | null;
+  }): Promise<GuestRecord> {
+    const id = crypto.randomUUID();
+    const row: GuestRecord = {
+      id,
+      sessionId: input.sessionId,
+      userId: input.userId ?? null,
+      fingerprint: input.fingerprint,
+      name: input.name ?? null,
+      createdAt: this.clock.now(),
+    };
+    this.rows.set(id, row);
+    return row;
+  }
+
+  async linkUser(guestId: string, userId: string): Promise<void> {
+    const row = this.rows.get(guestId);
+    if (row) row.userId = userId;
+  }
+}
+
+export class InMemoryGuestSlotRepository implements GuestSlotRepository {
+  readonly rows = new Map<string, GuestSlotRecord>();
+  constructor(private readonly clock: InMemoryClock = systemClock) {}
+
+  async findBySessionAndFingerprint(
+    sessionId: string,
+    fingerprintHash: string,
+  ): Promise<GuestSlotRecord | null> {
+    for (const row of this.rows.values()) {
+      if (row.sessionId === sessionId && row.fingerprintHash === fingerprintHash) return row;
+    }
+    return null;
+  }
+
+  async findBySlotToken(slotToken: string): Promise<GuestSlotRecord | null> {
+    for (const row of this.rows.values()) {
+      if (row.slotToken === slotToken) return row;
+    }
+    return null;
+  }
+
+  async countByStatus(sessionId: string, status: GuestSlotStatus): Promise<number> {
+    let count = 0;
+    for (const row of this.rows.values()) {
+      if (row.sessionId === sessionId && row.status === status) count += 1;
+    }
+    return count;
+  }
+
+  async create(input: {
+    sessionId: string;
+    fingerprintHash: string;
+    slotToken: string;
+    status: GuestSlotStatus;
+    queuePosition?: number | null;
+  }): Promise<GuestSlotRecord> {
+    const id = crypto.randomUUID();
+    const now = this.clock.now();
+    const row: GuestSlotRecord = {
+      id,
+      sessionId: input.sessionId,
+      fingerprintHash: input.fingerprintHash,
+      slotToken: input.slotToken,
+      status: input.status,
+      queuePosition: input.queuePosition ?? null,
+      lastHeartbeat: now,
+      createdAt: now,
+    };
+    this.rows.set(id, row);
+    return row;
+  }
+
+  async touchHeartbeat(id: string, nowEpochMs: number): Promise<void> {
+    const row = this.rows.get(id);
+    if (row) row.lastHeartbeat = new Date(nowEpochMs);
+  }
+
+  async setStatus(input: {
+    id: string;
+    status: GuestSlotStatus;
+    queuePosition?: number | null;
+  }): Promise<void> {
+    const row = this.rows.get(input.id);
+    if (!row) return;
+    row.status = input.status;
+    if (input.queuePosition !== undefined) row.queuePosition = input.queuePosition;
+  }
+
+  async delete(id: string): Promise<void> {
+    this.rows.delete(id);
+  }
+
+  async findActiveStaleSince(sessionId: string, cutoff: Date): Promise<GuestSlotRecord[]> {
+    const cutoffMs = cutoff.getTime();
+    const out: GuestSlotRecord[] = [];
+    for (const row of this.rows.values()) {
+      if (row.sessionId !== sessionId) continue;
+      if (row.status !== 'active') continue;
+      if (row.lastHeartbeat.getTime() <= cutoffMs) out.push(row);
+    }
+    return out;
+  }
+
+  async findFirstQueued(sessionId: string): Promise<GuestSlotRecord | null> {
+    let best: GuestSlotRecord | null = null;
+    for (const row of this.rows.values()) {
+      if (row.sessionId !== sessionId) continue;
+      if (row.status !== 'queued') continue;
+      if (!best || row.createdAt.getTime() < best.createdAt.getTime()) best = row;
+    }
+    return best;
+  }
+}
+
+export class InMemoryFingerprintPriorityRepository implements FingerprintPriorityRepository {
+  /** Composite key: `${sessionId}:${fingerprintHash}`. */
+  readonly rows = new Map<string, FingerprintPriorityRecord>();
+  constructor(private readonly clock: InMemoryClock = systemClock) {}
+
+  async find(
+    sessionId: string,
+    fingerprintHash: string,
+    nowEpochMs: number,
+  ): Promise<FingerprintPriorityRecord | null> {
+    const row = this.rows.get(`${sessionId}:${fingerprintHash}`);
+    if (!row) return null;
+    if (row.expiresAt.getTime() <= nowEpochMs) return null;
+    return row;
+  }
+
+  async upsert(input: {
+    sessionId: string;
+    fingerprintHash: string;
+    expiresAt: Date;
+  }): Promise<FingerprintPriorityRecord> {
+    const row: FingerprintPriorityRecord = {
+      fingerprintHash: input.fingerprintHash,
+      sessionId: input.sessionId,
+      releasedAt: this.clock.now(),
+      expiresAt: input.expiresAt,
+    };
+    this.rows.set(`${input.sessionId}:${input.fingerprintHash}`, row);
+    return row;
+  }
+
+  async delete(sessionId: string, fingerprintHash: string): Promise<void> {
+    this.rows.delete(`${sessionId}:${fingerprintHash}`);
+  }
+}
+
 export function createInMemoryRepositories(clock: InMemoryClock = systemClock): Repositories {
   return {
     users: new InMemoryUserRepository(clock),
@@ -419,5 +617,9 @@ export function createInMemoryRepositories(clock: InMemoryClock = systemClock): 
     passwordCredentials: new InMemoryPasswordCredentialRepository(clock),
     oauthStates: new InMemoryOAuthStateRepository(clock),
     providerConnections: new InMemoryProviderConnectionRepository(clock),
+    sessions: new InMemorySessionRepository(),
+    guests: new InMemoryGuestRepository(clock),
+    guestSlots: new InMemoryGuestSlotRepository(clock),
+    fingerprintPriority: new InMemoryFingerprintPriorityRepository(clock),
   };
 }
