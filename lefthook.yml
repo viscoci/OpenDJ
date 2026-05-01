@@ -1,0 +1,25 @@
+pre-commit:
+  parallel: true
+  commands:
+    prettier:
+      glob: '*.{js,mjs,cjs,ts,tsx,json,md,yml,yaml,scss,html}'
+      run: pnpm exec prettier --check {staged_files}
+      stage_fixed: false
+
+commit-msg:
+  commands:
+    commitlint:
+      run: pnpm exec commitlint --edit {1}
+    dco-signoff:
+      # Mirror GitHub's DCO check locally for fast feedback. Allows merge commits and amended fixups.
+      run: |
+        if grep -qE '^Signed-off-by: ' {1}; then
+          exit 0
+        fi
+        first_line=$(head -n1 {1})
+        case "$first_line" in
+          "Merge "*|"Revert "*|"fixup!"*|"squash!"*) exit 0 ;;
+        esac
+        echo "ERROR: Commit message is missing a 'Signed-off-by:' trailer."
+        echo "Use 'git commit -s' to add it automatically. See CONTRIBUTING.md for details."
+        exit 1
