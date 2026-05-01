@@ -1,0 +1,64 @@
+name: Bug report
+description: Report a defect in OpenDJ OSS
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. Please fill out the sections below.
+
+        **Security vulnerability?** Don't open a public issue — see [SECURITY.md](../blob/main/SECURITY.md).
+  - type: input
+    id: package
+    attributes:
+      label: Affected package
+      description: e.g. `@opendj/core`, `apps/oss-demo`, or `multiple`
+      placeholder: '@opendj/core'
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit
+      description: Package version or git SHA you're running
+      placeholder: '0.1.0 or abc1234'
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction steps
+      description: Minimal steps to reproduce. Include code snippets / commands.
+      placeholder: |
+        1. Run `pnpm install`
+        2. Run `pnpm turbo run test --filter=@opendj/core`
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include error messages, stack traces, or screenshots.
+    validations:
+      required: true
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: Output of `node --version`, `pnpm --version`, OS, browser (if relevant)
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional context
+    validations:
+      required: false

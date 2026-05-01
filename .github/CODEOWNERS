@@ -1,0 +1,11 @@
+# OpenDJ code owners
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-security/customizing-your-repository/about-code-owners
+
+# Default owner for everything
+*                            @viscoci
+
+# Per-area owners can be added as the project grows, e.g.:
+# /packages/core/             @viscoci
+# /packages/auth/             @viscoci
+# /packages/lyrics/           @viscoci
+# /.github/                   @viscoci

@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 Discussions
+    url: https://github.com/viscoci/opendj/discussions
+    about: Questions, ideas, show & tell. Start here if you're unsure whether something is a bug.
+  - name: 🔒 Security vulnerability
+    url: https://github.com/viscoci/opendj/security/advisories/new
+    about: Report security issues privately. Do NOT open a public issue.
+  - name: 📜 Code of Conduct
+    url: https://github.com/viscoci/opendj/blob/main/CODE_OF_CONDUCT.md
+    about: How we expect everyone to behave in this community.

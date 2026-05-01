@@ -1,0 +1,48 @@
+name: Feature request
+description: Suggest an enhancement to OpenDJ OSS
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting a feature! Before filing, please check [Discussions](https://github.com/viscoci/opendj/discussions) — open-ended ideas often start there.
+
+        **Hosted-only features** (Branding Studio, billing, hosted analytics, native mobile app) belong in the private `opendj-live` repo, not here.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem statement
+      description: What's the user / developer pain you're solving?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How would you change OpenDJ? Include API surface, file paths, package boundaries.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: false
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - 'Single package (which?)'
+        - 'Multiple packages'
+        - 'Tooling / CI'
+        - 'Docs only'
+        - 'Unsure'
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional context
+    validations:
+      required: false
