@@ -1,0 +1,23 @@
+{
+  "name": "opendj-oss-demo",
+  "version": "0.0.0",
+  "private": true,
+  "description": "OpenDJ self-host reference deploy. Node 22 + Postgres via Docker Compose.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "echo \"(oss-demo) build placeholder\" && exit 0",
+    "lint": "echo \"(oss-demo) lint placeholder\" && exit 0",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "echo \"(oss-demo) no tests yet\" && exit 0",
+    "start": "node src/main.ts"
+  },
+  "dependencies": {
+    "@opendj/backend": "workspace:*",
+    "@opendj/db": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  }
+}
