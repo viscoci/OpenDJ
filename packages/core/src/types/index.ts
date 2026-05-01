@@ -1,8 +1,14 @@
 /**
- * Shared public types used across @opendj/core providers and downstream packages.
+ * Shared public types used across @opendj/core providers, queue, plan,
+ * and downstream packages.
  *
- * No runtime imports — types only.
+ * No runtime imports — types only (with a small handful of pure helpers).
  */
+
+export * from './account.js';
+export * from './session.js';
+export * from './guest.js';
+export * from './queue.js';
 
 /**
  * A track from any streaming provider, identified by its provider-native URI.
