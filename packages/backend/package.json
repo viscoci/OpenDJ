@@ -22,6 +22,17 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run"
   },
+  "dependencies": {
+    "@opendj/abuse": "workspace:*",
+    "@opendj/auth": "workspace:*",
+    "@opendj/core": "workspace:*",
+    "@opendj/db": "workspace:*",
+    "@opendj/lyrics": "workspace:*",
+    "@opendj/realtime": "workspace:*",
+    "@opendj/sync": "workspace:*",
+    "hono": "^4.6.0",
+    "valibot": "^0.42.0"
+  },
   "devDependencies": {
     "typescript": "^5.7.0",
     "vitest": "^2.1.0"
