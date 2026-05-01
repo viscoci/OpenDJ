@@ -127,6 +127,9 @@ importers:
       '@opendj/sync':
         specifier: workspace:*
         version: link:../sync
+      drizzle-orm:
+        specifier: ^0.36.0
+        version: 0.36.4(postgres@3.4.9)
       hono:
         specifier: ^4.6.0
         version: 4.12.16
