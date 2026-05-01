@@ -87,4 +87,11 @@ export class DrizzleAuthSessionRepository implements AuthSessionRepository {
       .set({ claimsSnapshot: claims })
       .where(eq(schema.authSessions.id, id));
   }
+
+  async updateCurrentAccount(id: string, accountId: string | null): Promise<void> {
+    await this.db
+      .update(schema.authSessions)
+      .set({ currentAccountId: accountId })
+      .where(eq(schema.authSessions.id, id));
+  }
 }

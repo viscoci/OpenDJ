@@ -126,6 +126,8 @@ export interface AuthSessionRepository {
   revoke(id: string, nowEpochMs: number): Promise<void>;
   /** Refresh the persisted claims snapshot (e.g. after membership change). */
   updateClaimsSnapshot(id: string, claims: Claim[]): Promise<void>;
+  /** Switch the active account on a session row. Used by /api/v1/auth/switch-account. */
+  updateCurrentAccount(id: string, accountId: string | null): Promise<void>;
 }
 
 export interface PasswordCredentialRepository {

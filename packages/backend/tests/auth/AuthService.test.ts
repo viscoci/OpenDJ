@@ -122,7 +122,7 @@ describe('AuthService.resolveAuthContext', () => {
     expect(await service.resolveAuthContext('does-not-exist', NOW)).toBeNull();
   });
 
-  it('returns the AuthContext for a fresh session', async () => {
+  it('returns context + sessionId for a fresh session', async () => {
     const { service } = setup();
     const issued = await service.issueSession({
       userId: 'u-1',
@@ -130,19 +130,20 @@ describe('AuthService.resolveAuthContext', () => {
       claimsSnapshot: ['account:read'],
       nowEpochMs: NOW,
     });
-    const context = await service.resolveAuthContext(issued.token, NOW + 1000);
-    expect(context).not.toBeNull();
-    expect(context!.userId).toBe('u-1');
-    expect(context!.currentAccountId).toBe('acc-1');
-    expect(context!.claims).toEqual(['account:read']);
-    expect(context!.authKind).toBe('host');
+    const resolved = await service.resolveAuthContext(issued.token, NOW + 1000);
+    expect(resolved).not.toBeNull();
+    expect(resolved!.sessionId).toBe(issued.sessionId);
+    expect(resolved!.context.userId).toBe('u-1');
+    expect(resolved!.context.currentAccountId).toBe('acc-1');
+    expect(resolved!.context.claims).toEqual(['account:read']);
+    expect(resolved!.context.authKind).toBe('host');
   });
 
   it('returns logged_in_guest when no claims are held', async () => {
     const { service } = setup();
     const issued = await service.issueSession({ userId: 'u-1', nowEpochMs: NOW });
-    const context = await service.resolveAuthContext(issued.token, NOW + 1000);
-    expect(context!.authKind).toBe('logged_in_guest');
+    const resolved = await service.resolveAuthContext(issued.token, NOW + 1000);
+    expect(resolved!.context.authKind).toBe('logged_in_guest');
   });
 
   it('returns null after the session is revoked', async () => {

@@ -219,6 +219,11 @@ export class InMemoryAuthSessionRepository implements AuthSessionRepository {
     const row = this.rows.get(id);
     if (row) row.claimsSnapshot = [...claims];
   }
+
+  async updateCurrentAccount(id: string, accountId: string | null): Promise<void> {
+    const row = this.rows.get(id);
+    if (row) row.currentAccountId = accountId;
+  }
 }
 
 export class InMemoryPasswordCredentialRepository implements PasswordCredentialRepository {

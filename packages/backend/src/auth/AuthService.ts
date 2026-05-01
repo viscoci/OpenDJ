@@ -16,6 +16,9 @@
 
 import type { AuthContext, AuthKind, Claim } from '@opendj/auth';
 import { generateSessionToken, hashSessionToken } from '@opendj/auth';
+
+// Re-export AuthContext so consumers don't need a separate @opendj/auth import.
+export type { AuthContext };
 import type { AuthSessionRepository } from '../repositories/types.js';
 import type { ClaimsService } from './ClaimsService.js';
 
@@ -35,6 +38,16 @@ export interface IssuedSession {
   token: string;
   sessionId: string;
   expiresAt: Date;
+}
+
+/**
+ * Resolved authentication state for a request — the public AuthContext plus
+ * the underlying `auth_sessions.id` so route handlers can mutate the session
+ * (logout, switch-account) without re-hashing the cookie.
+ */
+export interface ResolvedSession {
+  context: AuthContext;
+  sessionId: string;
 }
 
 export interface IssueSessionInput {
@@ -86,10 +99,14 @@ export class AuthService {
   }
 
   /**
-   * Resolve a token into an AuthContext, or `null` if the session is missing,
-   * expired, or revoked. Bumps `lastSeenAt` at most once per `TOUCH_DEBOUNCE_MS`.
+   * Resolve a token into an AuthContext + sessionId, or `null` if the session
+   * is missing, expired, or revoked. Bumps `lastSeenAt` at most once per
+   * `TOUCH_DEBOUNCE_MS`.
+   *
+   * Middleware uses the sessionId for /logout and /switch-account; pure read
+   * paths can ignore it.
    */
-  async resolveAuthContext(token: string, nowEpochMs: number): Promise<AuthContext | null> {
+  async resolveAuthContext(token: string, nowEpochMs: number): Promise<ResolvedSession | null> {
     const sessionHash = await hashSessionToken(token);
     const session = await this.deps.authSessions.findActiveByHash(sessionHash, nowEpochMs);
     if (!session) return null;
@@ -104,10 +121,13 @@ export class AuthService {
         : 'logged_in_guest';
 
     return {
-      userId: session.userId,
-      currentAccountId: session.currentAccountId,
-      claims: [...session.claimsSnapshot],
-      authKind,
+      context: {
+        userId: session.userId,
+        currentAccountId: session.currentAccountId,
+        claims: [...session.claimsSnapshot],
+        authKind,
+      },
+      sessionId: session.id,
     };
   }
 
@@ -125,6 +145,22 @@ export class AuthService {
     accountId: string,
   ): Promise<Claim[]> {
     const claims = await this.deps.claims.refreshClaims(userId, accountId);
+    await this.deps.authSessions.updateClaimsSnapshot(sessionId, claims);
+    return claims;
+  }
+
+  /**
+   * Switch the active account on the session. Validates that the user is an
+   * active member of `accountId` first — `assertMembership` throws
+   * `NotAccountMemberError` otherwise.
+   *
+   * Returns the freshly-loaded claim list. Callers (route handlers) typically
+   * include this in the response payload alongside the new currentAccountId.
+   */
+  async switchAccount(sessionId: string, userId: string, accountId: string): Promise<Claim[]> {
+    await this.deps.claims.assertMembership(userId, accountId);
+    const claims = await this.deps.claims.refreshClaims(userId, accountId);
+    await this.deps.authSessions.updateCurrentAccount(sessionId, accountId);
     await this.deps.authSessions.updateClaimsSnapshot(sessionId, claims);
     return claims;
   }

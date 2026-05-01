@@ -33,7 +33,7 @@ async function issueAndCookie(auth: AuthService, opts: { claims?: string[] } = {
       typeof auth.issueSession
     >[0]['claimsSnapshot'],
   });
-  return `${SESSION_COOKIE_NAME}=${issued.token}`;
+  return { cookie: `${SESSION_COOKIE_NAME}=${issued.token}`, sessionId: issued.sessionId };
 }
 
 describe('optionalAuth', () => {
@@ -50,7 +50,7 @@ describe('optionalAuth', () => {
     const { app, auth } = newApp();
     app.use(optionalAuth(auth));
     app.get('/', (c) => c.json({ auth: c.get('auth') }));
-    const cookie = await issueAndCookie(auth, { claims: ['account:read'] });
+    const { cookie } = await issueAndCookie(auth, { claims: ['account:read'] });
     const res = await app.request('/', { headers: { cookie } });
     const body = (await res.json()) as { auth: { userId: string; claims: string[] } | null };
     expect(body.auth?.userId).toBe('u-1');
@@ -92,7 +92,7 @@ describe('requireAuth', () => {
     const { app, auth } = newApp();
     app.use(requireAuth(auth));
     app.get('/', (c) => c.json({ user: c.get('auth')!.userId }));
-    const cookie = await issueAndCookie(auth);
+    const { cookie } = await issueAndCookie(auth);
     const res = await app.request('/', { headers: { cookie } });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ user: 'u-1' });
@@ -112,7 +112,7 @@ describe('requireClaim', () => {
     const { app, auth } = newApp();
     app.use(requireClaim(auth, 'billing:manage'));
     app.get('/', (c) => c.text('ok'));
-    const cookie = await issueAndCookie(auth, { claims: ['account:read'] });
+    const { cookie } = await issueAndCookie(auth, { claims: ['account:read'] });
     const res = await app.request('/', { headers: { cookie } });
     expect(res.status).toBe(403);
     const body = (await res.json()) as { error: string; missingClaim: string };
@@ -123,7 +123,7 @@ describe('requireClaim', () => {
     const { app, auth } = newApp();
     app.use(requireClaim(auth, 'account:read'));
     app.get('/', (c) => c.text('ok'));
-    const cookie = await issueAndCookie(auth, { claims: ['account:read'] });
+    const { cookie } = await issueAndCookie(auth, { claims: ['account:read'] });
     const res = await app.request('/', { headers: { cookie } });
     expect(res.status).toBe(200);
   });
@@ -134,7 +134,7 @@ describe('requireAnyClaim', () => {
     const { app, auth } = newApp();
     app.use(requireAnyClaim(auth, ['billing:manage', 'account:read']));
     app.get('/', (c) => c.text('ok'));
-    const cookie = await issueAndCookie(auth, { claims: ['account:read'] });
+    const { cookie } = await issueAndCookie(auth, { claims: ['account:read'] });
     const res = await app.request('/', { headers: { cookie } });
     expect(res.status).toBe(200);
   });
@@ -143,7 +143,7 @@ describe('requireAnyClaim', () => {
     const { app, auth } = newApp();
     app.use(requireAnyClaim(auth, ['billing:manage', 'admin:global']));
     app.get('/', (c) => c.text('ok'));
-    const cookie = await issueAndCookie(auth, { claims: ['account:read'] });
+    const { cookie } = await issueAndCookie(auth, { claims: ['account:read'] });
     const res = await app.request('/', { headers: { cookie } });
     expect(res.status).toBe(403);
     const body = (await res.json()) as { error: string; missingAnyClaim: string[] };
