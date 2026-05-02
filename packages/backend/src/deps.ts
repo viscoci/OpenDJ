@@ -29,6 +29,7 @@ import { SoundtrackProvider } from './providers/streaming/SoundtrackProvider.js'
 import { SpotifyProvider } from './providers/streaming/spotify/SpotifyProvider.js';
 import { StreamingRouter } from './providers/streaming/StreamingRouter.js';
 import { QueueService, type RealtimeRoomRegistry } from './queue/QueueService.js';
+import { RoomRegistryImpl, type RealtimeRoomManager } from './realtime/RoomRegistryImpl.js';
 import { createDrizzleRepositories } from './repositories/drizzle/index.js';
 import type { Repositories } from './repositories/types.js';
 import { SessionService } from './session/SessionService.js';
@@ -47,6 +48,12 @@ export interface AppDeps {
   lyricsLookupService: LyricsLookupService;
   abuseModerationService: AbuseModerationService;
   rooms: RealtimeRoomRegistry;
+  /**
+   * Concrete room manager. Routes that materialize rooms (the WS upgrade
+   * route) use this; QueueService and other publishers see the read-only
+   * `rooms` view above.
+   */
+  roomManager: RealtimeRoomManager | null;
 }
 
 export interface CreateDepsOptions {
@@ -59,8 +66,14 @@ export interface CreateDepsOptions {
   providerRegistry?: ProviderRegistry;
   /** Override the OAuth-config registry (e.g. add new providers). */
   streamingProviderOAuthConfigs?: StreamingProviderOAuthRegistry;
-  /** Realtime room registry. Defaults to a no-op (good for the OSS demo until WS lands). */
+  /**
+   * Realtime room registry. When `realtime: 'in-process'` (default), an
+   * in-process `RoomRegistryImpl` is created. Pass a registry directly to
+   * override (e.g. tests, hosted Cloudflare Durable Object adapter).
+   */
   rooms?: RealtimeRoomRegistry;
+  /** Realtime backing strategy. */
+  realtime?: 'in-process' | 'none';
   /** fetch impl for outbound calls (provider OAuth + Spotify). Defaults to globalThis.fetch. */
   fetchImpl?: typeof fetch;
   /** Override the default lyrics provider (defaults to LRCLIB). */
@@ -100,7 +113,16 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
 
   const sessionService = new SessionService({ sessions: repositories.sessions });
 
-  const rooms = options.rooms ?? NULL_ROOM_REGISTRY;
+  let roomManager: RealtimeRoomManager | null = null;
+  let rooms: RealtimeRoomRegistry;
+  if (options.rooms) {
+    rooms = options.rooms;
+  } else if (options.realtime === 'none') {
+    rooms = NULL_ROOM_REGISTRY;
+  } else {
+    roomManager = new RoomRegistryImpl();
+    rooms = roomManager;
+  }
   const queueService = new QueueService({
     sessions: repositories.sessions,
     guests: repositories.guests,
@@ -151,5 +173,6 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
     lyricsLookupService,
     abuseModerationService,
     rooms,
+    roomManager,
   };
 }

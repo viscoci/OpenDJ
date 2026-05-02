@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@hono/node-server": "^1.13.0",
+    "@hono/node-ws": "^1.0.0",
     "@opendj/backend": "workspace:*",
     "@opendj/db": "workspace:*",
     "hono": "^4.6.0"

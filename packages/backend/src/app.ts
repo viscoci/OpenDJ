@@ -19,12 +19,22 @@ import { healthRoutes } from './routes/health.js';
 import { lyricsRoutes, sessionLyricsRoutes } from './routes/lyrics.js';
 import { providerOAuthRoutes } from './routes/providerOAuth.js';
 import { queueRoutes } from './routes/queue.js';
+import { realtimeRoutes, type UpgradeWebSocket } from './routes/realtime.js';
 import { sessionRoutes } from './routes/session.js';
 
 export interface AppOptions {
   deps: AppDeps;
   /** fetch impl for outbound calls — usually only set in tests. */
   fetchImpl?: typeof fetch;
+  /**
+   * Adapter-supplied WebSocket upgrade helper. When provided AND
+   * `deps.roomManager` is non-null, the realtime route is mounted at
+   * `/api/v1/sessions/:id/realtime`.
+   *
+   * Node: pass `createNodeWebSocket(...).upgradeWebSocket` from `@hono/node-ws`.
+   * Workers / Durable Objects: their own helper.
+   */
+  upgradeWebSocket?: UpgradeWebSocket;
 }
 
 export function createApp(options: AppOptions): Hono<{ Variables: AuthVariables }> {
@@ -84,6 +94,13 @@ export function createApp(options: AppOptions): Hono<{ Variables: AuthVariables 
       ...(options.fetchImpl !== undefined && { fetchImpl: options.fetchImpl }),
     }),
   );
+
+  if (options.upgradeWebSocket && deps.roomManager) {
+    v1.route(
+      '/sessions/:id/realtime',
+      realtimeRoutes({ rooms: deps.roomManager }, options.upgradeWebSocket),
+    );
+  }
 
   app.route('/api/v1', v1);
 
