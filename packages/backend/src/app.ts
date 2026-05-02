@@ -22,6 +22,7 @@ import { lyricsRoutes, sessionLyricsRoutes } from './routes/lyrics.js';
 import { providerOAuthRoutes } from './routes/providerOAuth.js';
 import { queueRoutes } from './routes/queue.js';
 import { realtimeRoutes, type UpgradeWebSocket } from './routes/realtime.js';
+import { searchRoutes } from './routes/search.js';
 import { sessionRoutes } from './routes/session.js';
 
 export interface AppOptions {
@@ -78,6 +79,14 @@ export function createApp(options: AppOptions): Hono<{ Variables: AuthVariables 
   v1.route(
     '/sessions/:id/queue',
     queueRoutes({ authService: deps.authService, queueService: deps.queueService }),
+  );
+  v1.route(
+    '/sessions/:id/search',
+    searchRoutes({
+      sessions: deps.repositories.sessions,
+      providerConnections: deps.repositories.providerConnections,
+      streamingRouter: deps.streamingRouter,
+    }),
   );
   v1.route(
     '/sessions/:id/lyrics',

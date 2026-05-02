@@ -5,6 +5,7 @@ import type {
   ModerateQueueItemBody,
   QueueItemSummaryWire,
   RequestTrackBody,
+  SearchResponse,
 } from './types.js';
 
 /**
@@ -59,6 +60,22 @@ export class QueueApi {
     return this.http.request<{ votes: number; threshold: number }>(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/queue/${encodeURIComponent(itemId)}/skip-vote`,
       { method: 'POST', slotToken },
+    );
+  }
+
+  /**
+   * Search the session's connected streaming provider.
+   *
+   * Public — no slot token required. Surfaces 503 `no_provider_connected`
+   * (account hasn't linked a provider yet) and 501 `search_not_supported`
+   * (provider has no search capability) as `ApiError`s.
+   */
+  search(sessionId: string, query: string, limit?: number): Promise<SearchResponse> {
+    return this.http.request<SearchResponse>(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/search`,
+      {
+        query: { q: query, ...(limit !== undefined && { limit }) },
+      },
     );
   }
 }

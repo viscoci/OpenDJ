@@ -126,6 +126,19 @@ export interface LyricsFeedbackBody {
   comment?: string | null;
 }
 
+export interface SearchResultWire {
+  trackUri: string;
+  trackName: string;
+  artistName: string;
+  albumArtUrl: string | null;
+  durationMs: number | null;
+}
+
+export interface SearchResponse {
+  results: ReadonlyArray<SearchResultWire>;
+  providerId: string;
+}
+
 export interface RegisterRequest {
   email: string;
   password: string;
