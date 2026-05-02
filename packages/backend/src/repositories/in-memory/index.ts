@@ -103,6 +103,7 @@ export class InMemoryUserRepository implements UserRepository {
 
 export class InMemoryAccountRepository implements AccountRepository {
   readonly rows = new Map<string, AccountRecord>();
+  constructor(private readonly clock: InMemoryClock = systemClock) {}
 
   async findById(id: string): Promise<AccountRecord | null> {
     return this.rows.get(id) ?? null;
@@ -115,6 +116,26 @@ export class InMemoryAccountRepository implements AccountRepository {
     return null;
   }
 
+  async create(input: {
+    displayName: string;
+    slug: string;
+    plan?: AccountRecord['plan'];
+  }): Promise<AccountRecord> {
+    if (await this.findBySlug(input.slug)) {
+      throw new Error(`Account slug "${input.slug}" already exists.`);
+    }
+    const id = crypto.randomUUID();
+    const row: AccountRecord = {
+      id,
+      displayName: input.displayName,
+      slug: input.slug,
+      plan: input.plan ?? 'oss',
+      createdAt: this.clock.now(),
+    };
+    this.rows.set(id, row);
+    return row;
+  }
+
   /** Test helper: seed a row directly. */
   seed(record: AccountRecord): void {
     this.rows.set(record.id, record);
@@ -124,6 +145,7 @@ export class InMemoryAccountRepository implements AccountRepository {
 export class InMemoryMembershipRepository implements MembershipRepository {
   /** Composite key: `${accountId}:${userId}`. */
   readonly rows = new Map<string, MembershipRecord>();
+  constructor(private readonly clock: InMemoryClock = systemClock) {}
 
   async find(accountId: string, userId: string): Promise<MembershipRecord | null> {
     return this.rows.get(`${accountId}:${userId}`) ?? null;
@@ -135,6 +157,29 @@ export class InMemoryMembershipRepository implements MembershipRepository {
       if (row.userId === userId) result.push(row);
     }
     return result;
+  }
+
+  async upsert(input: {
+    accountId: string;
+    userId: string;
+    role: MembershipRecord['role'];
+    claims: Claim[];
+    status?: MembershipRecord['status'];
+  }): Promise<MembershipRecord> {
+    const key = `${input.accountId}:${input.userId}`;
+    const existing = this.rows.get(key);
+    const now = this.clock.now();
+    const row: MembershipRecord = {
+      accountId: input.accountId,
+      userId: input.userId,
+      status: input.status ?? 'active',
+      role: input.role,
+      claims: [...input.claims],
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    };
+    this.rows.set(key, row);
+    return row;
   }
 
   /** Test helper: insert/update a membership. */
@@ -985,8 +1030,8 @@ export class InMemoryActionEventRepository implements ActionEventRepository {
 export function createInMemoryRepositories(clock: InMemoryClock = systemClock): Repositories {
   return {
     users: new InMemoryUserRepository(clock),
-    accounts: new InMemoryAccountRepository(),
-    memberships: new InMemoryMembershipRepository(),
+    accounts: new InMemoryAccountRepository(clock),
+    memberships: new InMemoryMembershipRepository(clock),
     authIdentities: new InMemoryAuthIdentityRepository(clock),
     authSessions: new InMemoryAuthSessionRepository(clock),
     passwordCredentials: new InMemoryPasswordCredentialRepository(clock),

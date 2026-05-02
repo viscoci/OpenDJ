@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest';
 import type { OAuthProviderConfig, OAuthTokens } from '@opendj/auth';
 import { AuthService } from '../../src/auth/AuthService.js';
 import { ClaimsService } from '../../src/auth/ClaimsService.js';
+import { AccountService } from '../../src/account/AccountService.js';
 import { LoginAuthError, LoginAuthService } from '../../src/auth/LoginAuthService.js';
 import type { LoginProviderHandler, ProviderProfile } from '../../src/auth/loginProviders/types.js';
 import {
@@ -57,16 +58,20 @@ function tokenResponse(): Response {
   );
 }
 
-function setup(profile: ProviderProfile, opts: { configured?: boolean } = {}) {
+function setup(
+  profile: ProviderProfile,
+  opts: { configured?: boolean; bootstrapAccount?: boolean } = {},
+) {
   const clock = { now: () => new Date(NOW) };
   const users = new InMemoryUserRepository(clock);
-  const accounts = new InMemoryAccountRepository();
-  const memberships = new InMemoryMembershipRepository();
+  const accounts = new InMemoryAccountRepository(clock);
+  const memberships = new InMemoryMembershipRepository(clock);
   const authIdentities = new InMemoryAuthIdentityRepository(clock);
   const authSessions = new InMemoryAuthSessionRepository(clock);
   const oauthStates = new InMemoryOAuthStateRepository(clock);
   const claims = new ClaimsService({ memberships, accounts });
   const authService = new AuthService({ authSessions, claims });
+  const accountService = new AccountService({ accounts, memberships });
 
   const handler = new FakeLoginHandler(profile);
   const fetchImpl: typeof fetch = async (input) => {
@@ -91,9 +96,19 @@ function setup(profile: ProviderProfile, opts: { configured?: boolean } = {}) {
             },
           },
     fetchImpl,
+    ...(opts.bootstrapAccount !== false && { accountService }),
   });
 
-  return { service, handler, users, authIdentities, authSessions, oauthStates };
+  return {
+    service,
+    handler,
+    users,
+    accounts,
+    memberships,
+    authIdentities,
+    authSessions,
+    oauthStates,
+  };
 }
 
 const baseProfile: ProviderProfile = {
@@ -137,6 +152,26 @@ describe('LoginAuthService.complete', () => {
     expect(user.displayName).toBe('Real User');
     const identity = await authIdentities.findByProvider('fakeoidc', 'goog-sub-123');
     expect(identity?.userId).toBe(user.id);
+  });
+
+  it('bootstraps a personal account on first login when accountService is wired', async () => {
+    const { service, handler, accounts, memberships } = setup(baseProfile);
+    const start = await service.start(handler);
+    const result = await service.complete(handler, 'auth-code', start.state);
+    expect(accounts.rows.size).toBe(1);
+    expect(memberships.rows.size).toBe(1);
+    const m = [...memberships.rows.values()][0]!;
+    expect(m.role).toBe('owner');
+    expect(m.userId).toBe(result.user.id);
+  });
+
+  it('returning user → bootstrap is idempotent (no duplicate account)', async () => {
+    const { service, handler, accounts } = setup(baseProfile);
+    const s1 = await service.start(handler);
+    await service.complete(handler, 'c1', s1.state);
+    const s2 = await service.start(handler);
+    await service.complete(handler, 'c2', s2.state);
+    expect(accounts.rows.size).toBe(1);
   });
 
   it('reuses an existing identity → existing user, no duplicate user', async () => {

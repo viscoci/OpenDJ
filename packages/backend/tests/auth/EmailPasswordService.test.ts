@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { PasswordHasher } from '@opendj/auth';
+import { AccountService } from '../../src/account/AccountService.js';
 import { Argon2idPasswordHasher } from '../../src/auth/Argon2idPasswordHasher.js';
 import { AuthService } from '../../src/auth/AuthService.js';
 import { ClaimsService } from '../../src/auth/ClaimsService.js';
@@ -19,11 +20,17 @@ import {
 
 const NOW = new Date('2026-04-30T12:00:00Z').getTime();
 
-function setup(opts: { hasher?: PasswordHasher & { algorithm?: string } } = {}) {
+function setup(
+  opts: {
+    hasher?: PasswordHasher & { algorithm?: string };
+    /** Set to false to disable account bootstrap. Default: enabled. */
+    bootstrapAccount?: boolean;
+  } = {},
+) {
   const clock = { now: () => new Date(NOW) };
   const users = new InMemoryUserRepository(clock);
-  const accounts = new InMemoryAccountRepository();
-  const memberships = new InMemoryMembershipRepository();
+  const accounts = new InMemoryAccountRepository(clock);
+  const memberships = new InMemoryMembershipRepository(clock);
   const authIdentities = new InMemoryAuthIdentityRepository(clock);
   const authSessions = new InMemoryAuthSessionRepository(clock);
   const passwordCredentials = new InMemoryPasswordCredentialRepository(clock);
@@ -31,21 +38,26 @@ function setup(opts: { hasher?: PasswordHasher & { algorithm?: string } } = {}) 
   const authService = new AuthService({ authSessions, claims });
   const passwordHasher =
     opts.hasher ?? new Argon2idPasswordHasher({ memoryCost: 8 * 1024, timeCost: 2 });
+  const accountService = new AccountService({ accounts, memberships });
   const service = new EmailPasswordService({
     users,
     authIdentities,
     passwordCredentials,
     passwordHasher,
     authService,
+    ...(opts.bootstrapAccount !== false && { accountService }),
   });
   return {
     service,
     users,
+    accounts,
+    memberships,
     authIdentities,
     authSessions,
     passwordCredentials,
     passwordHasher,
     authService,
+    accountService,
   };
 }
 
@@ -74,6 +86,30 @@ describe('EmailPasswordService.register', () => {
     await expect(
       service.register({ email: 'USER@example.com', password: 'pw-long-enough' }, NOW),
     ).rejects.toMatchObject({ code: 'email_taken' });
+  });
+
+  it('bootstraps a personal account + owner membership when accountService is wired', async () => {
+    const { service, accounts, memberships } = setup();
+    const result = await service.register(
+      { email: 'newhost@example.com', password: 'correct horse battery staple' },
+      NOW,
+    );
+    expect(accounts.rows.size).toBe(1);
+    expect(memberships.rows.size).toBe(1);
+    const membership = [...memberships.rows.values()][0]!;
+    expect(membership.role).toBe('owner');
+    expect(membership.userId).toBe(result.userId);
+    expect(membership.claims).toEqual(expect.arrayContaining(['session:create']));
+  });
+
+  it('skips bootstrap when accountService is not wired (back-compat)', async () => {
+    const { service, accounts, memberships } = setup({ bootstrapAccount: false });
+    await service.register(
+      { email: 'no-bootstrap@example.com', password: 'correct horse battery staple' },
+      NOW,
+    );
+    expect(accounts.rows.size).toBe(0);
+    expect(memberships.rows.size).toBe(0);
   });
 
   it('throws email_taken when an email-password identity already exists', async () => {

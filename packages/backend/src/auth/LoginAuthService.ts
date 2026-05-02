@@ -23,6 +23,7 @@ import {
   type OAuthTokens,
 } from '@opendj/auth';
 import { AuthService, type IssuedSession } from './AuthService.js';
+import type { AccountService } from '../account/AccountService.js';
 import type { LoginProviderHandler } from './loginProviders/types.js';
 import type {
   AuthIdentityRecord,
@@ -57,6 +58,13 @@ export interface LoginAuthServiceDeps {
   /** Provider id → credentials (filled from Config; missing providers throw `provider_not_configured`). */
   credentials: Readonly<Record<string, LoginCredentials | undefined>>;
   fetchImpl?: typeof fetch;
+  /**
+   * Optional account bootstrap service. When supplied, first-time logins
+   * (new user via this provider) auto-create a personal account + owner
+   * membership. Idempotent for returning users — reuses any existing
+   * active membership.
+   */
+  accountService?: AccountService;
 }
 
 export interface StartResult {
@@ -176,7 +184,23 @@ export class LoginAuthService {
       });
     }
 
-    const session = await this.deps.authService.issueSession({ userId: user.id });
+    let currentAccountId: string | null = null;
+    if (this.deps.accountService) {
+      const result = await this.deps.accountService.bootstrapPersonalAccount({
+        userId: user.id,
+        displayNameHint:
+          user.displayName?.trim() ||
+          profile.displayName?.trim() ||
+          profile.email?.split('@')[0] ||
+          'account',
+      });
+      currentAccountId = result.account.id;
+    }
+
+    const session = await this.deps.authService.issueSession({
+      userId: user.id,
+      ...(currentAccountId !== null && { currentAccountId }),
+    });
     return { session, user, identity };
   }
 }

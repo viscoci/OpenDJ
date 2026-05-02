@@ -20,6 +20,7 @@ import { AuthService } from './auth/AuthService.js';
 import { ClaimsService } from './auth/ClaimsService.js';
 import { EmailPasswordService } from './auth/EmailPasswordService.js';
 import { LoginAuthService, type LoginCredentials } from './auth/LoginAuthService.js';
+import { AccountService } from './account/AccountService.js';
 import {
   createDefaultLoginProviderRegistry,
   type LoginProviderRegistry,
@@ -59,6 +60,7 @@ export interface AppDeps {
   emailPasswordService: EmailPasswordService;
   loginAuthService: LoginAuthService;
   loginProviders: LoginProviderRegistry;
+  accountService: AccountService;
   rooms: RealtimeRoomRegistry;
   /**
    * Concrete room manager. Routes that materialize rooms (the WS upgrade
@@ -178,6 +180,11 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
     actionEvents: repositories.actionEvents,
   });
 
+  const accountService = new AccountService({
+    accounts: repositories.accounts,
+    memberships: repositories.memberships,
+  });
+
   const passwordHasher = options.passwordHasher ?? new Argon2idPasswordHasher();
   const emailPasswordService = new EmailPasswordService({
     users: repositories.users,
@@ -185,6 +192,7 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
     passwordCredentials: repositories.passwordCredentials,
     passwordHasher,
     authService,
+    accountService,
   });
 
   const loginProviders = options.loginProviders ?? createDefaultLoginProviderRegistry();
@@ -202,6 +210,7 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
     authService,
     credentials: loginCredentials,
     fetchImpl,
+    accountService,
   });
 
   return {
@@ -222,6 +231,7 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
     emailPasswordService,
     loginAuthService,
     loginProviders,
+    accountService,
     rooms,
     roomManager,
   };

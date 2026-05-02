@@ -17,6 +17,7 @@
 
 import type { PasswordHasher } from '@opendj/auth';
 import { AuthService, type IssuedSession } from './AuthService.js';
+import type { AccountService } from '../account/AccountService.js';
 import type {
   AuthIdentityRepository,
   PasswordCredentialRepository,
@@ -42,6 +43,12 @@ export interface EmailPasswordServiceDeps {
   passwordCredentials: PasswordCredentialRepository;
   passwordHasher: PasswordHasher & { algorithm?: string };
   authService: AuthService;
+  /**
+   * Optional account bootstrap service. When supplied, registration auto-
+   * creates a personal account + owner membership so the new user can
+   * immediately create sessions, connect providers, etc.
+   */
+  accountService?: AccountService;
 }
 
 export interface RegisterInput {
@@ -106,8 +113,19 @@ export class EmailPasswordService {
       hashAlgorithm: this.deps.passwordHasher.algorithm ?? 'unknown',
     });
 
+    // Bootstrap a personal account so the user can act immediately.
+    let accountId: string | null = null;
+    if (this.deps.accountService) {
+      const result = await this.deps.accountService.bootstrapPersonalAccount({
+        userId: user.id,
+        displayNameHint: input.displayName?.trim() || email.split('@')[0]!,
+      });
+      accountId = result.account.id;
+    }
+
     const session = await this.deps.authService.issueSession({
       userId: user.id,
+      ...(accountId !== null && { currentAccountId: accountId }),
       ...(nowEpochMs !== undefined && { nowEpochMs }),
       ...(input.ipHash !== undefined && { ipHash: input.ipHash }),
       ...(input.userAgentHash !== undefined && { userAgentHash: input.userAgentHash }),

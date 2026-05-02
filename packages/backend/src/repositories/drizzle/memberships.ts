@@ -40,4 +40,34 @@ export class DrizzleMembershipRepository implements MembershipRepository {
       .where(eq(schema.accountMemberships.userId, userId));
     return rows.map(mapMembership);
   }
+
+  async upsert(input: {
+    accountId: string;
+    userId: string;
+    role: MembershipRecord['role'];
+    claims: Claim[];
+    status?: MembershipRecord['status'];
+  }): Promise<MembershipRecord> {
+    const [row] = await this.db
+      .insert(schema.accountMemberships)
+      .values({
+        accountId: input.accountId,
+        userId: input.userId,
+        role: input.role,
+        claims: input.claims,
+        status: input.status ?? 'active',
+      })
+      .onConflictDoUpdate({
+        target: [schema.accountMemberships.accountId, schema.accountMemberships.userId],
+        set: {
+          role: input.role,
+          claims: input.claims,
+          status: input.status ?? 'active',
+          updatedAt: new Date(),
+        },
+      })
+      .returning();
+    if (!row) throw new Error('memberships.upsert: insert returned no row');
+    return mapMembership(row);
+  }
 }

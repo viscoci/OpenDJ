@@ -33,4 +33,21 @@ export class DrizzleAccountRepository implements AccountRepository {
       .limit(1);
     return rows[0] ? mapAccount(rows[0]) : null;
   }
+
+  async create(input: {
+    displayName: string;
+    slug: string;
+    plan?: AccountRecord['plan'];
+  }): Promise<AccountRecord> {
+    const [row] = await this.db
+      .insert(schema.accounts)
+      .values({
+        displayName: input.displayName,
+        slug: input.slug,
+        plan: input.plan ?? 'oss',
+      })
+      .returning();
+    if (!row) throw new Error('accounts.create: insert returned no row');
+    return mapAccount(row);
+  }
 }

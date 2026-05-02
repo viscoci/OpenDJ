@@ -399,11 +399,25 @@ export interface UserRepository {
 export interface AccountRepository {
   findById(id: string): Promise<AccountRecord | null>;
   findBySlug(slug: string): Promise<AccountRecord | null>;
+  /** Create a new account row. Slug is unique — caller should disambiguate. */
+  create(input: {
+    displayName: string;
+    slug: string;
+    plan?: AccountRecord['plan'];
+  }): Promise<AccountRecord>;
 }
 
 export interface MembershipRepository {
   find(accountId: string, userId: string): Promise<MembershipRecord | null>;
   findAllForUser(userId: string): Promise<MembershipRecord[]>;
+  /** Insert or replace a membership row. Used when bootstrapping owner memberships. */
+  upsert(input: {
+    accountId: string;
+    userId: string;
+    role: MembershipRecord['role'];
+    claims: Claim[];
+    status?: MembershipRecord['status'];
+  }): Promise<MembershipRecord>;
 }
 
 export interface AuthIdentityRepository {

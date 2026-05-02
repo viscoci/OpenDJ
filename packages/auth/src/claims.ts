@@ -81,3 +81,71 @@ export function assertAnyClaim(context: AuthContext, claims: ReadonlyArray<Claim
     throw new MissingClaimError(fallback, context);
   }
 }
+
+/**
+ * Membership role within an account. Mirrors `memberships.role` in the DB.
+ *
+ * - `owner` — full account control. Auto-granted to the account creator.
+ * - `admin` — manage members + sessions, but cannot delete the account or
+ *   change billing. (Reserved for hosted/private; OSS demo doesn't seed it.)
+ * - `host` — run sessions and moderate queues. Cannot manage members.
+ * - `member` — read-only. Used for invited guests-with-account.
+ */
+export type MembershipRole = 'owner' | 'admin' | 'host' | 'member';
+
+const OWNER_CLAIMS: ReadonlyArray<Claim> = [
+  'account:read',
+  'account:update',
+  'account:manage_members',
+  'session:create',
+  'session:read',
+  'session:update',
+  'session:end',
+  'queue:moderate',
+  'provider:connect',
+  'provider:control_playback',
+  'billing:manage',
+];
+
+const ADMIN_CLAIMS: ReadonlyArray<Claim> = [
+  'account:read',
+  'account:update',
+  'account:manage_members',
+  'session:create',
+  'session:read',
+  'session:update',
+  'session:end',
+  'queue:moderate',
+  'provider:connect',
+  'provider:control_playback',
+];
+
+const HOST_CLAIMS: ReadonlyArray<Claim> = [
+  'account:read',
+  'session:create',
+  'session:read',
+  'session:update',
+  'session:end',
+  'queue:moderate',
+  'provider:control_playback',
+];
+
+const MEMBER_CLAIMS: ReadonlyArray<Claim> = ['account:read', 'session:read'];
+
+/**
+ * Default claim set for a membership role. Custom claim overrides on
+ * individual memberships still apply — this is just the bootstrap default
+ * the AccountService uses when creating new memberships.
+ */
+export function claimsForRole(role: MembershipRole): Claim[] {
+  switch (role) {
+    case 'owner':
+      return [...OWNER_CLAIMS];
+    case 'admin':
+      return [...ADMIN_CLAIMS];
+    case 'host':
+      return [...HOST_CLAIMS];
+    case 'member':
+      return [...MEMBER_CLAIMS];
+  }
+}
