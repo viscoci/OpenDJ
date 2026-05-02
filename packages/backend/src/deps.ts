@@ -11,11 +11,14 @@
  */
 
 import type { Database } from '@opendj/db';
+import type { PasswordHasher } from '@opendj/auth';
 import { LrclibAdapter, type LyricsProvider } from '@opendj/lyrics';
 import type { RealtimeRoom } from '@opendj/realtime';
 import { AbuseModerationService } from './abuse/AbuseModerationService.js';
+import { Argon2idPasswordHasher } from './auth/Argon2idPasswordHasher.js';
 import { AuthService } from './auth/AuthService.js';
 import { ClaimsService } from './auth/ClaimsService.js';
+import { EmailPasswordService } from './auth/EmailPasswordService.js';
 import type { Config } from './config.js';
 import { GuestIdentityService } from './guest/GuestIdentityService.js';
 import { LyricsLookupService } from './lyrics/LyricsLookupService.js';
@@ -47,6 +50,8 @@ export interface AppDeps {
   streamingProviderOAuthConfigs: StreamingProviderOAuthRegistry;
   lyricsLookupService: LyricsLookupService;
   abuseModerationService: AbuseModerationService;
+  passwordHasher: PasswordHasher & { algorithm?: string };
+  emailPasswordService: EmailPasswordService;
   rooms: RealtimeRoomRegistry;
   /**
    * Concrete room manager. Routes that materialize rooms (the WS upgrade
@@ -78,6 +83,12 @@ export interface CreateDepsOptions {
   fetchImpl?: typeof fetch;
   /** Override the default lyrics provider (defaults to LRCLIB). */
   lyricsProvider?: LyricsProvider;
+  /**
+   * Override the password hasher. Defaults to `Argon2idPasswordHasher` which
+   * needs the optional `argon2` native dep. Workers consumers must supply a
+   * WASM-backed hasher here.
+   */
+  passwordHasher?: PasswordHasher & { algorithm?: string };
 }
 
 const NULL_ROOM_REGISTRY: RealtimeRoomRegistry = {
@@ -158,6 +169,15 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
     actionEvents: repositories.actionEvents,
   });
 
+  const passwordHasher = options.passwordHasher ?? new Argon2idPasswordHasher();
+  const emailPasswordService = new EmailPasswordService({
+    users: repositories.users,
+    authIdentities: repositories.authIdentities,
+    passwordCredentials: repositories.passwordCredentials,
+    passwordHasher,
+    authService,
+  });
+
   return {
     config: options.config,
     db: options.db ?? null,
@@ -172,6 +192,8 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
       options.streamingProviderOAuthConfigs ?? defaultStreamingProviderOAuthConfigs,
     lyricsLookupService,
     abuseModerationService,
+    passwordHasher,
+    emailPasswordService,
     rooms,
     roomManager,
   };

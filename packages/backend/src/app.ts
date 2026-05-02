@@ -14,6 +14,7 @@ import type { AuthVariables } from './auth/middleware.js';
 import type { AppDeps } from './deps.js';
 import { abuseRoutes } from './routes/abuse.js';
 import { authRoutes } from './routes/auth.js';
+import { emailAuthRoutes } from './routes/emailAuth.js';
 import { guestRoutes } from './routes/guest.js';
 import { healthRoutes } from './routes/health.js';
 import { lyricsRoutes, sessionLyricsRoutes } from './routes/lyrics.js';
@@ -51,6 +52,7 @@ export function createApp(options: AppOptions): Hono<{ Variables: AuthVariables 
       users: deps.repositories.users,
     }),
   );
+  v1.route('/auth/email', emailAuthRoutes({ emailPassword: deps.emailPasswordService }));
   v1.route('/guest', guestRoutes({ guestIdentity: deps.guestIdentityService }));
   v1.route(
     '/lyrics',

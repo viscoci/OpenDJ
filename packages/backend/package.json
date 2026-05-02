@@ -34,7 +34,11 @@
     "hono": "^4.6.0",
     "valibot": "^0.42.0"
   },
+  "optionalDependencies": {
+    "argon2": "^0.41.0"
+  },
   "devDependencies": {
+    "argon2": "^0.41.0",
     "typescript": "^5.7.0",
     "vitest": "^2.1.0"
   }

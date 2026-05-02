@@ -145,6 +145,10 @@ importers:
       valibot:
         specifier: ^0.42.0
         version: 0.42.1(typescript@5.9.3)
+    optionalDependencies:
+      argon2:
+        specifier: ^0.41.0
+        version: 0.41.1
     devDependencies:
       typescript:
         specifier: ^5.7.0
@@ -2937,6 +2941,13 @@ packages:
         integrity: sha512-8awtpHXCx/bNpFt4mt2xdkgtgVvKqty8VbjHI/WWWQuEw+KLzFot3f4+LkQY9YmOtq7A5GdOnqoIC8Pdygjk2g==,
       }
 
+  '@phc/format@1.0.0':
+    resolution:
+      {
+        integrity: sha512-m7X9U6BG2+J+R1lSOdCiITLLrxm+cWlNI3HUFA92oLO77ObGNzaKdh8pMLqdZcshtkKuV84olNNXDfMc4FezBQ==,
+      }
+    engines: { node: '>=10' }
+
   '@rolldown/binding-android-arm64@1.0.0-rc.4':
     resolution:
       {
@@ -3773,6 +3784,13 @@ packages:
         integrity: sha512-4Dj6M28JB+oAH8kFkTLUo+a2jwOFkuqb3yucU0CANcRRUbxS0cP0nZYCGjcc3BNXwRIsUVmDGgzawme7zvJHvg==,
       }
     engines: { node: '>=12' }
+
+  argon2@0.41.1:
+    resolution:
+      {
+        integrity: sha512-dqCW8kJXke8Ik+McUcMDltrbuAWETPyU6iq+4AhxqKphWi7pChB/Zgd/Tp/o8xRLbg8ksMj46F/vph9wnxpTzQ==,
+      }
+    engines: { node: '>=16.17.0' }
 
   argparse@1.0.10:
     resolution:
@@ -6133,6 +6151,13 @@ packages:
         integrity: sha512-5m3bsyrjFWE1xf7nz7YXdN4udnVtXK6/Yfgn5qnahL6bCkf2yKt4k3nuTKAtT4r3IG8JNR2ncsIMdZuAzJjHQQ==,
       }
 
+  node-addon-api@8.7.0:
+    resolution:
+      {
+        integrity: sha512-9MdFxmkKaOYVTV+XVRG8ArDwwQ77XIgIPyKASB1k3JPq3M8fGQQQE3YpMOrKm6g//Ktx8ivZr8xo1Qmtqub+GA==,
+      }
+    engines: { node: ^18 || ^20 || >= 21 }
+
   node-fetch@2.7.0:
     resolution:
       {
@@ -6149,6 +6174,13 @@ packages:
     resolution:
       {
         integrity: sha512-s+w+rBWnpTMwSFbaE0UXsRlg7hU4FjekKU4eyAih5T8nJuNZT1nNsskXpxmeqSK9UzkBl6UgRlnKc8hz8IEqOw==,
+      }
+    hasBin: true
+
+  node-gyp-build@4.8.4:
+    resolution:
+      {
+        integrity: sha512-LA4ZjwlnUblHVgq0oBF3Jl/6h/Nvs5fzBLwdEF4nuxnFdsfajde4WfxtJr3CaiH+F6ewcIB/q4jQ4UzPyid+CQ==,
       }
     hasBin: true
 
@@ -9578,6 +9610,9 @@ snapshots:
 
   '@petamoriken/float16@3.9.3': {}
 
+  '@phc/format@1.0.0':
+    optional: true
+
   '@rolldown/binding-android-arm64@1.0.0-rc.4':
     optional: true
 
@@ -10059,6 +10094,13 @@ snapshots:
       color-convert: 2.0.1
 
   ansi-styles@6.2.3: {}
+
+  argon2@0.41.1:
+    dependencies:
+      '@phc/format': 1.0.0
+      node-addon-api: 8.7.0
+      node-gyp-build: 4.8.4
+    optional: true
 
   argparse@1.0.10:
     dependencies:
@@ -11430,6 +11472,9 @@ snapshots:
   node-addon-api@7.1.1:
     optional: true
 
+  node-addon-api@8.7.0:
+    optional: true
+
   node-fetch@2.7.0:
     dependencies:
       whatwg-url: 5.0.0
@@ -11437,6 +11482,9 @@ snapshots:
   node-gyp-build-optional-packages@5.2.2:
     dependencies:
       detect-libc: 2.1.2
+    optional: true
+
+  node-gyp-build@4.8.4:
     optional: true
 
   node-gyp@12.3.0:
