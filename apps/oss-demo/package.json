@@ -10,7 +10,7 @@
     "lint": "echo \"(oss-demo) lint placeholder\" && exit 0",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "echo \"(oss-demo) no tests yet\" && exit 0",
-    "start": "node --experimental-strip-types --no-warnings=ExperimentalWarning src/main.ts",
+    "start": "tsx src/main.ts",
     "db:migrate": "pnpm --filter @opendj/db db:generate"
   },
   "dependencies": {
@@ -18,7 +18,8 @@
     "@hono/node-ws": "^1.0.0",
     "@opendj/backend": "workspace:*",
     "@opendj/db": "workspace:*",
-    "hono": "^4.6.0"
+    "hono": "^4.6.0",
+    "tsx": "^4.19.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
