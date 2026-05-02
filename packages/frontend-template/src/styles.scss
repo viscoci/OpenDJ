@@ -1,1 +1,29 @@
-/* You can add global styles to this file, and also import other style files */
+/* Global resets + design system primitives. Per-component styles live with
+   their components — this file is deliberately small. */
+
+:root {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: #0c0a14;
+  color: #f3eef9;
+  font-family:
+    'Inter',
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    Roboto,
+    sans-serif;
+}
+
+a {
+  color: #ec4899;
+}

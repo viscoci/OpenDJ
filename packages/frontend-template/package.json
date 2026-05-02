@@ -23,6 +23,7 @@
     "@angular/router": "^21.2.0",
     "@capacitor/core": "^6.2.0",
     "@opendj/app-shell": "workspace:*",
+    "@opendj/frontend": "workspace:*",
     "rxjs": "~7.8.0",
     "tslib": "^2.3.0"
   },
