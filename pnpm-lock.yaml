@@ -189,6 +189,13 @@ importers:
         version: 2.1.9(@types/node@22.19.17)(jsdom@28.1.0)(sass@1.97.3)
 
   packages/frontend:
+    dependencies:
+      '@opendj/core':
+        specifier: workspace:*
+        version: link:../core
+      '@opendj/realtime':
+        specifier: workspace:*
+        version: link:../realtime
     devDependencies:
       typescript:
         specifier: ^5.7.0
