@@ -43,7 +43,10 @@ export interface RequestOptions {
   body?: unknown;
   /** Extra request headers — merged on top of `defaultHeaders`. */
   headers?: Readonly<Record<string, string>>;
-  /** Sets `x-slot-token` for guest-authenticated endpoints. */
+  /**
+   * Slot token for guest-authenticated endpoints. Sent as
+   * `Authorization: Bearer <token>` to match the backend's `bearerFromAuthHeader`.
+   */
   slotToken?: string | undefined;
   /** AbortSignal for cancellation. */
   signal?: AbortSignal;
@@ -79,7 +82,7 @@ export class HttpClient {
       ...this.defaultHeaders,
       ...options.headers,
     };
-    if (options.slotToken) headers['x-slot-token'] = options.slotToken;
+    if (options.slotToken) headers['authorization'] = `Bearer ${options.slotToken}`;
     if (options.body !== undefined) headers['content-type'] = 'application/json';
     const init: RequestInit = {
       method: options.method ?? 'GET',

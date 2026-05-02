@@ -1,0 +1,321 @@
+/**
+ * /host/dashboard — list current account's sessions + create button.
+ */
+
+import { CommonModule } from '@angular/common';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  DestroyRef,
+  inject,
+  signal,
+  type WritableSignal,
+} from '@angular/core';
+import { FormsModule } from '@angular/forms';
+import { Router, RouterLink } from '@angular/router';
+import { ApiError, type SessionWire } from '@opendj/frontend';
+import { AuthService } from '../../services/auth.service.js';
+import { OpenDjClientService } from '../../services/opendj-client.service.js';
+
+@Component({
+  selector: 'app-host-dashboard',
+  standalone: true,
+  imports: [CommonModule, FormsModule, RouterLink],
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  template: `
+    <main>
+      <header>
+        <h1>Your sessions</h1>
+        <div class="user">
+          @if (auth.currentUser(); as me) {
+            <span class="email">{{ me.user.primaryEmail || 'host' }}</span>
+          }
+          <button type="button" class="ghost" (click)="logout()">Sign out</button>
+        </div>
+      </header>
+
+      @if (loading()) {
+        <p class="loading">Loading…</p>
+      } @else if (loadError()) {
+        <p class="error">{{ loadError() }}</p>
+      } @else {
+        <section class="create-card">
+          <h2>Start a new session</h2>
+          <form (ngSubmit)="createSession()">
+            <label>
+              <span>Session name</span>
+              <input
+                type="text"
+                name="name"
+                [(ngModel)]="newSession.name"
+                placeholder="e.g. Friday Night Karaoke"
+                required
+              />
+            </label>
+            <label>
+              <span>QR slug (optional, auto-generated if blank)</span>
+              <input
+                type="text"
+                name="qrSlug"
+                [(ngModel)]="newSession.qrSlug"
+                placeholder="friday-karaoke"
+              />
+            </label>
+            <button type="submit" [disabled]="creating()">
+              {{ creating() ? 'Creating…' : 'Create session' }}
+            </button>
+            @if (createError()) {
+              <p class="error">{{ createError() }}</p>
+            }
+          </form>
+        </section>
+
+        <section class="session-list">
+          @if (sessions().length === 0) {
+            <p class="empty">No sessions yet — create one above.</p>
+          } @else {
+            @for (s of sessions(); track s.id) {
+              <a class="session-row" [routerLink]="['/host/sessions', s.id]">
+                <div class="meta">
+                  <span class="name">{{ s.name }}</span>
+                  <span class="slug">/u/{{ s.qrSlug }}</span>
+                </div>
+                <span class="status" [attr.data-status]="s.endedAt ? 'ended' : 'live'">
+                  {{ s.endedAt ? 'Ended' : 'Live' }}
+                </span>
+              </a>
+            }
+          }
+        </section>
+      }
+    </main>
+  `,
+  styles: [
+    `
+      :host {
+        display: block;
+        background: #0c0a14;
+        color: #f3eef9;
+        min-height: 100dvh;
+        font-family: 'Inter', sans-serif;
+      }
+      main {
+        max-width: 720px;
+        margin: 0 auto;
+        padding: 24px 16px 96px;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 24px;
+      }
+      h1 {
+        font-family: 'Syne', 'Inter', sans-serif;
+        font-size: 24px;
+        margin: 0;
+        background: linear-gradient(135deg, #a855f7 0%, #ec4899 100%);
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+      }
+      .user {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+      }
+      .email {
+        font-size: 13px;
+        color: #a294c5;
+      }
+      .ghost {
+        background: transparent;
+        border: 1px solid #2c2440;
+        color: #c8b8e9;
+        padding: 6px 12px;
+        border-radius: 8px;
+        cursor: pointer;
+        font: inherit;
+        font-size: 13px;
+      }
+      .create-card {
+        background: #1a1525;
+        border: 1px solid #2c2440;
+        border-radius: 14px;
+        padding: 20px;
+        margin-bottom: 16px;
+      }
+      h2 {
+        font-family: 'Syne', 'Inter', sans-serif;
+        font-size: 16px;
+        margin: 0 0 12px;
+      }
+      form {
+        display: grid;
+        gap: 12px;
+      }
+      label {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        font-size: 13px;
+        color: #c8b8e9;
+      }
+      input {
+        padding: 10px 12px;
+        border-radius: 10px;
+        border: 1px solid #2c2440;
+        background: #0c0a14;
+        color: #f3eef9;
+        font: inherit;
+        font-size: 14px;
+      }
+      input:focus {
+        outline: 2px solid #a855f7;
+        outline-offset: 1px;
+      }
+      button[type='submit'] {
+        padding: 10px;
+        border-radius: 10px;
+        border: 0;
+        background: linear-gradient(135deg, #a855f7, #ec4899);
+        color: white;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      button[disabled] {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      .error {
+        color: #fda4af;
+        font-size: 13px;
+        margin: 0;
+      }
+      .loading {
+        color: #a294c5;
+      }
+      .session-list {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .session-row {
+        background: #1a1525;
+        border: 1px solid #2c2440;
+        border-radius: 12px;
+        padding: 14px 16px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        text-decoration: none;
+        color: inherit;
+      }
+      .session-row:hover {
+        border-color: #a855f7;
+      }
+      .meta {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .name {
+        font-weight: 600;
+      }
+      .slug {
+        font-family: 'JetBrains Mono', ui-monospace, monospace;
+        font-size: 12px;
+        color: #a294c5;
+      }
+      .status {
+        font-size: 11px;
+        padding: 4px 8px;
+        border-radius: 999px;
+        background: #2c2440;
+        color: #c8b8e9;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      .status[data-status='live'] {
+        background: linear-gradient(135deg, #34d399, #10b981);
+        color: #042f2e;
+      }
+      .empty {
+        color: #a294c5;
+        font-style: italic;
+      }
+    `,
+  ],
+})
+export class HostDashboardPage {
+  readonly auth = inject(AuthService);
+  private readonly client = inject(OpenDjClientService);
+  private readonly router = inject(Router);
+  private readonly destroyRef = inject(DestroyRef);
+
+  readonly sessions: WritableSignal<ReadonlyArray<SessionWire>> = signal([]);
+  readonly loading = signal(true);
+  readonly loadError = signal<string | null>(null);
+  readonly creating = signal(false);
+  readonly createError = signal<string | null>(null);
+
+  newSession = { name: '', qrSlug: '' };
+
+  constructor() {
+    void this.refresh();
+    this.destroyRef.onDestroy(() => undefined);
+  }
+
+  async logout(): Promise<void> {
+    await this.auth.logout();
+  }
+
+  async createSession(): Promise<void> {
+    this.creating.set(true);
+    this.createError.set(null);
+    try {
+      const created = await this.client.client.sessions.create({
+        name: this.newSession.name.trim(),
+        ...(this.newSession.qrSlug.trim() && { qrSlug: this.newSession.qrSlug.trim() }),
+      });
+      this.newSession = { name: '', qrSlug: '' };
+      await this.router.navigate(['/host/sessions', created.id]);
+    } catch (err) {
+      if (err instanceof ApiError) {
+        this.createError.set(this.errorFor(err.code));
+      } else {
+        this.createError.set('Could not create the session.');
+      }
+    } finally {
+      this.creating.set(false);
+    }
+  }
+
+  private async refresh(): Promise<void> {
+    this.loading.set(true);
+    this.loadError.set(null);
+    try {
+      const sessions = await this.client.client.sessions.listForCurrentAccount();
+      this.sessions.set(sessions);
+    } catch (err) {
+      if (err instanceof ApiError && err.code === 'no_active_account') {
+        this.loadError.set('No account context — try signing out and back in.');
+      } else {
+        this.loadError.set('Could not load sessions.');
+      }
+    } finally {
+      this.loading.set(false);
+    }
+  }
+
+  private errorFor(code: string): string {
+    switch (code) {
+      case 'qr_slug_taken':
+        return 'That QR slug is already in use. Pick a different one.';
+      case 'no_active_account':
+        return 'No account selected.';
+      default:
+        return `Could not create the session (${code}).`;
+    }
+  }
+}

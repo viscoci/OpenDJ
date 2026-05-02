@@ -76,11 +76,11 @@ describe('SessionsApi', () => {
     expect(session.id).toBe('sess-2');
   });
 
-  it('end POSTs /api/v1/sessions/:id/end', async () => {
+  it('end DELETEs /api/v1/sessions/:id', async () => {
     const { client, captures } = makeClient({ body: { session: { id: 's' } } });
     await client.sessions.end('sess-3');
-    expect(captures[0]?.url).toBe('https://api.test/api/v1/sessions/sess-3/end');
-    expect(captures[0]?.init?.method).toBe('POST');
+    expect(captures[0]?.url).toBe('https://api.test/api/v1/sessions/sess-3');
+    expect(captures[0]?.init?.method).toBe('DELETE');
   });
 });
 
@@ -94,7 +94,7 @@ describe('QueueApi', () => {
     expect(items.map((i) => i.id)).toEqual(['q1', 'q2']);
   });
 
-  it('request sends body + slotToken header and unwraps {item}', async () => {
+  it('request sends body + Bearer slot token and unwraps {item}', async () => {
     const { client, captures } = makeClient({ body: { item: { id: 'q-new' } } });
     await client.queue.request('sess-1', 'slt_abc', {
       trackUri: 'spotify:track:1',
@@ -102,8 +102,16 @@ describe('QueueApi', () => {
       artistName: 'Y',
     });
     const headers = captures[0]?.init?.headers as Record<string, string>;
-    expect(headers['x-slot-token']).toBe('slt_abc');
+    expect(headers['authorization']).toBe('Bearer slt_abc');
     expect(captures[0]?.init?.method).toBe('POST');
+  });
+
+  it('moderate PATCHes /queue/:itemId with the decision body', async () => {
+    const { client, captures } = makeClient({ body: { item: { id: 'q1' } } });
+    await client.queue.moderate('sess-1', 'q1', { decision: 'approved' });
+    expect(captures[0]?.url).toBe('https://api.test/api/v1/sessions/sess-1/queue/q1');
+    expect(captures[0]?.init?.method).toBe('PATCH');
+    expect(captures[0]?.init?.body).toBe('{"decision":"approved"}');
   });
 
   it('voteSkip targets the skip-vote endpoint', async () => {
@@ -115,13 +123,34 @@ describe('QueueApi', () => {
 });
 
 describe('GuestApi', () => {
-  it('identity POSTs to /sessions/:id/guest/identity', async () => {
+  it('identity POSTs /guest/identity with fingerprintHash + eventSlug', async () => {
     const { client, captures } = makeClient({
-      body: { guestId: 'g1', slotToken: 'slt_xyz', queued: false, queuePosition: null },
+      body: {
+        guestId: 'g1',
+        sessionId: 'sess-1',
+        slotToken: 'slt_xyz',
+        status: 'active',
+      },
     });
-    const result = await client.guest.identity('sess-1', { fingerprint: 'fp-1' });
-    expect(captures[0]?.url).toBe('https://api.test/api/v1/sessions/sess-1/guest/identity');
+    const result = await client.guest.identity({
+      fingerprintHash: 'fp-hash-1',
+      eventSlug: 'wedding-2026',
+    });
+    expect(captures[0]?.url).toBe('https://api.test/api/v1/guest/identity');
+    expect(captures[0]?.init?.method).toBe('POST');
+    expect(captures[0]?.init?.body).toBe(
+      '{"fingerprintHash":"fp-hash-1","eventSlug":"wedding-2026"}',
+    );
     expect(result.slotToken).toBe('slt_xyz');
+    expect(result.status).toBe('active');
+  });
+
+  it('heartbeat POSTs /guest/heartbeat with Bearer slot token', async () => {
+    const { client, captures } = makeClient({ body: { status: 'active' } });
+    await client.guest.heartbeat('slt_abc');
+    expect(captures[0]?.url).toBe('https://api.test/api/v1/guest/heartbeat');
+    const headers = captures[0]?.init?.headers as Record<string, string>;
+    expect(headers['authorization']).toBe('Bearer slt_abc');
   });
 });
 

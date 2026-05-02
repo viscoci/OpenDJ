@@ -63,20 +63,26 @@ export interface MeResponse {
 }
 
 export interface GuestIdentityRequest {
-  /** Stable per-device fingerprint; the backend salts + hashes before persist. */
-  fingerprint: string;
-  /** Optional friendly name shown on the host dashboard. */
-  name?: string | null;
+  /**
+   * Already-hashed device fingerprint. The frontend computes a stable hash
+   * (e.g. SHA-256 of a per-device random) and sends it; the backend re-hashes
+   * with a session+date salt before persist.
+   */
+  fingerprintHash: string;
+  /** The session's `qrSlug` from the QR code. */
+  eventSlug: string;
 }
+
+export type GuestSlotStatusWire = 'active' | 'queued' | 'priority_queued';
 
 export interface GuestIdentityResponse {
   guestId: string;
-  /** Opaque token used in subsequent guest-authenticated requests. */
+  sessionId: string;
+  /** Opaque token used as `Authorization: Bearer <slotToken>` on follow-ups. */
   slotToken: string;
-  /** True when the guest is queued behind the active-guest cap. */
-  queued: boolean;
-  /** Position in the wait queue (1-based). Null when active. */
-  queuePosition: number | null;
+  status: GuestSlotStatusWire;
+  /** 1-based position in the wait queue. Absent when status is `'active'`. */
+  queuePosition?: number;
 }
 
 export interface CreateSessionRequest {

@@ -48,7 +48,7 @@ export class QueueApi {
     return this.http
       .request<
         ItemEnvelope<QueueItemSummaryWire>
-      >(`/api/v1/sessions/${encodeURIComponent(sessionId)}/queue/${encodeURIComponent(itemId)}/moderate`, { method: 'POST', body })
+      >(`/api/v1/sessions/${encodeURIComponent(sessionId)}/queue/${encodeURIComponent(itemId)}`, { method: 'PATCH', body })
       .then((r) => r.item);
   }
 

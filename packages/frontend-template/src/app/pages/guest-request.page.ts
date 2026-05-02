@@ -34,7 +34,7 @@ import {
   type QueueItemSummaryWire,
   type SessionWire,
 } from '@opendj/frontend';
-import { getOrCreateGuestFingerprint } from '../services/guest-fingerprint.js';
+import { getOrCreateGuestFingerprintHash } from '../services/guest-fingerprint.js';
 import { OpenDjClientService } from '../services/opendj-client.service.js';
 
 interface DraftRequest {
@@ -62,10 +62,10 @@ interface DraftRequest {
           <p class="eyebrow">You're at</p>
           <h1>{{ session()!.name }}</h1>
           @if (slot(); as s) {
-            @if (s.queued) {
-              <p class="status">You're in line — position {{ s.queuePosition }}.</p>
-            } @else {
+            @if (s.status === 'active') {
               <p class="status active">You're in!</p>
+            } @else {
+              <p class="status">You're in line — position {{ s.queuePosition ?? '—' }}.</p>
             }
           }
         </header>
@@ -92,7 +92,7 @@ interface DraftRequest {
               <span>Artist</span>
               <input type="text" name="artistName" [(ngModel)]="draft.artistName" required />
             </label>
-            <button type="submit" [disabled]="submitting() || !slot() || slot()!.queued">
+            <button type="submit" [disabled]="submitting() || !canSubmit()">
               {{ submitting() ? 'Submitting…' : 'Submit' }}
             </button>
             @if (submitError()) {
@@ -304,6 +304,9 @@ export class GuestRequestPage {
   /** Hide rejected/removed items from the public list. */
   readonly visibleQueue = computed(() => this.queue().filter((i) => i.status !== 'rejected'));
 
+  /** Submit only when an active (non-queued) slot is held. */
+  readonly canSubmit = computed(() => this.slot()?.status === 'active');
+
   draft: DraftRequest = { trackUri: '', trackName: '', artistName: '' };
 
   private realtime: RealtimeClient | null = null;
@@ -359,8 +362,10 @@ export class GuestRequestPage {
     try {
       const session = await this.clientService.client.sessions.getBySlug(slug);
       this.session.set(session);
-      const slot = await this.clientService.client.guest.identity(session.id, {
-        fingerprint: getOrCreateGuestFingerprint(),
+      const fingerprintHash = await getOrCreateGuestFingerprintHash();
+      const slot = await this.clientService.client.guest.identity({
+        eventSlug: slug,
+        fingerprintHash,
       });
       this.slot.set(slot);
       await this.refreshQueue();

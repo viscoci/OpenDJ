@@ -44,11 +44,22 @@ export class SessionsApi {
       .then((r) => r.session);
   }
 
+  /**
+   * List sessions in the caller's `currentAccount`. Requires auth +
+   * `session:read`. Used by the host dashboard.
+   */
+  listForCurrentAccount(): Promise<ReadonlyArray<SessionWire>> {
+    return this.http
+      .request<{ sessions: ReadonlyArray<SessionWire> }>('/api/v1/sessions')
+      .then((r) => r.sessions);
+  }
+
+  /** End a session. Backend uses DELETE /:id (idempotent — already-ended sessions are returned as-is). */
   end(sessionId: string): Promise<SessionWire> {
     return this.http
-      .request<
-        SessionEnvelope<SessionWire>
-      >(`/api/v1/sessions/${encodeURIComponent(sessionId)}/end`, { method: 'POST' })
+      .request<SessionEnvelope<SessionWire>>(`/api/v1/sessions/${encodeURIComponent(sessionId)}`, {
+        method: 'DELETE',
+      })
       .then((r) => r.session);
   }
 }

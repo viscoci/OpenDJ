@@ -89,6 +89,21 @@ export function sessionRoutes(deps: SessionRouteDeps): Hono<{ Variables: AuthVar
     }
   });
 
+  /** GET /by-slug/:slug — public read for hydration from a QR-code slug. */
+  app.get('/by-slug/:slug', async (c) => {
+    const slug = c.req.param('slug') ?? '';
+    try {
+      const session = await deps.sessionService.getBySlug(slug);
+      return c.json({ session });
+    } catch (err) {
+      if (err instanceof SessionServiceError) {
+        const { status, payload } = mapErrorToStatus(err.code);
+        return c.json(payload, status as 400 | 403 | 404 | 409);
+      }
+      throw err;
+    }
+  });
+
   /** GET /:id — public read for hydration. */
   app.get('/:id', async (c) => {
     const id = c.req.param('id') ?? '';

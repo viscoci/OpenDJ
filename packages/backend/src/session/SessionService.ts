@@ -85,6 +85,13 @@ export class SessionService {
     return session;
   }
 
+  /** Resolve by `qrSlug`. Public — used by the guest landing page. */
+  async getBySlug(qrSlug: string): Promise<SessionRecord> {
+    const session = await this.deps.sessions.findByQrSlug(qrSlug);
+    if (!session) throw new SessionServiceError('session_not_found', 'Unknown session.');
+    return session;
+  }
+
   async update(input: UpdateSessionInput): Promise<SessionRecord> {
     const existing = await this.getById(input.id, input.accountId);
     if (existing.endedAt !== null) {

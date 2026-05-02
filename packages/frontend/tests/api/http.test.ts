@@ -69,7 +69,7 @@ describe('HttpClient.request', () => {
     expect(headers['content-type']).toBe('application/json');
   });
 
-  it('forwards x-slot-token when slotToken is supplied', async () => {
+  it('forwards Authorization: Bearer when slotToken is supplied', async () => {
     let init: RequestInit | undefined;
     const fetchImpl = vi.fn(async (_url: string, _init?: RequestInit) => {
       init = _init;
@@ -81,7 +81,7 @@ describe('HttpClient.request', () => {
     const http = new HttpClient({ baseUrl: 'https://api.test', fetchImpl: fetchImpl as never });
     await http.request('/v1/x', { slotToken: 'slt_abc' });
     const headers = init?.headers as Record<string, string>;
-    expect(headers['x-slot-token']).toBe('slt_abc');
+    expect(headers['authorization']).toBe('Bearer slt_abc');
   });
 
   it('returns undefined for 204 No Content', async () => {
