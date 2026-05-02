@@ -6,7 +6,9 @@
 
 import type { Database } from '@opendj/db';
 import type { Repositories } from '../types.js';
+import { DrizzleAbuseSubjectRepository } from './abuse-subjects.js';
 import { DrizzleAccountRepository } from './accounts.js';
+import { DrizzleActionEventRepository } from './action-events.js';
 import { DrizzleAuthIdentityRepository } from './auth-identities.js';
 import { DrizzleAuthSessionRepository } from './auth-sessions.js';
 import { DrizzleFingerprintPriorityRepository } from './fingerprint-priority.js';
@@ -23,7 +25,9 @@ import { DrizzleSessionRepository } from './sessions.js';
 import { DrizzleUserRepository } from './users.js';
 
 export * from './users.js';
+export * from './abuse-subjects.js';
 export * from './accounts.js';
+export * from './action-events.js';
 export * from './memberships.js';
 export * from './auth-identities.js';
 export * from './auth-sessions.js';
@@ -55,5 +59,7 @@ export function createDrizzleRepositories(db: Database): Repositories {
     queueItems: new DrizzleQueueItemRepository(db),
     lyricsCache: new DrizzleLyricsCacheRepository(db),
     lyricsFeedback: new DrizzleLyricsFeedbackRepository(db),
+    abuseSubjects: new DrizzleAbuseSubjectRepository(db),
+    actionEvents: new DrizzleActionEventRepository(db),
   };
 }

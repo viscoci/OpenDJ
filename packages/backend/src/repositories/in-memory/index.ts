@@ -11,8 +11,13 @@
 
 import type { Claim } from '@opendj/auth';
 import type {
+  AbuseSubjectRecord,
+  AbuseSubjectRepository,
+  AbuseSubjectStatus,
   AccountRecord,
   AccountRepository,
+  ActionEventRecord,
+  ActionEventRepository,
   AuthIdentityRecord,
   AuthIdentityRepository,
   AuthSessionRecord,
@@ -871,6 +876,112 @@ export class InMemoryLyricsFeedbackRepository implements LyricsFeedbackRepositor
   }
 }
 
+export class InMemoryAbuseSubjectRepository implements AbuseSubjectRepository {
+  readonly rows = new Map<string, AbuseSubjectRecord>();
+  constructor(private readonly clock: InMemoryClock = systemClock) {}
+
+  async findByHash(subjectHash: string): Promise<AbuseSubjectRecord | null> {
+    return this.rows.get(subjectHash) ?? null;
+  }
+
+  async findActiveForSession(
+    sessionId: string,
+    statuses?: ReadonlyArray<AbuseSubjectStatus>,
+  ): Promise<AbuseSubjectRecord[]> {
+    const now = this.clock.now().getTime();
+    const out: AbuseSubjectRecord[] = [];
+    for (const row of this.rows.values()) {
+      if (row.sessionId !== sessionId) continue;
+      if (statuses && !statuses.includes(row.status)) continue;
+      if (row.expiresAt !== null && row.expiresAt.getTime() <= now) continue;
+      out.push(row);
+    }
+    return out;
+  }
+
+  async upsert(input: {
+    subjectHash: string;
+    accountId?: string | null;
+    sessionId?: string | null;
+    riskScore?: number;
+    status: AbuseSubjectStatus;
+    reason?: string | null;
+    expiresAt?: Date | null;
+  }): Promise<AbuseSubjectRecord> {
+    const existing = this.rows.get(input.subjectHash);
+    const now = this.clock.now();
+    const row: AbuseSubjectRecord = {
+      subjectHash: input.subjectHash,
+      accountId: input.accountId ?? existing?.accountId ?? null,
+      sessionId: input.sessionId ?? existing?.sessionId ?? null,
+      riskScore:
+        input.riskScore !== undefined
+          ? input.riskScore.toFixed(2)
+          : (existing?.riskScore ?? '0.00'),
+      status: input.status,
+      reason: input.reason ?? existing?.reason ?? null,
+      firstSeenAt: existing?.firstSeenAt ?? now,
+      lastSeenAt: now,
+      expiresAt: input.expiresAt ?? existing?.expiresAt ?? null,
+    };
+    this.rows.set(input.subjectHash, row);
+    return row;
+  }
+
+  async delete(subjectHash: string): Promise<void> {
+    this.rows.delete(subjectHash);
+  }
+}
+
+export class InMemoryActionEventRepository implements ActionEventRepository {
+  readonly rows: ActionEventRecord[] = [];
+  private nextId = 1;
+  constructor(private readonly clock: InMemoryClock = systemClock) {}
+
+  async create(input: {
+    accountId?: string | null;
+    sessionId?: string | null;
+    userId?: string | null;
+    guestId?: string | null;
+    eventKind: string;
+    subjectHash?: string | null;
+    riskScore?: number | null;
+    meta?: unknown;
+  }): Promise<ActionEventRecord> {
+    const row: ActionEventRecord = {
+      id: this.nextId++,
+      accountId: input.accountId ?? null,
+      sessionId: input.sessionId ?? null,
+      userId: input.userId ?? null,
+      guestId: input.guestId ?? null,
+      eventKind: input.eventKind,
+      subjectHash: input.subjectHash ?? null,
+      riskScore:
+        input.riskScore !== undefined && input.riskScore !== null
+          ? input.riskScore.toFixed(2)
+          : null,
+      meta: input.meta ?? null,
+      createdAt: this.clock.now(),
+    };
+    this.rows.push(row);
+    return row;
+  }
+
+  async countByKindSince(
+    sessionId: string,
+    since: Date,
+  ): Promise<Array<{ eventKind: string; count: number }>> {
+    const sinceMs = since.getTime();
+    const counts = new Map<string, number>();
+    for (const row of this.rows) {
+      if (row.sessionId !== sessionId) continue;
+      if (row.createdAt.getTime() < sinceMs) continue;
+      counts.set(row.eventKind, (counts.get(row.eventKind) ?? 0) + 1);
+    }
+    return [...counts.entries()].map(([eventKind, count]) => ({ eventKind, count }));
+  }
+}
+
 export function createInMemoryRepositories(clock: InMemoryClock = systemClock): Repositories {
   return {
     users: new InMemoryUserRepository(clock),
@@ -888,5 +999,7 @@ export function createInMemoryRepositories(clock: InMemoryClock = systemClock): 
     queueItems: new InMemoryQueueItemRepository(clock),
     lyricsCache: new InMemoryLyricsCacheRepository(clock),
     lyricsFeedback: new InMemoryLyricsFeedbackRepository(clock),
+    abuseSubjects: new InMemoryAbuseSubjectRepository(clock),
+    actionEvents: new InMemoryActionEventRepository(clock),
   };
 }

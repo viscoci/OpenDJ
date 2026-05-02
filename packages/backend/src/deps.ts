@@ -13,6 +13,7 @@
 import type { Database } from '@opendj/db';
 import { LrclibAdapter, type LyricsProvider } from '@opendj/lyrics';
 import type { RealtimeRoom } from '@opendj/realtime';
+import { AbuseModerationService } from './abuse/AbuseModerationService.js';
 import { AuthService } from './auth/AuthService.js';
 import { ClaimsService } from './auth/ClaimsService.js';
 import type { Config } from './config.js';
@@ -44,6 +45,7 @@ export interface AppDeps {
   streamingRouter: StreamingRouter;
   streamingProviderOAuthConfigs: StreamingProviderOAuthRegistry;
   lyricsLookupService: LyricsLookupService;
+  abuseModerationService: AbuseModerationService;
   rooms: RealtimeRoomRegistry;
 }
 
@@ -129,6 +131,11 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
     feedback: repositories.lyricsFeedback,
   });
 
+  const abuseModerationService = new AbuseModerationService({
+    abuseSubjects: repositories.abuseSubjects,
+    actionEvents: repositories.actionEvents,
+  });
+
   return {
     config: options.config,
     db: options.db ?? null,
@@ -142,6 +149,7 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
     streamingProviderOAuthConfigs:
       options.streamingProviderOAuthConfigs ?? defaultStreamingProviderOAuthConfigs,
     lyricsLookupService,
+    abuseModerationService,
     rooms,
   };
 }

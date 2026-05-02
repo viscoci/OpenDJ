@@ -10,6 +10,7 @@
 export * from './app.js';
 export * from './config.js';
 export * from './deps.js';
+export * from './abuse/index.js';
 export * from './auth/index.js';
 export * from './guest/index.js';
 export * from './lyrics/index.js';

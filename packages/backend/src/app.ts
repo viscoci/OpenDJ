@@ -12,6 +12,7 @@
 import { Hono } from 'hono';
 import type { AuthVariables } from './auth/middleware.js';
 import type { AppDeps } from './deps.js';
+import { abuseRoutes } from './routes/abuse.js';
 import { authRoutes } from './routes/auth.js';
 import { guestRoutes } from './routes/guest.js';
 import { healthRoutes } from './routes/health.js';
@@ -63,6 +64,13 @@ export function createApp(options: AppOptions): Hono<{ Variables: AuthVariables 
       lyricsLookup: deps.lyricsLookupService,
       guestSlots: deps.repositories.guestSlots,
       guests: deps.repositories.guests,
+    }),
+  );
+  v1.route(
+    '/sessions/:id/abuse',
+    abuseRoutes({
+      authService: deps.authService,
+      abuseModeration: deps.abuseModerationService,
     }),
   );
   v1.route(

@@ -322,6 +322,69 @@ export interface FingerprintPriorityRepository {
   delete(sessionId: string, fingerprintHash: string): Promise<void>;
 }
 
+export type AbuseSubjectStatus = 'normal' | 'throttled' | 'shadow_limited' | 'blocked';
+
+export interface AbuseSubjectRecord {
+  subjectHash: string;
+  accountId: string | null;
+  sessionId: string | null;
+  riskScore: string;
+  status: AbuseSubjectStatus;
+  reason: string | null;
+  firstSeenAt: Date;
+  lastSeenAt: Date;
+  expiresAt: Date | null;
+}
+
+export interface AbuseSubjectRepository {
+  findByHash(subjectHash: string): Promise<AbuseSubjectRecord | null>;
+  findActiveForSession(
+    sessionId: string,
+    statuses?: ReadonlyArray<AbuseSubjectStatus>,
+  ): Promise<AbuseSubjectRecord[]>;
+  upsert(input: {
+    subjectHash: string;
+    accountId?: string | null;
+    sessionId?: string | null;
+    riskScore?: number;
+    status: AbuseSubjectStatus;
+    reason?: string | null;
+    expiresAt?: Date | null;
+  }): Promise<AbuseSubjectRecord>;
+  delete(subjectHash: string): Promise<void>;
+}
+
+export interface ActionEventRecord {
+  id: number;
+  accountId: string | null;
+  sessionId: string | null;
+  userId: string | null;
+  guestId: string | null;
+  eventKind: string;
+  subjectHash: string | null;
+  riskScore: string | null;
+  meta: unknown;
+  createdAt: Date;
+}
+
+export interface ActionEventRepository {
+  create(input: {
+    accountId?: string | null;
+    sessionId?: string | null;
+    userId?: string | null;
+    guestId?: string | null;
+    eventKind: string;
+    subjectHash?: string | null;
+    riskScore?: number | null;
+    meta?: unknown;
+  }): Promise<ActionEventRecord>;
+  /** Counts per event_kind for a session, since `since`. Used by abuse summaries. */
+  countByKindSince(
+    sessionId: string,
+    since: Date,
+  ): Promise<Array<{ eventKind: string; count: number }>>;
+}
+
 export interface UserRepository {
   findById(id: string): Promise<UserRecord | null>;
   findByPrimaryEmail(email: string): Promise<UserRecord | null>;
@@ -482,4 +545,6 @@ export interface Repositories {
   queueItems: QueueItemRepository;
   lyricsCache: LyricsCacheRepository;
   lyricsFeedback: LyricsFeedbackRepository;
+  abuseSubjects: AbuseSubjectRepository;
+  actionEvents: ActionEventRepository;
 }
