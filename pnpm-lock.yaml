@@ -46,12 +46,18 @@ importers:
 
   apps/oss-demo:
     dependencies:
+      '@hono/node-server':
+        specifier: ^1.13.0
+        version: 1.19.14(hono@4.12.16)
       '@opendj/backend':
         specifier: workspace:*
         version: link:../../packages/backend
       '@opendj/db':
         specifier: workspace:*
         version: link:../../packages/db
+      hono:
+        specifier: ^4.6.0
+        version: 4.12.16
     devDependencies:
       '@types/node':
         specifier: ^22.10.0
