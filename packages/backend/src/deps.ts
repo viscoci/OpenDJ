@@ -19,6 +19,11 @@ import { Argon2idPasswordHasher } from './auth/Argon2idPasswordHasher.js';
 import { AuthService } from './auth/AuthService.js';
 import { ClaimsService } from './auth/ClaimsService.js';
 import { EmailPasswordService } from './auth/EmailPasswordService.js';
+import { LoginAuthService, type LoginCredentials } from './auth/LoginAuthService.js';
+import {
+  createDefaultLoginProviderRegistry,
+  type LoginProviderRegistry,
+} from './auth/loginProviders/index.js';
 import type { Config } from './config.js';
 import { GuestIdentityService } from './guest/GuestIdentityService.js';
 import { LyricsLookupService } from './lyrics/LyricsLookupService.js';
@@ -52,6 +57,8 @@ export interface AppDeps {
   abuseModerationService: AbuseModerationService;
   passwordHasher: PasswordHasher & { algorithm?: string };
   emailPasswordService: EmailPasswordService;
+  loginAuthService: LoginAuthService;
+  loginProviders: LoginProviderRegistry;
   rooms: RealtimeRoomRegistry;
   /**
    * Concrete room manager. Routes that materialize rooms (the WS upgrade
@@ -89,6 +96,8 @@ export interface CreateDepsOptions {
    * WASM-backed hasher here.
    */
   passwordHasher?: PasswordHasher & { algorithm?: string };
+  /** Override the default login-provider registry (e.g. add custom providers). */
+  loginProviders?: LoginProviderRegistry;
 }
 
 const NULL_ROOM_REGISTRY: RealtimeRoomRegistry = {
@@ -178,6 +187,23 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
     authService,
   });
 
+  const loginProviders = options.loginProviders ?? createDefaultLoginProviderRegistry();
+  const loginCredentials: Record<string, LoginCredentials | undefined> = {};
+  for (const providerId of Object.keys(loginProviders)) {
+    const creds = (options.config.loginProviders as Record<string, LoginCredentials | undefined>)[
+      providerId
+    ];
+    if (creds) loginCredentials[providerId] = creds;
+  }
+  const loginAuthService = new LoginAuthService({
+    users: repositories.users,
+    authIdentities: repositories.authIdentities,
+    oauthStates: repositories.oauthStates,
+    authService,
+    credentials: loginCredentials,
+    fetchImpl,
+  });
+
   return {
     config: options.config,
     db: options.db ?? null,
@@ -194,6 +220,8 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
     abuseModerationService,
     passwordHasher,
     emailPasswordService,
+    loginAuthService,
+    loginProviders,
     rooms,
     roomManager,
   };

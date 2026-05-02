@@ -8,6 +8,8 @@ function fakeConfig(overrides: Partial<Config> = {}): Config {
   return {
     databaseUrl: 'postgres://localhost/test',
     baseUrl: 'http://localhost:8888',
+    loginProviders: {},
+    postLoginPath: '/',
     maxSongsPerGuest: 3,
     maxGuestsPerSession: null,
     moderationEnabledDefault: false,

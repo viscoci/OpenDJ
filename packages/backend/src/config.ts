@@ -10,6 +10,12 @@
 
 import * as v from 'valibot';
 
+const LoginProviderCredsSchema = v.object({
+  clientId: v.pipe(v.string(), v.nonEmpty()),
+  clientSecret: v.optional(v.pipe(v.string(), v.nonEmpty())),
+  redirectUri: v.pipe(v.string(), v.url()),
+});
+
 const ConfigSchema = v.object({
   databaseUrl: v.pipe(v.string(), v.url(), v.nonEmpty()),
   baseUrl: v.pipe(v.string(), v.url()),
@@ -20,6 +26,12 @@ const ConfigSchema = v.object({
       redirectUri: v.pipe(v.string(), v.url()),
     }),
   ),
+  loginProviders: v.object({
+    google: v.optional(LoginProviderCredsSchema),
+    apple: v.optional(LoginProviderCredsSchema),
+    facebook: v.optional(LoginProviderCredsSchema),
+  }),
+  postLoginPath: v.pipe(v.string(), v.startsWith('/')),
   maxSongsPerGuest: v.pipe(v.number(), v.integer(), v.minValue(1)),
   maxGuestsPerSession: v.union([v.pipe(v.number(), v.integer(), v.minValue(1)), v.null()]),
   moderationEnabledDefault: v.boolean(),
@@ -85,6 +97,24 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
       redirectUri: spotifyRedirectUri,
     };
   }
+
+  const baseUrl = candidate['baseUrl'] as string;
+  const loginProviders: Record<string, unknown> = {};
+  for (const provider of ['google', 'apple', 'facebook'] as const) {
+    const upper = provider.toUpperCase();
+    const clientId = env[`${upper}_CLIENT_ID`];
+    if (!clientId) continue;
+    const clientSecret = env[`${upper}_CLIENT_SECRET`];
+    const redirectUri =
+      env[`${upper}_REDIRECT_URI`] ?? `${baseUrl}/api/v1/auth/oauth/${provider}/callback`;
+    loginProviders[provider] = {
+      clientId,
+      ...(clientSecret !== undefined && clientSecret !== '' && { clientSecret }),
+      redirectUri,
+    };
+  }
+  candidate['loginProviders'] = loginProviders;
+  candidate['postLoginPath'] = env['POST_LOGIN_PATH'] ?? '/';
 
   const result = v.safeParse(ConfigSchema, candidate);
   if (!result.success) {
