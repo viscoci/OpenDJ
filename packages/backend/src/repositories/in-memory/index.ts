@@ -22,6 +22,8 @@ import type {
   AuthIdentityRepository,
   AuthSessionRecord,
   AuthSessionRepository,
+  EmailVerificationTokenRecord,
+  EmailVerificationTokenRepository,
   FingerprintPriorityRecord,
   FingerprintPriorityRepository,
   GuestRecord,
@@ -39,6 +41,8 @@ import type {
   OAuthStateRepository,
   PasswordCredentialRecord,
   PasswordCredentialRepository,
+  PasswordResetTokenRecord,
+  PasswordResetTokenRepository,
   ProviderConnectionRecord,
   ProviderConnectionRepository,
   QueueItemRecord,
@@ -98,6 +102,13 @@ export class InMemoryUserRepository implements UserRepository {
     };
     this.rows.set(id, row);
     return row;
+  }
+
+  async setEmailVerified(userId: string): Promise<void> {
+    const row = this.rows.get(userId);
+    if (!row) return;
+    if (row.emailVerified) return;
+    this.rows.set(userId, { ...row, emailVerified: true, updatedAt: this.clock.now() });
   }
 }
 
@@ -336,6 +347,106 @@ export class InMemoryPasswordCredentialRepository implements PasswordCredentialR
       row.failedAttempts = 0;
       row.lockedUntil = null;
     }
+  }
+}
+
+export class InMemoryEmailVerificationTokenRepository implements EmailVerificationTokenRepository {
+  readonly rows = new Map<string, EmailVerificationTokenRecord>();
+  constructor(private readonly clock: InMemoryClock = systemClock) {}
+
+  async create(input: {
+    tokenHash: string;
+    userId: string;
+    email: string;
+    expiresAt: Date;
+  }): Promise<EmailVerificationTokenRecord> {
+    const row: EmailVerificationTokenRecord = {
+      tokenHash: input.tokenHash,
+      userId: input.userId,
+      email: input.email,
+      createdAt: this.clock.now(),
+      expiresAt: input.expiresAt,
+      consumedAt: null,
+    };
+    this.rows.set(input.tokenHash, row);
+    return row;
+  }
+
+  async findActiveByHash(
+    tokenHash: string,
+    nowEpochMs: number,
+  ): Promise<EmailVerificationTokenRecord | null> {
+    const row = this.rows.get(tokenHash);
+    if (!row) return null;
+    if (row.consumedAt) return null;
+    if (row.expiresAt.getTime() <= nowEpochMs) return null;
+    return row;
+  }
+
+  async consume(tokenHash: string, nowEpochMs: number): Promise<void> {
+    const row = this.rows.get(tokenHash);
+    if (row) row.consumedAt = new Date(nowEpochMs);
+  }
+
+  async pruneExpired(nowEpochMs: number): Promise<number> {
+    let count = 0;
+    for (const [hash, row] of this.rows.entries()) {
+      if (row.expiresAt.getTime() <= nowEpochMs || row.consumedAt) {
+        this.rows.delete(hash);
+        count += 1;
+      }
+    }
+    return count;
+  }
+}
+
+export class InMemoryPasswordResetTokenRepository implements PasswordResetTokenRepository {
+  readonly rows = new Map<string, PasswordResetTokenRecord>();
+  constructor(private readonly clock: InMemoryClock = systemClock) {}
+
+  async create(input: {
+    tokenHash: string;
+    userId: string;
+    expiresAt: Date;
+    requestedFromIpHash?: string | null;
+  }): Promise<PasswordResetTokenRecord> {
+    const row: PasswordResetTokenRecord = {
+      tokenHash: input.tokenHash,
+      userId: input.userId,
+      createdAt: this.clock.now(),
+      expiresAt: input.expiresAt,
+      consumedAt: null,
+      requestedFromIpHash: input.requestedFromIpHash ?? null,
+    };
+    this.rows.set(input.tokenHash, row);
+    return row;
+  }
+
+  async findActiveByHash(
+    tokenHash: string,
+    nowEpochMs: number,
+  ): Promise<PasswordResetTokenRecord | null> {
+    const row = this.rows.get(tokenHash);
+    if (!row) return null;
+    if (row.consumedAt) return null;
+    if (row.expiresAt.getTime() <= nowEpochMs) return null;
+    return row;
+  }
+
+  async consume(tokenHash: string, nowEpochMs: number): Promise<void> {
+    const row = this.rows.get(tokenHash);
+    if (row) row.consumedAt = new Date(nowEpochMs);
+  }
+
+  async pruneExpired(nowEpochMs: number): Promise<number> {
+    let count = 0;
+    for (const [hash, row] of this.rows.entries()) {
+      if (row.expiresAt.getTime() <= nowEpochMs || row.consumedAt) {
+        this.rows.delete(hash);
+        count += 1;
+      }
+    }
+    return count;
   }
 }
 
@@ -1035,6 +1146,8 @@ export function createInMemoryRepositories(clock: InMemoryClock = systemClock): 
     authIdentities: new InMemoryAuthIdentityRepository(clock),
     authSessions: new InMemoryAuthSessionRepository(clock),
     passwordCredentials: new InMemoryPasswordCredentialRepository(clock),
+    emailVerificationTokens: new InMemoryEmailVerificationTokenRepository(clock),
+    passwordResetTokens: new InMemoryPasswordResetTokenRepository(clock),
     oauthStates: new InMemoryOAuthStateRepository(clock),
     providerConnections: new InMemoryProviderConnectionRepository(clock),
     sessions: new InMemorySessionRepository(clock),

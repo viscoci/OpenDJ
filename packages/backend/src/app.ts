@@ -54,7 +54,16 @@ export function createApp(options: AppOptions): Hono<{ Variables: AuthVariables 
       users: deps.repositories.users,
     }),
   );
-  v1.route('/auth/email', emailAuthRoutes({ emailPassword: deps.emailPasswordService }));
+  v1.route(
+    '/auth/email',
+    emailAuthRoutes({
+      emailPassword: deps.emailPasswordService,
+      emailVerification: deps.emailVerificationService,
+      passwordReset: deps.passwordResetService,
+      authService: deps.authService,
+      users: deps.repositories.users,
+    }),
+  );
   v1.route(
     '/auth/oauth',
     loginAuthRoutes({

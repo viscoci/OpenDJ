@@ -26,6 +26,12 @@ import {
   type LoginProviderRegistry,
 } from './auth/loginProviders/index.js';
 import type { Config } from './config.js';
+import {
+  ConsoleEmailAdapter,
+  EmailVerificationService,
+  PasswordResetService,
+  type EmailAdapter,
+} from './email/index.js';
 import { GuestIdentityService } from './guest/GuestIdentityService.js';
 import { LyricsLookupService } from './lyrics/LyricsLookupService.js';
 import { AppleMusicProvider } from './providers/streaming/AppleMusicProvider.js';
@@ -61,6 +67,9 @@ export interface AppDeps {
   loginAuthService: LoginAuthService;
   loginProviders: LoginProviderRegistry;
   accountService: AccountService;
+  emailAdapter: EmailAdapter;
+  emailVerificationService: EmailVerificationService;
+  passwordResetService: PasswordResetService;
   rooms: RealtimeRoomRegistry;
   /**
    * Concrete room manager. Routes that materialize rooms (the WS upgrade
@@ -100,6 +109,12 @@ export interface CreateDepsOptions {
   passwordHasher?: PasswordHasher & { algorithm?: string };
   /** Override the default login-provider registry (e.g. add custom providers). */
   loginProviders?: LoginProviderRegistry;
+  /**
+   * Outbound-email adapter. Defaults to `ConsoleEmailAdapter` (writes to
+   * stdout) — fine for the OSS demo. Production should pass an SMTP/SES
+   * adapter.
+   */
+  emailAdapter?: EmailAdapter;
 }
 
 const NULL_ROOM_REGISTRY: RealtimeRoomRegistry = {
@@ -213,6 +228,23 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
     accountService,
   });
 
+  const emailAdapter = options.emailAdapter ?? new ConsoleEmailAdapter();
+  const emailVerificationService = new EmailVerificationService({
+    users: repositories.users,
+    tokens: repositories.emailVerificationTokens,
+    email: emailAdapter,
+    baseUrl: options.config.baseUrl,
+  });
+  const passwordResetService = new PasswordResetService({
+    users: repositories.users,
+    tokens: repositories.passwordResetTokens,
+    credentials: repositories.passwordCredentials,
+    authSessions: repositories.authSessions,
+    passwordHasher,
+    email: emailAdapter,
+    baseUrl: options.config.baseUrl,
+  });
+
   return {
     config: options.config,
     db: options.db ?? null,
@@ -232,6 +264,9 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
     loginAuthService,
     loginProviders,
     accountService,
+    emailAdapter,
+    emailVerificationService,
+    passwordResetService,
     rooms,
     roomManager,
   };

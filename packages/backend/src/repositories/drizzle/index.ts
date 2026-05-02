@@ -11,6 +11,7 @@ import { DrizzleAccountRepository } from './accounts.js';
 import { DrizzleActionEventRepository } from './action-events.js';
 import { DrizzleAuthIdentityRepository } from './auth-identities.js';
 import { DrizzleAuthSessionRepository } from './auth-sessions.js';
+import { DrizzleEmailVerificationTokenRepository } from './email-verification-tokens.js';
 import { DrizzleFingerprintPriorityRepository } from './fingerprint-priority.js';
 import { DrizzleGuestRepository } from './guests.js';
 import { DrizzleGuestSlotRepository } from './guest-slots.js';
@@ -19,6 +20,7 @@ import { DrizzleLyricsFeedbackRepository } from './lyrics-feedback.js';
 import { DrizzleMembershipRepository } from './memberships.js';
 import { DrizzleOAuthStateRepository } from './oauth-states.js';
 import { DrizzlePasswordCredentialRepository } from './password-credentials.js';
+import { DrizzlePasswordResetTokenRepository } from './password-reset-tokens.js';
 import { DrizzleProviderConnectionRepository } from './provider-connections.js';
 import { DrizzleQueueItemRepository } from './queue-items.js';
 import { DrizzleSessionRepository } from './sessions.js';
@@ -38,6 +40,8 @@ export * from './lyrics-cache.js';
 export * from './lyrics-feedback.js';
 export * from './oauth-states.js';
 export * from './password-credentials.js';
+export * from './password-reset-tokens.js';
+export * from './email-verification-tokens.js';
 export * from './provider-connections.js';
 export * from './queue-items.js';
 export * from './sessions.js';
@@ -50,6 +54,8 @@ export function createDrizzleRepositories(db: Database): Repositories {
     authIdentities: new DrizzleAuthIdentityRepository(db),
     authSessions: new DrizzleAuthSessionRepository(db),
     passwordCredentials: new DrizzlePasswordCredentialRepository(db),
+    emailVerificationTokens: new DrizzleEmailVerificationTokenRepository(db),
+    passwordResetTokens: new DrizzlePasswordResetTokenRepository(db),
     oauthStates: new DrizzleOAuthStateRepository(db),
     providerConnections: new DrizzleProviderConnectionRepository(db),
     sessions: new DrizzleSessionRepository(db),

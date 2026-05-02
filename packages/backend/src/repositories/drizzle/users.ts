@@ -53,4 +53,11 @@ export class DrizzleUserRepository implements UserRepository {
     if (!row) throw new Error('Failed to insert user.');
     return mapUser(row);
   }
+
+  async setEmailVerified(userId: string): Promise<void> {
+    await this.db
+      .update(schema.users)
+      .set({ emailVerified: true, updatedAt: new Date() })
+      .where(eq(schema.users.id, userId));
+  }
 }

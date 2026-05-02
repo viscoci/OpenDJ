@@ -135,3 +135,58 @@ export const oauthStates = pgTable(
 
 export type OAuthStateRow = typeof oauthStates.$inferSelect;
 export type OAuthStateInsert = typeof oauthStates.$inferInsert;
+
+/**
+ * One-time email verification tokens. The opaque token sent to the user is
+ * hashed before storage so a DB read can't replay verifications.
+ *
+ * The token row binds to a specific `email` (not just `user_id`) so users
+ * who later change their email need a fresh verification.
+ */
+export const emailVerificationTokens = pgTable(
+  'email_verification_tokens',
+  {
+    tokenHash: text('token_hash').primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    email: text('email').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    consumedAt: timestamp('consumed_at', { withTimezone: true }),
+  },
+  (table) => ({
+    userIdx: index('email_verification_tokens_user').on(table.userId),
+    expiryIdx: index('email_verification_tokens_expiry').on(table.expiresAt),
+  }),
+);
+
+export type EmailVerificationTokenRow = typeof emailVerificationTokens.$inferSelect;
+export type EmailVerificationTokenInsert = typeof emailVerificationTokens.$inferInsert;
+
+/**
+ * One-time password-reset tokens. Same hashed-token pattern as
+ * `emailVerificationTokens`. `requested_from_ip_hash` captures the request
+ * origin for forensics if the flow gets abused — the consumer-side UI
+ * never sees this.
+ */
+export const passwordResetTokens = pgTable(
+  'password_reset_tokens',
+  {
+    tokenHash: text('token_hash').primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    consumedAt: timestamp('consumed_at', { withTimezone: true }),
+    requestedFromIpHash: text('requested_from_ip_hash'),
+  },
+  (table) => ({
+    userIdx: index('password_reset_tokens_user').on(table.userId),
+    expiryIdx: index('password_reset_tokens_expiry').on(table.expiresAt),
+  }),
+);
+
+export type PasswordResetTokenRow = typeof passwordResetTokens.$inferSelect;
+export type PasswordResetTokenInsert = typeof passwordResetTokens.$inferInsert;

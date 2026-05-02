@@ -394,6 +394,8 @@ export interface UserRepository {
     avatarUrl?: string | null;
     emailVerified?: boolean;
   }): Promise<UserRecord>;
+  /** Mark `email_verified=true` for the user. No-op when already verified. */
+  setEmailVerified(userId: string): Promise<void>;
 }
 
 export interface AccountRepository {
@@ -462,6 +464,53 @@ export interface PasswordCredentialRepository {
   }): Promise<PasswordCredentialRecord>;
   recordFailedAttempt(userId: string, lockUntil: Date | null): Promise<void>;
   resetFailedAttempts(userId: string): Promise<void>;
+}
+
+export interface EmailVerificationTokenRecord {
+  tokenHash: string;
+  userId: string;
+  email: string;
+  createdAt: Date;
+  expiresAt: Date;
+  consumedAt: Date | null;
+}
+
+export interface EmailVerificationTokenRepository {
+  create(input: {
+    tokenHash: string;
+    userId: string;
+    email: string;
+    expiresAt: Date;
+  }): Promise<EmailVerificationTokenRecord>;
+  findActiveByHash(
+    tokenHash: string,
+    nowEpochMs: number,
+  ): Promise<EmailVerificationTokenRecord | null>;
+  /** Mark consumed — single-use. */
+  consume(tokenHash: string, nowEpochMs: number): Promise<void>;
+  /** Drop expired/consumed rows older than `cutoff`. Returns count. */
+  pruneExpired(nowEpochMs: number): Promise<number>;
+}
+
+export interface PasswordResetTokenRecord {
+  tokenHash: string;
+  userId: string;
+  createdAt: Date;
+  expiresAt: Date;
+  consumedAt: Date | null;
+  requestedFromIpHash: string | null;
+}
+
+export interface PasswordResetTokenRepository {
+  create(input: {
+    tokenHash: string;
+    userId: string;
+    expiresAt: Date;
+    requestedFromIpHash?: string | null;
+  }): Promise<PasswordResetTokenRecord>;
+  findActiveByHash(tokenHash: string, nowEpochMs: number): Promise<PasswordResetTokenRecord | null>;
+  consume(tokenHash: string, nowEpochMs: number): Promise<void>;
+  pruneExpired(nowEpochMs: number): Promise<number>;
 }
 
 export interface ProviderConnectionRecord {
@@ -550,6 +599,8 @@ export interface Repositories {
   authIdentities: AuthIdentityRepository;
   authSessions: AuthSessionRepository;
   passwordCredentials: PasswordCredentialRepository;
+  emailVerificationTokens: EmailVerificationTokenRepository;
+  passwordResetTokens: PasswordResetTokenRepository;
   oauthStates: OAuthStateRepository;
   providerConnections: ProviderConnectionRepository;
   sessions: SessionRepository;

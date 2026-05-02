@@ -1,19 +1,32 @@
 /**
- * `/api/v1/auth/email/{register,login}` routes.
+ * `/api/v1/auth/email/*` routes — register, login, verify, request-reset, reset.
  *
- * Verification + password reset endpoints (`/email/verify`,
- * `/password/reset/{start,finish}`) follow once an email-sending adapter
- * lands. The schema is ready for them — just no transport yet.
+ * Email verification + password reset use opaque one-time tokens emailed to
+ * the user; the backend stores only the SHA-256 of each token. Verification
+ * + reset endpoints accept the raw token from the link.
  */
 
+import type { AuthContext } from '@opendj/auth';
 import { Hono } from 'hono';
 import * as v from 'valibot';
-import type { AuthVariables } from '../auth/middleware.js';
+import type { AuthService } from '../auth/AuthService.js';
+import { requireAuth, type AuthVariables } from '../auth/middleware.js';
 import { EmailPasswordError, type EmailPasswordService } from '../auth/EmailPasswordService.js';
 import { buildSessionCookie } from '../auth/cookies.js';
+import {
+  EmailVerificationError,
+  type EmailVerificationService,
+} from '../email/EmailVerificationService.js';
+import { PasswordResetError, type PasswordResetService } from '../email/PasswordResetService.js';
+import type { UserRepository } from '../repositories/types.js';
 
 export interface EmailAuthRouteDeps {
   emailPassword: EmailPasswordService;
+  /** When supplied, mounts verification + reset routes. Optional for back-compat. */
+  emailVerification?: EmailVerificationService;
+  passwordReset?: PasswordResetService;
+  authService?: AuthService;
+  users?: UserRepository;
 }
 
 const RegisterBody = v.object({
@@ -106,6 +119,123 @@ export function emailAuthRoutes(deps: EmailAuthRouteDeps): Hono<{ Variables: Aut
       throw err;
     }
   });
+
+  // ─── Email verification ──────────────────────────────────────────────────
+
+  if (deps.emailVerification && deps.authService && deps.users) {
+    const verification = deps.emailVerification;
+    const authService = deps.authService;
+    const users = deps.users;
+
+    /**
+     * POST /request-verification — send a verification email to the
+     * authenticated user's primary email. No body needed.
+     */
+    app.post('/request-verification', requireAuth(authService), async (c) => {
+      const auth = c.get('auth') as AuthContext;
+      if (!auth.userId) return c.json({ error: 'unauthenticated' }, 401);
+      const user = await users.findById(auth.userId);
+      if (!user || !user.primaryEmail) {
+        return c.json({ error: 'no_primary_email' }, 400);
+      }
+      if (user.emailVerified) return c.json({ ok: true, alreadyVerified: true });
+      try {
+        await verification.requestVerification({ userId: user.id, email: user.primaryEmail });
+      } catch (err) {
+        if (err instanceof EmailVerificationError) {
+          return c.json({ error: err.code }, 400);
+        }
+        throw err;
+      }
+      return c.json({ ok: true });
+    });
+
+    /**
+     * GET /verify?token=… — public, follows the email link. On success the
+     * user's `email_verified` is set; we 302 to /host/dashboard so the link
+     * doesn't leave the user staring at a JSON blob.
+     */
+    const VerifyQuery = v.object({
+      token: v.pipe(v.string(), v.nonEmpty()),
+    });
+    app.get('/verify', async (c) => {
+      const parsed = v.safeParse(VerifyQuery, { token: c.req.query('token') });
+      if (!parsed.success) {
+        return c.json({ error: 'invalid_token' }, 400);
+      }
+      try {
+        const result = await verification.verifyToken(parsed.output.token);
+        return c.json({ ok: true, email: result.email });
+      } catch (err) {
+        if (err instanceof EmailVerificationError) {
+          return c.json({ error: err.code }, 400);
+        }
+        throw err;
+      }
+    });
+  }
+
+  // ─── Password reset ──────────────────────────────────────────────────────
+
+  if (deps.passwordReset) {
+    const passwordReset = deps.passwordReset;
+
+    /**
+     * POST /request-reset — public. Accepts `{ email }`. Always returns 200
+     * to avoid leaking whether the email exists.
+     */
+    const RequestResetBody = v.object({
+      email: v.pipe(v.string(), v.email()),
+    });
+    app.post('/request-reset', async (c) => {
+      let body: unknown;
+      try {
+        body = await c.req.json();
+      } catch {
+        return c.json({ error: 'invalid_body' }, 400);
+      }
+      const parsed = v.safeParse(RequestResetBody, body);
+      if (!parsed.success) {
+        return c.json({ error: 'invalid_body' }, 400);
+      }
+      await passwordReset.requestReset({ email: parsed.output.email });
+      return c.json({ ok: true });
+    });
+
+    /**
+     * POST /reset — public. Body: `{ token, newPassword }`. On success the
+     * user's password is swapped; the next /auth/email/login uses the new
+     * password.
+     */
+    const ResetBody = v.object({
+      token: v.pipe(v.string(), v.nonEmpty()),
+      newPassword: v.pipe(v.string(), v.minLength(8), v.maxLength(200)),
+    });
+    app.post('/reset', async (c) => {
+      let body: unknown;
+      try {
+        body = await c.req.json();
+      } catch {
+        return c.json({ error: 'invalid_body' }, 400);
+      }
+      const parsed = v.safeParse(ResetBody, body);
+      if (!parsed.success) {
+        return c.json({ error: 'invalid_body' }, 400);
+      }
+      try {
+        const result = await passwordReset.completeReset({
+          token: parsed.output.token,
+          newPassword: parsed.output.newPassword,
+        });
+        return c.json({ ok: true, userId: result.userId });
+      } catch (err) {
+        if (err instanceof PasswordResetError) {
+          return c.json({ error: err.code }, err.code === 'invalid_password' ? 400 : 400);
+        }
+        throw err;
+      }
+    });
+  }
 
   return app;
 }
