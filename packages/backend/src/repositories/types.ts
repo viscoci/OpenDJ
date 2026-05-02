@@ -222,6 +222,85 @@ export interface QueueItemRepository {
   incrementSkipVotes(id: string): Promise<number>;
 }
 
+export interface LyricsCacheRecord {
+  id: string;
+  source: string;
+  sourceLyricsId: string | null;
+  providerTrackUri: string | null;
+  trackName: string;
+  artistName: string;
+  albumName: string | null;
+  durationMs: number | null;
+  isrc: string | null;
+  isSynced: boolean;
+  isInstrumental: boolean;
+  matchConfidence: 'low' | 'medium' | 'high';
+  syncedLrc: string | null;
+  plainLyrics: string | null;
+  attribution: string | null;
+  lookupKeyHash: string;
+  createdAt: Date;
+  updatedAt: Date;
+  lastUsedAt: Date | null;
+  suppressedAt: Date | null;
+  suppressedReason: string | null;
+}
+
+export interface LyricsCacheRepository {
+  findBySourceAndKey(source: string, lookupKeyHash: string): Promise<LyricsCacheRecord | null>;
+  /** Insert or update by `(source, lookupKeyHash)`. */
+  upsert(input: {
+    source: string;
+    sourceLyricsId?: string | null;
+    providerTrackUri?: string | null;
+    trackName: string;
+    artistName: string;
+    albumName?: string | null;
+    durationMs?: number | null;
+    isrc?: string | null;
+    isSynced: boolean;
+    isInstrumental?: boolean;
+    matchConfidence: 'low' | 'medium' | 'high';
+    syncedLrc?: string | null;
+    plainLyrics?: string | null;
+    attribution?: string | null;
+    lookupKeyHash: string;
+  }): Promise<LyricsCacheRecord>;
+  /** Bump `last_used_at` to track usage for cache eviction. */
+  recordHit(id: string, nowEpochMs: number): Promise<void>;
+  /** Mark a cache entry as suppressed (e.g. after enough bad-quality feedback). */
+  suppress(id: string, reason: string, nowEpochMs: number): Promise<void>;
+}
+
+export interface LyricsFeedbackRecord {
+  id: number;
+  accountId: string | null;
+  sessionId: string | null;
+  userId: string | null;
+  guestId: string | null;
+  lyricsCacheId: string | null;
+  providerTrackUri: string | null;
+  kind: string;
+  lineId: string | null;
+  comment: string | null;
+  createdAt: Date;
+}
+
+export interface LyricsFeedbackRepository {
+  create(input: {
+    accountId?: string | null;
+    sessionId?: string | null;
+    userId?: string | null;
+    guestId?: string | null;
+    lyricsCacheId?: string | null;
+    providerTrackUri?: string | null;
+    kind: string;
+    lineId?: string | null;
+    comment?: string | null;
+  }): Promise<LyricsFeedbackRecord>;
+  countForCacheEntry(lyricsCacheId: string, kind?: string): Promise<number>;
+}
+
 export interface FingerprintPriorityRecord {
   fingerprintHash: string;
   sessionId: string;
@@ -401,4 +480,6 @@ export interface Repositories {
   guestSlots: GuestSlotRepository;
   fingerprintPriority: FingerprintPriorityRepository;
   queueItems: QueueItemRepository;
+  lyricsCache: LyricsCacheRepository;
+  lyricsFeedback: LyricsFeedbackRepository;
 }

@@ -12,6 +12,7 @@ export * from './config.js';
 export * from './deps.js';
 export * from './auth/index.js';
 export * from './guest/index.js';
+export * from './lyrics/index.js';
 export * from './providers/index.js';
 export * from './queue/index.js';
 export * from './repositories/index.js';

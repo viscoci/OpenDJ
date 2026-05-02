@@ -11,11 +11,13 @@
  */
 
 import type { Database } from '@opendj/db';
+import { LrclibAdapter, type LyricsProvider } from '@opendj/lyrics';
 import type { RealtimeRoom } from '@opendj/realtime';
 import { AuthService } from './auth/AuthService.js';
 import { ClaimsService } from './auth/ClaimsService.js';
 import type { Config } from './config.js';
 import { GuestIdentityService } from './guest/GuestIdentityService.js';
+import { LyricsLookupService } from './lyrics/LyricsLookupService.js';
 import { AppleMusicProvider } from './providers/streaming/AppleMusicProvider.js';
 import {
   defaultStreamingProviderOAuthConfigs,
@@ -41,6 +43,7 @@ export interface AppDeps {
   queueService: QueueService;
   streamingRouter: StreamingRouter;
   streamingProviderOAuthConfigs: StreamingProviderOAuthRegistry;
+  lyricsLookupService: LyricsLookupService;
   rooms: RealtimeRoomRegistry;
 }
 
@@ -58,6 +61,8 @@ export interface CreateDepsOptions {
   rooms?: RealtimeRoomRegistry;
   /** fetch impl for outbound calls (provider OAuth + Spotify). Defaults to globalThis.fetch. */
   fetchImpl?: typeof fetch;
+  /** Override the default lyrics provider (defaults to LRCLIB). */
+  lyricsProvider?: LyricsProvider;
 }
 
 const NULL_ROOM_REGISTRY: RealtimeRoomRegistry = {
@@ -117,6 +122,13 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
     context: { fetch: fetchImpl },
   });
 
+  const lyricsProvider = options.lyricsProvider ?? new LrclibAdapter({ fetchImpl });
+  const lyricsLookupService = new LyricsLookupService({
+    provider: lyricsProvider,
+    cache: repositories.lyricsCache,
+    feedback: repositories.lyricsFeedback,
+  });
+
   return {
     config: options.config,
     db: options.db ?? null,
@@ -129,6 +141,7 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
     streamingRouter,
     streamingProviderOAuthConfigs:
       options.streamingProviderOAuthConfigs ?? defaultStreamingProviderOAuthConfigs,
+    lyricsLookupService,
     rooms,
   };
 }

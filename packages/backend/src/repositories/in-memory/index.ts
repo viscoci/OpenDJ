@@ -24,6 +24,10 @@ import type {
   GuestSlotRecord,
   GuestSlotRepository,
   GuestSlotStatus,
+  LyricsCacheRecord,
+  LyricsCacheRepository,
+  LyricsFeedbackRecord,
+  LyricsFeedbackRepository,
   MembershipRecord,
   MembershipRepository,
   OAuthStateRecord,
@@ -744,6 +748,129 @@ export class InMemoryQueueItemRepository implements QueueItemRepository {
   }
 }
 
+export class InMemoryLyricsCacheRepository implements LyricsCacheRepository {
+  /** Composite key: `${source}:${lookupKeyHash}`. */
+  readonly rows = new Map<string, LyricsCacheRecord>();
+  constructor(private readonly clock: InMemoryClock = systemClock) {}
+
+  async findBySourceAndKey(
+    source: string,
+    lookupKeyHash: string,
+  ): Promise<LyricsCacheRecord | null> {
+    return this.rows.get(`${source}:${lookupKeyHash}`) ?? null;
+  }
+
+  async upsert(input: {
+    source: string;
+    sourceLyricsId?: string | null;
+    providerTrackUri?: string | null;
+    trackName: string;
+    artistName: string;
+    albumName?: string | null;
+    durationMs?: number | null;
+    isrc?: string | null;
+    isSynced: boolean;
+    isInstrumental?: boolean;
+    matchConfidence: 'low' | 'medium' | 'high';
+    syncedLrc?: string | null;
+    plainLyrics?: string | null;
+    attribution?: string | null;
+    lookupKeyHash: string;
+  }): Promise<LyricsCacheRecord> {
+    const key = `${input.source}:${input.lookupKeyHash}`;
+    const now = this.clock.now();
+    const existing = this.rows.get(key);
+    const row: LyricsCacheRecord = {
+      id: existing?.id ?? crypto.randomUUID(),
+      source: input.source,
+      sourceLyricsId: input.sourceLyricsId ?? existing?.sourceLyricsId ?? null,
+      providerTrackUri: input.providerTrackUri ?? existing?.providerTrackUri ?? null,
+      trackName: input.trackName,
+      artistName: input.artistName,
+      albumName: input.albumName ?? existing?.albumName ?? null,
+      durationMs: input.durationMs ?? existing?.durationMs ?? null,
+      isrc: input.isrc ?? existing?.isrc ?? null,
+      isSynced: input.isSynced,
+      isInstrumental: input.isInstrumental ?? existing?.isInstrumental ?? false,
+      matchConfidence: input.matchConfidence,
+      syncedLrc: input.syncedLrc ?? existing?.syncedLrc ?? null,
+      plainLyrics: input.plainLyrics ?? existing?.plainLyrics ?? null,
+      attribution: input.attribution ?? existing?.attribution ?? null,
+      lookupKeyHash: input.lookupKeyHash,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+      lastUsedAt: existing?.lastUsedAt ?? null,
+      suppressedAt: existing?.suppressedAt ?? null,
+      suppressedReason: existing?.suppressedReason ?? null,
+    };
+    this.rows.set(key, row);
+    return row;
+  }
+
+  async recordHit(id: string, nowEpochMs: number): Promise<void> {
+    for (const row of this.rows.values()) {
+      if (row.id === id) {
+        row.lastUsedAt = new Date(nowEpochMs);
+        return;
+      }
+    }
+  }
+
+  async suppress(id: string, reason: string, nowEpochMs: number): Promise<void> {
+    for (const row of this.rows.values()) {
+      if (row.id === id) {
+        row.suppressedAt = new Date(nowEpochMs);
+        row.suppressedReason = reason;
+        return;
+      }
+    }
+  }
+}
+
+export class InMemoryLyricsFeedbackRepository implements LyricsFeedbackRepository {
+  readonly rows: LyricsFeedbackRecord[] = [];
+  private nextId = 1;
+  constructor(private readonly clock: InMemoryClock = systemClock) {}
+
+  async create(input: {
+    accountId?: string | null;
+    sessionId?: string | null;
+    userId?: string | null;
+    guestId?: string | null;
+    lyricsCacheId?: string | null;
+    providerTrackUri?: string | null;
+    kind: string;
+    lineId?: string | null;
+    comment?: string | null;
+  }): Promise<LyricsFeedbackRecord> {
+    const row: LyricsFeedbackRecord = {
+      id: this.nextId++,
+      accountId: input.accountId ?? null,
+      sessionId: input.sessionId ?? null,
+      userId: input.userId ?? null,
+      guestId: input.guestId ?? null,
+      lyricsCacheId: input.lyricsCacheId ?? null,
+      providerTrackUri: input.providerTrackUri ?? null,
+      kind: input.kind,
+      lineId: input.lineId ?? null,
+      comment: input.comment ?? null,
+      createdAt: this.clock.now(),
+    };
+    this.rows.push(row);
+    return row;
+  }
+
+  async countForCacheEntry(lyricsCacheId: string, kind?: string): Promise<number> {
+    let count = 0;
+    for (const row of this.rows) {
+      if (row.lyricsCacheId !== lyricsCacheId) continue;
+      if (kind !== undefined && row.kind !== kind) continue;
+      count += 1;
+    }
+    return count;
+  }
+}
+
 export function createInMemoryRepositories(clock: InMemoryClock = systemClock): Repositories {
   return {
     users: new InMemoryUserRepository(clock),
@@ -754,10 +881,12 @@ export function createInMemoryRepositories(clock: InMemoryClock = systemClock): 
     passwordCredentials: new InMemoryPasswordCredentialRepository(clock),
     oauthStates: new InMemoryOAuthStateRepository(clock),
     providerConnections: new InMemoryProviderConnectionRepository(clock),
-    sessions: new InMemorySessionRepository(),
+    sessions: new InMemorySessionRepository(clock),
     guests: new InMemoryGuestRepository(clock),
     guestSlots: new InMemoryGuestSlotRepository(clock),
     fingerprintPriority: new InMemoryFingerprintPriorityRepository(clock),
     queueItems: new InMemoryQueueItemRepository(clock),
+    lyricsCache: new InMemoryLyricsCacheRepository(clock),
+    lyricsFeedback: new InMemoryLyricsFeedbackRepository(clock),
   };
 }

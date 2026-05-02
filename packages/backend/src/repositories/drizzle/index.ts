@@ -12,6 +12,8 @@ import { DrizzleAuthSessionRepository } from './auth-sessions.js';
 import { DrizzleFingerprintPriorityRepository } from './fingerprint-priority.js';
 import { DrizzleGuestRepository } from './guests.js';
 import { DrizzleGuestSlotRepository } from './guest-slots.js';
+import { DrizzleLyricsCacheRepository } from './lyrics-cache.js';
+import { DrizzleLyricsFeedbackRepository } from './lyrics-feedback.js';
 import { DrizzleMembershipRepository } from './memberships.js';
 import { DrizzleOAuthStateRepository } from './oauth-states.js';
 import { DrizzlePasswordCredentialRepository } from './password-credentials.js';
@@ -28,6 +30,8 @@ export * from './auth-sessions.js';
 export * from './fingerprint-priority.js';
 export * from './guests.js';
 export * from './guest-slots.js';
+export * from './lyrics-cache.js';
+export * from './lyrics-feedback.js';
 export * from './oauth-states.js';
 export * from './password-credentials.js';
 export * from './provider-connections.js';
@@ -49,5 +53,7 @@ export function createDrizzleRepositories(db: Database): Repositories {
     guestSlots: new DrizzleGuestSlotRepository(db),
     fingerprintPriority: new DrizzleFingerprintPriorityRepository(db),
     queueItems: new DrizzleQueueItemRepository(db),
+    lyricsCache: new DrizzleLyricsCacheRepository(db),
+    lyricsFeedback: new DrizzleLyricsFeedbackRepository(db),
   };
 }
