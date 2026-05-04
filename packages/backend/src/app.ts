@@ -20,6 +20,7 @@ import { guestRoutes } from './routes/guest.js';
 import { healthRoutes } from './routes/health.js';
 import { lyricsRoutes, sessionLyricsRoutes } from './routes/lyrics.js';
 import { providerOAuthRoutes } from './routes/providerOAuth.js';
+import { publicConfigRoutes } from './routes/publicConfig.js';
 import { queueRoutes } from './routes/queue.js';
 import { realtimeRoutes, type UpgradeWebSocket } from './routes/realtime.js';
 import { searchRoutes } from './routes/search.js';
@@ -46,6 +47,7 @@ export function createApp(options: AppOptions): Hono<{ Variables: AuthVariables 
 
   const v1 = new Hono<{ Variables: AuthVariables }>();
   v1.route('/health', healthRoutes(deps));
+  v1.route('/config/public', publicConfigRoutes({ config: deps.config }));
   v1.route(
     '/auth',
     authRoutes({

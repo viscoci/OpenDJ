@@ -7,4 +7,5 @@ export * from './queue.js';
 export * from './guest.js';
 export * from './lyrics.js';
 export * from './providerConnections.js';
+export * from './publicConfig.js';
 export * from './OpenDjClient.js';

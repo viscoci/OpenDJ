@@ -19,7 +19,7 @@ import {
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
-import { ApiError } from '@opendj/frontend';
+import { ApiError, type PublicConfig } from '@opendj/frontend';
 import { AuthService } from '../../services/auth.service.js';
 import { OpenDjClientService } from '../../services/opendj-client.service.js';
 
@@ -94,12 +94,24 @@ type Mode = 'login' | 'register';
           }
         </form>
 
-        <div class="divider"><span>or continue with</span></div>
-        <a class="oauth" [href]="googleStartUrl">Sign in with Google</a>
-        <p class="oauth-note">
-          Apple and Facebook are scaffolded but not enabled in OSS — see
-          <code>backend/auth/loginProviders/apple.ts</code>.
-        </p>
+        @if (anyOAuth()) {
+          <div class="divider"><span>or continue with</span></div>
+          @if (oauth().google) {
+            <a class="oauth" [href]="googleStartUrl">Sign in with Google</a>
+          }
+          @if (oauth().apple) {
+            <a class="oauth" [href]="appleStartUrl">Sign in with Apple</a>
+          }
+          @if (oauth().facebook) {
+            <a class="oauth" [href]="facebookStartUrl">Sign in with Facebook</a>
+          }
+        } @else {
+          <p class="oauth-note">
+            No OAuth providers configured on this server. Set
+            <code>GOOGLE_CLIENT_ID</code> in <code>apps/oss-demo/.env</code> to enable Google
+            sign-in.
+          </p>
+        }
       </section>
     </main>
   `,
@@ -266,17 +278,33 @@ export class HostLoginPage {
   readonly mode: WritableSignal<Mode> = signal('login');
   readonly busy = signal(false);
   readonly error = signal<string | null>(null);
+  readonly publicConfig: WritableSignal<PublicConfig | null> = signal(null);
 
   form = { email: '', password: '', displayName: '' };
   redirectTo = '/host/dashboard';
 
   readonly googleStartUrl = this.client.client.auth.oauthStartUrl('google');
+  readonly appleStartUrl = this.client.client.auth.oauthStartUrl('apple');
+  readonly facebookStartUrl = this.client.client.auth.oauthStartUrl('facebook');
+
+  oauth(): PublicConfig['loginProviders'] {
+    return this.publicConfig()?.loginProviders ?? { google: false, apple: false, facebook: false };
+  }
+
+  anyOAuth(): boolean {
+    const o = this.oauth();
+    return o.google || o.apple || o.facebook;
+  }
 
   constructor() {
     this.route.queryParamMap.pipe(takeUntilDestroyed(this.destroyRef)).subscribe((q) => {
       const dest = q.get('redirectTo');
       if (dest && dest.startsWith('/')) this.redirectTo = dest;
     });
+    void this.client.client.publicConfig
+      .get()
+      .then((cfg) => this.publicConfig.set(cfg))
+      .catch(() => undefined);
   }
 
   setMode(m: Mode): void {

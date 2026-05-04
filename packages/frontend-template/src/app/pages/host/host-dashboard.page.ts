@@ -13,7 +13,12 @@ import {
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
-import { ApiError, type ProviderConnectionWire, type SessionWire } from '@opendj/frontend';
+import {
+  ApiError,
+  type ProviderConnectionWire,
+  type PublicConfig,
+  type SessionWire,
+} from '@opendj/frontend';
 import { AuthService } from '../../services/auth.service.js';
 import { OpenDjClientService } from '../../services/opendj-client.service.js';
 
@@ -51,7 +56,7 @@ import { OpenDjClientService } from '../../services/opendj-client.service.js';
               </div>
               <a class="ghost" [href]="spotifyConnectUrl()">Reconnect</a>
             </div>
-          } @else {
+          } @else if (spotifyConfigured()) {
             <div class="provider-row">
               <div class="provider-meta">
                 <span class="provider-name">Spotify</span>
@@ -60,6 +65,18 @@ import { OpenDjClientService } from '../../services/opendj-client.service.js';
                 >
               </div>
               <a class="primary" [href]="spotifyConnectUrl()">Connect Spotify</a>
+            </div>
+          } @else {
+            <div class="provider-row disabled">
+              <div class="provider-meta">
+                <span class="provider-name">Spotify</span>
+                <span class="provider-detail"
+                  >Not configured on this server. Set <code>SPOTIFY_CLIENT_ID</code> and
+                  <code>SPOTIFY_CLIENT_SECRET</code> in <code>apps/oss-demo/.env</code> and restart,
+                  then come back to connect.</span
+                >
+              </div>
+              <span class="ghost disabled" aria-disabled="true">Connect Spotify</span>
             </div>
           }
         </section>
@@ -216,6 +233,29 @@ import { OpenDjClientService } from '../../services/opendj-client.service.js';
         font-size: 12px;
         white-space: nowrap;
       }
+      .provider-row.disabled .provider-detail {
+        color: #6e5e8a;
+      }
+      .provider-row.disabled code {
+        background: #0c0a14;
+        border: 1px solid #2c2440;
+        padding: 1px 5px;
+        border-radius: 4px;
+        font-family: 'JetBrains Mono', ui-monospace, monospace;
+        font-size: 11px;
+        color: #c8b8e9;
+      }
+      .ghost.disabled {
+        background: transparent;
+        border: 1px solid #2c2440;
+        color: #6e5e8a;
+        padding: 6px 12px;
+        border-radius: 999px;
+        font-size: 12px;
+        white-space: nowrap;
+        cursor: not-allowed;
+        user-select: none;
+      }
       h2 {
         font-family: 'Syne', 'Inter', sans-serif;
         font-size: 16px;
@@ -326,6 +366,7 @@ export class HostDashboardPage {
 
   readonly sessions: WritableSignal<ReadonlyArray<SessionWire>> = signal([]);
   readonly connections: WritableSignal<ReadonlyArray<ProviderConnectionWire>> = signal([]);
+  readonly publicConfig: WritableSignal<PublicConfig | null> = signal(null);
   readonly loading = signal(true);
   readonly loadError = signal<string | null>(null);
   readonly creating = signal(false);
@@ -335,6 +376,10 @@ export class HostDashboardPage {
 
   spotifyConnection(): ProviderConnectionWire | null {
     return this.connections().find((c) => c.providerId === 'spotify') ?? null;
+  }
+
+  spotifyConfigured(): boolean {
+    return this.publicConfig()?.musicProviders.spotify ?? false;
   }
 
   spotifyConnectUrl(): string {
@@ -377,12 +422,14 @@ export class HostDashboardPage {
     try {
       // Fetch sessions and provider connections in parallel — they're
       // independent and the dashboard renders both before user can interact.
-      const [sessions, connections] = await Promise.all([
+      const [sessions, connections, publicConfig] = await Promise.all([
         this.client.client.sessions.listForCurrentAccount(),
         this.client.client.providerConnections.me().catch(() => [] as ProviderConnectionWire[]),
+        this.client.client.publicConfig.get().catch(() => null),
       ]);
       this.sessions.set(sessions);
       this.connections.set(connections);
+      this.publicConfig.set(publicConfig);
     } catch (err) {
       if (err instanceof ApiError && err.code === 'no_active_account') {
         this.loadError.set('No account context — try signing out and back in.');
