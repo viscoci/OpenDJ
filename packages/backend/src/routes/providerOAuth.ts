@@ -18,11 +18,11 @@ import {
 import type { Hono } from 'hono';
 import { Hono as HonoApp } from 'hono';
 import * as v from 'valibot';
-import { requireClaim, type AuthVariables } from '../auth/middleware.js';
+import { requireAuth, requireClaim, type AuthVariables } from '../auth/middleware.js';
 import { AuthService } from '../auth/AuthService.js';
 import type { StreamingRouter } from '../providers/streaming/StreamingRouter.js';
 import type { StreamingProviderOAuthRegistry } from '../providers/streaming/oauthConfigs.js';
-import type { OAuthStateRepository } from '../repositories/types.js';
+import type { OAuthStateRepository, ProviderConnectionRepository } from '../repositories/types.js';
 
 const STATE_TTL_MS = 10 * 60 * 1000;
 
@@ -30,6 +30,8 @@ export interface ProviderOAuthRouteDeps {
   authService: AuthService;
   streamingRouter: StreamingRouter;
   oauthStates: OAuthStateRepository;
+  /** Used by GET /me — read-only; we never expose tokens through this route. */
+  providerConnections: ProviderConnectionRepository;
   configs: StreamingProviderOAuthRegistry;
   spotify?: { clientId: string; clientSecret: string; redirectUri: string };
   /** Where to send the user after a successful callback. */
@@ -43,6 +45,29 @@ export function providerOAuthRoutes(
 ): Hono<{ Variables: AuthVariables }> {
   const app = new HonoApp<{ Variables: AuthVariables }>();
   const postCallbackPath = deps.postCallbackPath ?? '/settings/providers';
+
+  /**
+   * GET /me — list the current account's connected providers. Read-only,
+   * never returns tokens; the UI uses this to render "Connect" vs "Connected
+   * as <displayName>" badges.
+   */
+  app.get('/me', requireAuth(deps.authService), async (c) => {
+    const auth = c.get('auth') as AuthContext;
+    if (!auth.currentAccountId) {
+      return c.json({ error: 'no_active_account' }, 400);
+    }
+    const rows = await deps.providerConnections.findAllForAccount(auth.currentAccountId);
+    return c.json({
+      connections: rows.map((row) => ({
+        providerId: row.providerId,
+        providerAccountId: row.providerAccountId,
+        displayName: row.displayName,
+        connectedByUserId: row.connectedByUserId,
+        connectedAt: row.createdAt,
+        updatedAt: row.updatedAt,
+      })),
+    });
+  });
 
   /** GET /:provider/start — requires provider:connect; redirects to provider authorize URL. */
   app.get('/:provider/start', requireClaim(deps.authService, 'provider:connect'), async (c) => {

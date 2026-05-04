@@ -95,6 +95,7 @@ async function setup(options: SetupOptions = {}) {
       authService,
       streamingRouter,
       oauthStates,
+      providerConnections,
       configs: defaultStreamingProviderOAuthConfigs,
       ...(options.fetchImpl !== undefined && { fetchImpl: options.fetchImpl }),
       ...(options.withSpotifyConfig !== false && {
@@ -301,5 +302,68 @@ describe('GET /:provider/callback', () => {
     });
     const res = await app.request('/connections/spotify/callback?code=c&state=st-bad');
     expect(res.status).toBe(502);
+  });
+});
+
+describe('GET /me — list current account connections', () => {
+  it('returns 401 without a session', async () => {
+    const { app } = await setup();
+    const res = await app.request('/connections/me');
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 400 when the session has no current account', async () => {
+    const { app, authService } = await setup();
+    // Issue a session with no currentAccountId — simulate a brand-new user
+    // who somehow hit /me before bootstrap (defensive case).
+    const issued = await authService.issueSession({
+      userId: USER_ID,
+      claimsSnapshot: ['provider:connect'],
+      nowEpochMs: NOW,
+    });
+    const cookie = `${SESSION_COOKIE_NAME}=${issued.token}`;
+    const res = await app.request('/connections/me', { headers: { cookie } });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe('no_active_account');
+  });
+
+  it('returns an empty list when nothing is connected', async () => {
+    const { app, authService } = await setup({ withClaim: true });
+    const cookie = await login(authService);
+    const res = await app.request('/connections/me', { headers: { cookie } });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { connections: unknown[] };
+    expect(body.connections).toEqual([]);
+  });
+
+  it('returns connection metadata without leaking tokens', async () => {
+    const { app, authService, providerConnections } = await setup({ withClaim: true });
+    await providerConnections.upsert({
+      accountId: ACCOUNT_ID,
+      providerId: 'spotify',
+      providerAccountId: 'spotify-user-1',
+      displayName: 'Ethan',
+      connectedByUserId: USER_ID,
+      accessToken: 'SECRET_AT',
+      refreshToken: 'SECRET_RT',
+    });
+    const cookie = await login(authService);
+    const res = await app.request('/connections/me', { headers: { cookie } });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      connections: Array<Record<string, unknown>>;
+    };
+    expect(body.connections).toHaveLength(1);
+    const [conn] = body.connections;
+    expect(conn).toMatchObject({
+      providerId: 'spotify',
+      providerAccountId: 'spotify-user-1',
+      displayName: 'Ethan',
+      connectedByUserId: USER_ID,
+    });
+    // Crucial: tokens must never be exposed.
+    expect(JSON.stringify(body)).not.toContain('SECRET_AT');
+    expect(JSON.stringify(body)).not.toContain('SECRET_RT');
   });
 });

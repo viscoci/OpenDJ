@@ -10,6 +10,7 @@ function fakeConfig(overrides: Partial<Config> = {}): Config {
     baseUrl: 'http://localhost:8888',
     loginProviders: {},
     postLoginPath: '/',
+    postProviderCallbackPath: '/host/dashboard',
     maxSongsPerGuest: 3,
     maxGuestsPerSession: null,
     moderationEnabledDefault: false,

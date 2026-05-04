@@ -32,6 +32,7 @@ const ConfigSchema = v.object({
     facebook: v.optional(LoginProviderCredsSchema),
   }),
   postLoginPath: v.pipe(v.string(), v.startsWith('/')),
+  postProviderCallbackPath: v.pipe(v.string(), v.startsWith('/')),
   maxSongsPerGuest: v.pipe(v.number(), v.integer(), v.minValue(1)),
   maxGuestsPerSession: v.union([v.pipe(v.number(), v.integer(), v.minValue(1)), v.null()]),
   moderationEnabledDefault: v.boolean(),
@@ -115,6 +116,7 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
   }
   candidate['loginProviders'] = loginProviders;
   candidate['postLoginPath'] = env['POST_LOGIN_PATH'] ?? '/';
+  candidate['postProviderCallbackPath'] = env['POST_PROVIDER_CALLBACK_PATH'] ?? '/host/dashboard';
 
   const result = v.safeParse(ConfigSchema, candidate);
   if (!result.success) {

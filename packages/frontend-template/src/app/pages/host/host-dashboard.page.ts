@@ -13,7 +13,7 @@ import {
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
-import { ApiError, type SessionWire } from '@opendj/frontend';
+import { ApiError, type ProviderConnectionWire, type SessionWire } from '@opendj/frontend';
 import { AuthService } from '../../services/auth.service.js';
 import { OpenDjClientService } from '../../services/opendj-client.service.js';
 
@@ -39,6 +39,31 @@ import { OpenDjClientService } from '../../services/opendj-client.service.js';
       } @else if (loadError()) {
         <p class="error">{{ loadError() }}</p>
       } @else {
+        <section class="provider-card">
+          <h2>Music providers</h2>
+          @if (spotifyConnection(); as conn) {
+            <div class="provider-row connected">
+              <div class="provider-meta">
+                <span class="provider-name">Spotify</span>
+                <span class="provider-detail"
+                  >Connected{{ conn.displayName ? ' as ' + conn.displayName : '' }}</span
+                >
+              </div>
+              <a class="ghost" [href]="spotifyConnectUrl()">Reconnect</a>
+            </div>
+          } @else {
+            <div class="provider-row">
+              <div class="provider-meta">
+                <span class="provider-name">Spotify</span>
+                <span class="provider-detail"
+                  >Connect to enable song search + playback in your sessions.</span
+                >
+              </div>
+              <a class="primary" [href]="spotifyConnectUrl()">Connect Spotify</a>
+            </div>
+          }
+        </section>
+
         <section class="create-card">
           <h2>Start a new session</h2>
           <form (ngSubmit)="createSession()">
@@ -138,12 +163,58 @@ import { OpenDjClientService } from '../../services/opendj-client.service.js';
         font: inherit;
         font-size: 13px;
       }
-      .create-card {
+      .create-card,
+      .provider-card {
         background: #1a1525;
         border: 1px solid #2c2440;
         border-radius: 14px;
         padding: 20px;
         margin-bottom: 16px;
+      }
+      .provider-card .provider-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+      }
+      .provider-row.connected .provider-name::before {
+        content: '● ';
+        color: #34d399;
+        margin-right: 4px;
+      }
+      .provider-meta {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        min-width: 0;
+      }
+      .provider-name {
+        font-weight: 600;
+        font-size: 14px;
+      }
+      .provider-detail {
+        font-size: 12px;
+        color: #a294c5;
+      }
+      a.primary {
+        background: #1db954;
+        color: #062013;
+        text-decoration: none;
+        padding: 8px 14px;
+        border-radius: 999px;
+        font-weight: 600;
+        font-size: 13px;
+        white-space: nowrap;
+      }
+      a.ghost {
+        background: transparent;
+        border: 1px solid #2c2440;
+        color: #c8b8e9;
+        text-decoration: none;
+        padding: 6px 12px;
+        border-radius: 999px;
+        font-size: 12px;
+        white-space: nowrap;
       }
       h2 {
         font-family: 'Syne', 'Inter', sans-serif;
@@ -254,12 +325,21 @@ export class HostDashboardPage {
   private readonly destroyRef = inject(DestroyRef);
 
   readonly sessions: WritableSignal<ReadonlyArray<SessionWire>> = signal([]);
+  readonly connections: WritableSignal<ReadonlyArray<ProviderConnectionWire>> = signal([]);
   readonly loading = signal(true);
   readonly loadError = signal<string | null>(null);
   readonly creating = signal(false);
   readonly createError = signal<string | null>(null);
 
   newSession = { name: '', qrSlug: '' };
+
+  spotifyConnection(): ProviderConnectionWire | null {
+    return this.connections().find((c) => c.providerId === 'spotify') ?? null;
+  }
+
+  spotifyConnectUrl(): string {
+    return this.client.client.providerConnections.startConnectUrl('spotify');
+  }
 
   constructor() {
     void this.refresh();
@@ -295,8 +375,14 @@ export class HostDashboardPage {
     this.loading.set(true);
     this.loadError.set(null);
     try {
-      const sessions = await this.client.client.sessions.listForCurrentAccount();
+      // Fetch sessions and provider connections in parallel — they're
+      // independent and the dashboard renders both before user can interact.
+      const [sessions, connections] = await Promise.all([
+        this.client.client.sessions.listForCurrentAccount(),
+        this.client.client.providerConnections.me().catch(() => [] as ProviderConnectionWire[]),
+      ]);
       this.sessions.set(sessions);
+      this.connections.set(connections);
     } catch (err) {
       if (err instanceof ApiError && err.code === 'no_active_account') {
         this.loadError.set('No account context — try signing out and back in.');
