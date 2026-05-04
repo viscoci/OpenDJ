@@ -15,61 +15,89 @@ OpenDJ is the **public OSS foundation** for a collaborative music queue product.
 
 A working hosted implementation lives at [opendj.live](https://opendj.live), built on these libraries. **The hosted product is a separate, private repository** ([`opendj-live`](https://github.com/viscoci/opendj-live)) — not the same source code with private files removed.
 
-## Status
+## What's working
 
-🚧 **Early scaffold.** Package boundaries, TypeScript contracts, CI, and conventions are in place. Real implementations land package-by-package — see [`ROADMAP.md`](./ROADMAP.md).
+End-to-end demo via `docker compose up`:
+
+- 🎟️ **Guest journey** — scan QR → land on `/u/:slug` → fingerprint-based identity → request songs (3-per-guest cap, configurable)
+- 🎛️ **Host journey** — register / log in (email + password or Google OAuth) → personal account auto-bootstrapped → create session → moderate the queue (approve / reject pending) → end session
+- 🎵 **Spotify provider** — OAuth connect from the host dashboard, search proxied through `/api/v1/sessions/:id/search`
+- 🔌 **Realtime** — WebSocket room per session, in-process registry on Node, swappable backend
+- 📧 **Account flows** — email verification + password reset (both single-use, SHA-256-hashed token storage)
+- 🛡️ **Auth model** — `__Host-` prefixed cookies for hosts, opaque bearer tokens for guest slots, capability-based claims (`session:create`, `queue:moderate`, etc.) checked per-request
+
+> **Status:** every package has a real implementation, `pnpm turbo run typecheck test` is green across the workspace (~600 tests), and `apps/oss-demo` boots end-to-end behind a single port. The first migration is generated and applied automatically on container start.
 
 ## Quickstart (self-host)
-
-> The OSS demo is being scaffolded — full instructions land in [`docs/ONBOARDING.md`](./docs/ONBOARDING.md) once `apps/oss-demo` boots.
 
 ```bash
 git clone https://github.com/viscoci/opendj.git
 cd opendj
 pnpm install
-pnpm turbo run lint typecheck test
+pnpm turbo run lint typecheck test    # ~7s, all green
 ```
 
-When the demo is ready:
+### Run the demo locally
 
 ```bash
+cp apps/oss-demo/.env.example apps/oss-demo/.env
+# Edit .env — fill SPOTIFY_CLIENT_ID + SPOTIFY_CLIENT_SECRET if you want
+# the search proxy to work. Without them everything else still runs.
+
 cd apps/oss-demo
-cp .env.example .env   # fill SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET
-docker compose up
+docker compose up --build
 # → http://localhost:8888
+#   GET /              → Angular frontend (guest landing)
+#   GET /host/login    → host login / register
+#   GET /api/v1/health → { ok: true }
 ```
+
+The container runs Drizzle migrations against the bundled Postgres on startup, so the first boot self-bootstraps the schema.
+
+### Use the demo
+
+1. Open http://localhost:8888/host/register and create a host account
+2. From the dashboard, click **Connect Spotify** (requires Spotify creds in `.env`)
+3. Click **Create session** — you get a `qrSlug`
+4. Open `http://localhost:8888/u/<qrSlug>` in another browser / mobile to play guest
+5. Search + request a song; back on the host page, approve it from the queue
+
+### Screenshots
+
+> _Coming with the next merge — capture from the running demo._
 
 ## Repo layout
 
 ```
 packages/
   core/              Pure TS domain logic, provider contracts, queue rules
-  db/                Drizzle schema + migrations
+  db/                Drizzle schema + migrations + on-boot migrator
   auth/              OSS identity, OAuth/OIDC, password fallback, sessions, claims
   backend/           Hono routes/services usable from Node + Workers
   realtime/          Runtime-neutral realtime room contracts + events
   abuse/             Abuse signals, risk scoring, rate-limit contracts
   sync/              Song timing/synchronization primitives
-  lyrics/            Lyrics lookup, LRC parsing, LRCLIB adapter, feedback
-  frontend/          Reusable Angular components + services
-  frontend-template/ Basic Angular 21 OSS frontend (Capacitor-ready, web-first)
+  lyrics/            Lyrics lookup, LRC parsing, LRCLIB adapter
+  frontend/          Reusable Angular components + typed OpenDjClient
+  frontend-template/ Angular 21 OSS frontend (Capacitor-ready, web-first)
   app-shell/         Browser/Capacitor platform adapter interfaces
-  agent-tools/       Dev-only MCP server (P2)
+  agent-tools/       Dev-only MCP server (P2 reservation)
 apps/
-  oss-demo/          Reference self-host: Node + Postgres via docker compose
+  oss-demo/          Reference self-host: Node + Postgres via Docker Compose
 examples/            Minimal usage examples
 docs/                Architecture, providers, repo boundary, agent guide
 ```
 
-See [`docs/agent-brief.md`](./docs/agent-brief.md) for the full architectural specification.
+See [`docs/agent-brief.md`](./docs/agent-brief.md) for the full architectural specification and [`ROADMAP.md`](./ROADMAP.md) for what's done vs what's next.
 
 ## Tech stack
 
 - **TypeScript strict** everywhere — no exceptions
 - **Hono** server framework (Node + Cloudflare Workers compatible)
 - **Drizzle ORM + Postgres** (Postgres.js adapter; Workers + Node)
-- **Angular 21** for the OSS frontend template (standalone, signals, zoneless)
+- **Angular 21** for the OSS frontend template (standalone components, signals, zoneless change detection)
 - **Capacitor-ready** but web-first; native shells live in `opendj-live`
+- **Argon2id** password hashing
 - **Vitest** for unit tests
 - **Turborepo + pnpm workspaces**
 - **Changesets** for versioning and changelogs
