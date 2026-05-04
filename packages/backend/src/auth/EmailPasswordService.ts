@@ -20,6 +20,7 @@ import { AuthService, type IssuedSession } from './AuthService.js';
 import type { AccountService } from '../account/AccountService.js';
 import type {
   AuthIdentityRepository,
+  MembershipRepository,
   PasswordCredentialRepository,
   UserRepository,
 } from '../repositories/types.js';
@@ -46,9 +47,16 @@ export interface EmailPasswordServiceDeps {
   /**
    * Optional account bootstrap service. When supplied, registration auto-
    * creates a personal account + owner membership so the new user can
-   * immediately create sessions, connect providers, etc.
+   * immediately create sessions, connect providers, etc. Login also uses
+   * it as a fallback to bootstrap if the user somehow has no membership.
    */
   accountService?: AccountService;
+  /**
+   * Optional. When supplied, login picks the user's first active membership
+   * and stamps `currentAccountId` on the issued session — otherwise the
+   * post-login session has empty claims and the host UI can't act.
+   */
+  memberships?: MembershipRepository;
 }
 
 export interface RegisterInput {
@@ -182,8 +190,29 @@ export class EmailPasswordService {
       await this.deps.passwordCredentials.resetFailedAttempts(user.id);
     }
 
+    // Pick the user's active account so the issued session lands with the
+    // right claim snapshot. Falls back to bootstrap if the user somehow has
+    // no membership (e.g. an OAuth-first user logging in before a personal
+    // account was wired up). The frontend can switch later via /switch-account.
+    let currentAccountId: string | null = null;
+    if (this.deps.memberships) {
+      const memberships = await this.deps.memberships.findAllForUser(user.id);
+      const active = memberships
+        .filter((m) => m.status === 'active')
+        .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+      if (active.length > 0) currentAccountId = active[0]!.accountId;
+    }
+    if (!currentAccountId && this.deps.accountService) {
+      const result = await this.deps.accountService.bootstrapPersonalAccount({
+        userId: user.id,
+        displayNameHint: user.displayName ?? email.split('@')[0]!,
+      });
+      currentAccountId = result.account.id;
+    }
+
     return this.deps.authService.issueSession({
       userId: user.id,
+      ...(currentAccountId !== null && { currentAccountId }),
       ...(nowEpochMs !== undefined && { nowEpochMs }),
       ...(input.ipHash !== undefined && { ipHash: input.ipHash }),
       ...(input.userAgentHash !== undefined && { userAgentHash: input.userAgentHash }),

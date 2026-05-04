@@ -57,6 +57,14 @@ function mapErrorToStatus(code: string): { status: number; payload: { error: str
   }
 }
 
+/**
+ * UUID v4-ish shape — tightened to keep route handlers from passing
+ * malformed strings to Postgres (which throws 500 instead of returning a
+ * clean 404). The session ID column is `uuid`, so anything that isn't shaped
+ * like a UUID definitely isn't a session.
+ */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export function sessionRoutes(deps: SessionRouteDeps): Hono<{ Variables: AuthVariables }> {
   const app = new Hono<{ Variables: AuthVariables }>();
 
@@ -107,6 +115,7 @@ export function sessionRoutes(deps: SessionRouteDeps): Hono<{ Variables: AuthVar
   /** GET /:id — public read for hydration. */
   app.get('/:id', async (c) => {
     const id = c.req.param('id') ?? '';
+    if (!UUID_RE.test(id)) return c.json({ error: 'session_not_found' }, 404);
     try {
       const session = await deps.sessionService.getById(id);
       return c.json({ session });

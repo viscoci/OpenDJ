@@ -205,6 +205,7 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
     users: repositories.users,
     authIdentities: repositories.authIdentities,
     passwordCredentials: repositories.passwordCredentials,
+    memberships: repositories.memberships,
     passwordHasher,
     authService,
     accountService,
