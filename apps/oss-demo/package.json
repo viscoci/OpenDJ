@@ -11,7 +11,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "echo \"(oss-demo) no tests yet\" && exit 0",
     "start": "tsx src/main.ts",
-    "db:migrate": "pnpm --filter @opendj/db db:generate"
+    "db:migrate": "pnpm --filter @opendj/db db:migrate"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.0",

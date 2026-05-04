@@ -25,6 +25,7 @@ import { serve } from '@hono/node-server';
 import { createNodeWebSocket } from '@hono/node-ws';
 import { ConfigError, createApp, createDeps, loadConfig } from '@opendj/backend';
 import { createDb } from '@opendj/db';
+import { runMigrations } from '@opendj/db/migrate';
 
 async function main(): Promise<void> {
   let config;
@@ -37,6 +38,21 @@ async function main(): Promise<void> {
       process.exit(1);
     }
     throw err;
+  }
+
+  // Apply pending migrations before opening the long-lived pool. The migrator
+  // uses its own `max:1` connection so it doesn't share state with the app
+  // pool, and it fast-fails the boot if the DB is unreachable or schema drift
+  // produces an unapplyable migration.
+  if (process.env['SKIP_MIGRATIONS'] !== '1') {
+    console.log('[opendj-oss-demo] applying migrations…');
+    try {
+      await runMigrations({ databaseUrl: config.databaseUrl });
+      console.log('[opendj-oss-demo] migrations up to date');
+    } catch (err) {
+      console.error('[opendj-oss-demo] migration failed:', err);
+      process.exit(1);
+    }
   }
 
   const db = createDb(config.databaseUrl);

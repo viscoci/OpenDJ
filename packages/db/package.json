@@ -14,6 +14,10 @@
     "./schema": {
       "types": "./src/schema/index.ts",
       "import": "./src/schema/index.ts"
+    },
+    "./migrate": {
+      "types": "./src/migrate.ts",
+      "import": "./src/migrate.ts"
     }
   },
   "files": [
@@ -26,7 +30,8 @@
     "lint": "eslint src",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
-    "db:generate": "cross-env NODE_OPTIONS=\"--import tsx\" drizzle-kit generate"
+    "db:generate": "cross-env NODE_OPTIONS=\"--import tsx\" drizzle-kit generate",
+    "db:migrate": "tsx src/bin/migrate.ts"
   },
   "dependencies": {
     "@opendj/core": "workspace:*",
@@ -34,6 +39,7 @@
     "postgres": "^3.4.0"
   },
   "devDependencies": {
+    "@types/node": "^22.10.0",
     "cross-env": "^7.0.3",
     "drizzle-kit": "^0.30.0",
     "tsx": "^4.19.0",
