@@ -182,7 +182,7 @@ export interface GuestSlotRepository {
   findFirstQueued(sessionId: string): Promise<GuestSlotRecord | null>;
 }
 
-export type QueueItemStatus = 'pending' | 'approved' | 'queued' | 'playing' | 'rejected';
+export type QueueItemStatus = 'pending' | 'approved' | 'queued' | 'playing' | 'played' | 'rejected';
 
 export interface QueueItemRecord {
   id: string;

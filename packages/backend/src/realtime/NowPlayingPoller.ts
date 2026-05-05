@@ -50,13 +50,25 @@ import {
   StreamingRouter,
 } from '../providers/streaming/StreamingRouter.js';
 import type { RealtimeRoomManager } from './RoomRegistryImpl.js';
-import type { ProviderConnectionRepository, SessionRepository } from '../repositories/types.js';
+import type {
+  ProviderConnectionRepository,
+  QueueItemRepository,
+  SessionRepository,
+} from '../repositories/types.js';
 
 export interface NowPlayingPollerDeps {
   sessions: SessionRepository;
   providerConnections: ProviderConnectionRepository;
   streamingRouter: StreamingRouter;
   roomManager: RealtimeRoomManager;
+  /**
+   * When supplied, the poller reconciles OpenDJ queue item status against
+   * the provider's actual playback state each tick — items that have
+   * rolled past the now-playing slot get marked `played` so they stop
+   * counting against the per-guest cap. Optional for tests + Workers
+   * deploys that don't materialize queue items.
+   */
+  queueItems?: QueueItemRepository;
 }
 
 export interface NowPlayingPollerOptions {
@@ -246,9 +258,11 @@ export class NowPlayingPoller {
       // now-playing. Costs one extra Spotify API call per tick when the
       // provider supports it; same auth as getNowPlaying so it shares
       // the 401/429 paths below.
+      let providerQueue: ReadonlyArray<Track> = snapshot.providerQueue;
       if (supportsQueueRead(provider)) {
         try {
           const queue = await provider.getQueue();
+          providerQueue = queue;
           if (this.providerQueueChanged(snapshot.providerQueue, queue)) {
             await room.publish({ type: 'provider_queue.updated', tracks: queue });
           }
@@ -261,6 +275,16 @@ export class NowPlayingPoller {
             error: (qErr as Error).message,
           });
         }
+      }
+
+      // Reconcile OpenDJ queue items against the provider's reality:
+      // anything `approved` whose URI no longer appears in (now-playing ∪
+      // providerQueue) has rolled past, mark it `played` so it stops
+      // counting against the per-guest cap. 30s grace window prevents
+      // racing newly-pushed items that haven't yet shown up on the next
+      // queue read.
+      if (this.deps.queueItems) {
+        await this.reconcileQueue(sessionId, next, providerQueue);
       }
 
       // Successful tick clears any backoff.
@@ -333,6 +357,46 @@ export class NowPlayingPoller {
       if (prev[i]!.uri !== next[i]!.uri) return true;
     }
     return false;
+  }
+
+  /**
+   * Mark approved OpenDJ queue items as `played` once they're no longer
+   * present on the provider side. Items < `RECONCILE_GRACE_MS` old are
+   * skipped — they may have been pushed to Spotify but not yet appear in
+   * the next /queue response.
+   *
+   * Approved items whose URI matches the current now-playing track are
+   * promoted to `playing`; when the now-playing then transitions to a
+   * different URI on the next tick the same approved items will be
+   * reconciled to `played`.
+   */
+  private async reconcileQueue(
+    sessionId: string,
+    nowPlaying: NowPlayingTrack | null,
+    providerQueue: ReadonlyArray<Track>,
+  ): Promise<void> {
+    const repo = this.deps.queueItems!;
+    const RECONCILE_GRACE_MS = 30_000;
+    const now = Date.now();
+    const liveUris = new Set<string>();
+    if (nowPlaying) liveUris.add(nowPlaying.uri);
+    for (const t of providerQueue) liveUris.add(t.uri);
+
+    const items = await repo.findAllForSession(sessionId);
+    for (const item of items) {
+      if (item.status !== 'approved' && item.status !== 'playing') continue;
+      const ageMs = now - item.createdAt.getTime();
+      if (ageMs < RECONCILE_GRACE_MS) continue;
+
+      const isCurrent = nowPlaying?.uri === item.trackUri;
+      const isQueued = providerQueue.some((t) => t.uri === item.trackUri);
+
+      if (isCurrent && item.status !== 'playing') {
+        await repo.setStatus({ id: item.id, status: 'playing' });
+      } else if (!isCurrent && !isQueued) {
+        await repo.setStatus({ id: item.id, status: 'played', decidedAt: new Date(now) });
+      }
+    }
   }
 }
 

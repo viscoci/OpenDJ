@@ -4,7 +4,14 @@
  * Schema mirror: see docs/agent-brief.md §"Database schema" → `queue_items`.
  */
 
-export type QueueItemStatus = 'pending' | 'approved' | 'queued' | 'playing' | 'rejected';
+/**
+ * `played` is a terminal status that the NowPlayingPoller flips approved
+ * items into once Spotify's now-playing has moved past them. Like
+ * `rejected`, it's NOT included in `ACTIVE_QUEUE_STATUSES` — past tracks
+ * don't count against per-guest caps and don't appear in the visible
+ * queue.
+ */
+export type QueueItemStatus = 'pending' | 'approved' | 'queued' | 'playing' | 'played' | 'rejected';
 
 export interface QueueItem {
   id: string;
