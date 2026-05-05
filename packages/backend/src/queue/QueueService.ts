@@ -318,20 +318,45 @@ export class QueueService {
    * the next NowPlayingPoller tick will reconcile.
    */
   private async pushToProviderQueue(accountId: string, track: Track): Promise<void> {
-    if (!this.deps.streamingRouter || !this.deps.providerConnections) return;
+    if (!this.deps.streamingRouter || !this.deps.providerConnections) {
+      // eslint-disable-next-line no-console
+      console.warn('[QueueService] pushToProviderQueue skipped: streaming router not wired');
+      return;
+    }
     const conns = await this.deps.providerConnections.findAllForAccount(accountId);
     const conn = conns[0];
-    if (!conn) return;
+    if (!conn) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[QueueService] pushToProviderQueue skipped: no provider connection for account ${accountId}`,
+      );
+      return;
+    }
     try {
       const provider = await this.deps.streamingRouter.getProvider(accountId, conn.providerId);
-      if (!supportsQueueTrack(provider)) return;
+      if (!supportsQueueTrack(provider)) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[QueueService] pushToProviderQueue skipped: provider ${conn.providerId} does not support queueTrack`,
+        );
+        return;
+      }
       await provider.queueTrack(track);
+      // eslint-disable-next-line no-console
+      console.log(
+        `[QueueService] pushed "${track.name}" to ${conn.providerId} queue for account ${accountId}`,
+      );
     } catch (err) {
       // Swallow — host UI will still show the OpenDJ row, and the next
-      // poller tick will reflect the truth on the provider side. The
-      // common case here is "host playback paused" or "no active device".
+      // poller tick will reflect the truth on the provider side. Common
+      // failures: NO_ACTIVE_DEVICE (host has no active Spotify Connect
+      // target), 403 (free Spotify account — Connect API is Premium
+      // only), 401 (token can't be refreshed).
+      const e = err as Error & { status?: number; code?: string };
       // eslint-disable-next-line no-console
-      console.warn('[QueueService] pushToProviderQueue failed:', (err as Error).message);
+      console.warn(
+        `[QueueService] pushToProviderQueue failed: ${e.message}${e.status ? ` [HTTP ${e.status}]` : ''}${e.code ? ` [${e.code}]` : ''}`,
+      );
     }
   }
 }

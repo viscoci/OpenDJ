@@ -104,41 +104,46 @@ import { OpenDjClientService } from '../../services/opendj-client.service.js';
           </div>
         </section>
 
-        <section class="queue card">
-          <h2>Queue</h2>
-          <app-queue-list
-            [items]="queue()"
-            mode="host"
-            (approve)="moderate($event, 'approved')"
-            (reject)="moderate($event, 'rejected')"
-            (remove)="onRemove($event)"
-            emptyText="No guest requests yet. Send guests to the URL above."
-          />
-        </section>
+        @if (pendingItems().length > 0) {
+          <section class="card pending">
+            <h2>Pending review</h2>
+            <p class="hint">Approve to send to Spotify.</p>
+            <app-queue-list
+              [items]="pendingItems()"
+              mode="host"
+              (approve)="moderate($event, 'approved')"
+              (reject)="moderate($event, 'rejected')"
+            />
+          </section>
+        }
 
-        @if (providerQueue().length > 0) {
-          <section class="card provider-queue">
-            <h2>Up next on Spotify</h2>
-            <p class="hint">
-              The host's actual playback queue. Approved guest requests slot in here automatically.
+        <section class="card up-next">
+          <h2>Up next</h2>
+          @if (providerQueue().length === 0 && approvedItems().length === 0) {
+            <p class="empty">
+              Queue is empty. Send guests to the URL above to start filling it up.
             </p>
-            <ul class="provider-queue-list">
-              @for (track of providerQueue().slice(0, 10); track track.uri) {
-                <li class="provider-queue-row">
-                  @if (track.albumArt) {
-                    <img class="art" [src]="track.albumArt" alt="" />
+          } @else {
+            <ul class="up-next-list">
+              @for (entry of mergedQueue(); track entry.key) {
+                <li class="row" [class.requested]="entry.openDjItem">
+                  @if (entry.track.albumArt) {
+                    <img class="art" [src]="entry.track.albumArt" alt="" />
                   } @else {
                     <span class="art empty" aria-hidden="true">♪</span>
                   }
                   <span class="meta">
-                    <span class="name">{{ track.name }}</span>
-                    <span class="artist">{{ track.artist }}</span>
+                    <span class="name">{{ entry.track.name }}</span>
+                    <span class="artist">{{ entry.track.artist }}</span>
                   </span>
+                  @if (entry.openDjItem) {
+                    <span class="badge requested">Requested</span>
+                  }
                 </li>
               }
             </ul>
-          </section>
-        }
+          }
+        </section>
 
         @if (recentlyPlayed().length > 0) {
           <section class="card recently">
@@ -276,56 +281,82 @@ import { OpenDjClientService } from '../../services/opendj-client.service.js';
       .loading {
         color: #a294c5;
       }
-      .provider-queue .hint {
+      .pending .hint,
+      .up-next .hint {
         margin: 0 0 12px;
         font-size: 12px;
         color: #a294c5;
       }
-      .provider-queue-list {
+      .up-next-list {
         list-style: none;
         margin: 0;
         padding: 0;
         display: flex;
         flex-direction: column;
-        gap: 4px;
+        gap: 6px;
       }
-      .provider-queue-row {
+      .up-next-list .row {
         display: grid;
-        grid-template-columns: 32px 1fr;
+        grid-template-columns: 36px 1fr auto;
         gap: 10px;
         align-items: center;
-        padding: 6px 0;
+        padding: 8px 12px;
+        background: #0c0a14;
+        border: 1px solid #2c2440;
+        border-radius: 8px;
       }
-      .provider-queue-row .art {
-        width: 32px;
-        height: 32px;
+      .up-next-list .row.requested {
+        border-color: rgba(168, 85, 247, 0.4);
+      }
+      .up-next-list .art {
+        width: 36px;
+        height: 36px;
         border-radius: 4px;
         object-fit: cover;
         background: #0c0a14;
       }
-      .provider-queue-row .art.empty {
+      .up-next-list .art.empty {
         display: grid;
         place-items: center;
         color: #6e5e8a;
       }
-      .provider-queue-row .meta {
+      .up-next-list .meta {
         min-width: 0;
         display: flex;
         flex-direction: column;
         gap: 1px;
       }
-      .provider-queue-row .name {
+      .up-next-list .name {
         font-size: 13px;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
       }
-      .provider-queue-row .artist {
+      .up-next-list .artist {
         font-size: 11px;
         color: #a294c5;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
+      }
+      .badge.requested {
+        background: linear-gradient(135deg, rgba(168, 85, 247, 0.2), rgba(236, 72, 153, 0.2));
+        border: 1px solid rgba(168, 85, 247, 0.4);
+        color: #fff;
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-size: 10px;
+        font-family: 'JetBrains Mono', ui-monospace, monospace;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      .empty {
+        margin: 0;
+        font-size: 13px;
+        color: #a294c5;
+        font-style: italic;
+        padding: 16px 0;
+        text-align: center;
       }
     `,
   ],
@@ -355,6 +386,60 @@ export class HostSessionPage {
     if (!s) return '';
     if (typeof globalThis.location === 'undefined') return `/u/${s.qrSlug}`;
     return `${globalThis.location.origin}/u/${s.qrSlug}`;
+  });
+
+  /** Queue items still awaiting moderation. Drives the "Pending review" tray. */
+  readonly pendingItems = computed(() => this.queue().filter((i) => i.status === 'pending'));
+
+  /** OpenDJ-mediated requests that have been approved (moderation on or off). */
+  readonly approvedItems = computed(() =>
+    this.queue().filter((i) => i.status === 'approved' || i.status === 'queued'),
+  );
+
+  /**
+   * One unified Up-Next list. Spotify's queue is the source of truth — each
+   * entry knows whether it came from an OpenDJ guest request (matched by
+   * trackUri against the approved queue) so the UI can badge it. Approved
+   * OpenDJ items that haven't yet shown up on Spotify (e.g. push failed,
+   * not yet polled) tail the list so the host still sees them.
+   */
+  readonly mergedQueue = computed(() => {
+    const provider = this.providerQueue();
+    const approved = this.approvedItems();
+    const used = new Set<string>();
+    const entries: Array<{
+      key: string;
+      track: { uri: string; name: string; artist: string; albumArt: string | null };
+      openDjItem: QueueListItem | null;
+    }> = [];
+
+    let i = 0;
+    for (const t of provider) {
+      const match = approved.find((q) => q.trackUri === t.uri && !used.has(q.id));
+      if (match) used.add(match.id);
+      entries.push({
+        key: `p-${i++}-${t.uri}`,
+        track: { uri: t.uri, name: t.name, artist: t.artist, albumArt: t.albumArt },
+        openDjItem: match ?? null,
+      });
+    }
+    // OpenDJ items the provider hasn't picked up yet — likely a queue push
+    // that didn't make it (e.g. NO_ACTIVE_DEVICE). Show them so the host
+    // doesn't think the request vanished.
+    for (const q of approved) {
+      if (used.has(q.id)) continue;
+      entries.push({
+        key: `o-${q.id}`,
+        track: {
+          uri: q.trackUri,
+          name: q.trackName,
+          artist: q.artistName,
+          albumArt: q.albumArtUrl,
+        },
+        openDjItem: q,
+      });
+    }
+    return entries;
   });
 
   private realtime: RealtimeClient | null = null;

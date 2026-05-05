@@ -110,41 +110,39 @@ import { OpenDjClientService } from '../services/opendj-client.service.js';
           }
         </section>
 
-        @if (providerQueue().length > 0) {
-          <section class="card queue-section">
-            <h2>Up next</h2>
-            <ul class="provider-queue">
-              @for (track of providerQueue().slice(0, 6); track track.uri) {
-                <li class="provider-queue-row">
-                  @if (track.albumArt) {
-                    <img class="art" [src]="track.albumArt" alt="" />
+        <section class="card queue-section">
+          <h2>Up next</h2>
+          @if (mergedQueue().length === 0) {
+            <p class="empty">Nothing queued yet — be the first.</p>
+          } @else {
+            <ul class="merged-queue">
+              @for (entry of mergedQueue(); track entry.key) {
+                <li
+                  class="merged-row"
+                  [class.requested]="entry.openDjItem"
+                  [class.mine]="entry.isMine"
+                >
+                  @if (entry.track.albumArt) {
+                    <img class="art" [src]="entry.track.albumArt" alt="" />
                   } @else {
                     <span class="art empty" aria-hidden="true">♪</span>
                   }
                   <span class="meta">
-                    <span class="name">{{ track.name }}</span>
-                    <span class="artist">{{ track.artist }}</span>
+                    <span class="name">
+                      @if (entry.isMine) {
+                        <span class="badge mine">Yours</span>
+                      } @else if (entry.openDjItem) {
+                        <span class="badge requested">Requested</span>
+                      }
+                      {{ entry.track.name }}
+                    </span>
+                    <span class="artist">{{ entry.track.artist }}</span>
                   </span>
                 </li>
               }
             </ul>
-          </section>
-        }
-
-        @if (visibleQueue().length > 0) {
-          <section class="card queue-section">
-            <h2>Guest requests</h2>
-            <app-queue-list
-              [items]="visibleQueue()"
-              mode="guest"
-              [currentGuestId]="slot()?.guestId ?? null"
-              [voteThreshold]="session()!.voteSkipThreshold ?? 5"
-              [votedItemIds]="votedItemIds()"
-              (voteSkip)="onVoteSkip($event)"
-              emptyText="Nothing queued yet — be the first."
-            />
-          </section>
-        }
+          }
+        </section>
 
         @if (recentlyPlayed().length > 0) {
           <section class="card recently-played-section">
@@ -228,7 +226,7 @@ import { OpenDjClientService } from '../services/opendj-client.service.js';
       .toast.error {
         color: #fda4af;
       }
-      .provider-queue {
+      .merged-queue {
         list-style: none;
         margin: 0;
         padding: 0;
@@ -236,42 +234,81 @@ import { OpenDjClientService } from '../services/opendj-client.service.js';
         flex-direction: column;
         gap: 6px;
       }
-      .provider-queue-row {
+      .merged-row {
         display: grid;
-        grid-template-columns: 36px 1fr;
+        grid-template-columns: 40px 1fr;
         gap: 10px;
         align-items: center;
+        padding: 8px 12px;
+        background: #0c0a14;
+        border: 1px solid #2c2440;
+        border-radius: 8px;
       }
-      .provider-queue-row .art {
-        width: 36px;
-        height: 36px;
+      .merged-row.requested {
+        border-color: rgba(168, 85, 247, 0.3);
+      }
+      .merged-row.mine {
+        border-color: rgba(168, 85, 247, 0.6);
+      }
+      .merged-row .art {
+        width: 40px;
+        height: 40px;
         border-radius: 4px;
         object-fit: cover;
         background: #0c0a14;
       }
-      .provider-queue-row .art.empty {
+      .merged-row .art.empty {
         display: grid;
         place-items: center;
         color: #6e5e8a;
       }
-      .provider-queue-row .meta {
+      .merged-row .meta {
         min-width: 0;
         display: flex;
         flex-direction: column;
-        gap: 1px;
+        gap: 2px;
       }
-      .provider-queue-row .name {
+      .merged-row .name {
         font-size: 13px;
+        font-weight: 500;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
       }
-      .provider-queue-row .artist {
+      .merged-row .artist {
         font-size: 11px;
         color: #a294c5;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
+      }
+      .badge {
+        display: inline-block;
+        padding: 2px 6px;
+        border-radius: 999px;
+        font-size: 9px;
+        font-family: 'JetBrains Mono', ui-monospace, monospace;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin-right: 6px;
+      }
+      .badge.requested {
+        background: rgba(168, 85, 247, 0.15);
+        border: 1px solid rgba(168, 85, 247, 0.35);
+        color: #d8b4fe;
+      }
+      .badge.mine {
+        background: linear-gradient(135deg, rgba(168, 85, 247, 0.3), rgba(236, 72, 153, 0.3));
+        border: 1px solid rgba(168, 85, 247, 0.5);
+        color: #fff;
+      }
+      .empty {
+        margin: 0;
+        font-size: 13px;
+        color: #a294c5;
+        font-style: italic;
+        text-align: center;
+        padding: 16px 0;
       }
     `,
   ],
@@ -301,6 +338,54 @@ export class GuestRequestPage {
   readonly visibleQueue = computed(() =>
     this.queue().filter((i) => i.status !== 'rejected' && i.status !== 'pending'),
   );
+
+  /**
+   * Unified Up-Next list: provider queue is the source of truth, with
+   * OpenDJ-mediated rows annotated. Items the guest themselves added get
+   * the "Yours" pill; other guest-requested items get the "Requested"
+   * pill. Items that are still waiting to push to Spotify (e.g. host has
+   * no active device) tail the list so guests see their request didn't
+   * vanish.
+   */
+  readonly mergedQueue = computed(() => {
+    const provider = this.providerQueue();
+    const opendj = this.visibleQueue();
+    const myGuestId = this.slot()?.guestId ?? null;
+    const used = new Set<string>();
+    const entries: Array<{
+      key: string;
+      track: { uri: string; name: string; artist: string; albumArt: string | null };
+      openDjItem: { id: string; guestId: string } | null;
+      isMine: boolean;
+    }> = [];
+
+    let i = 0;
+    for (const t of provider) {
+      const match = opendj.find((q) => q.trackUri === t.uri && !used.has(q.id));
+      if (match) used.add(match.id);
+      entries.push({
+        key: `p-${i++}-${t.uri}`,
+        track: { uri: t.uri, name: t.name, artist: t.artist, albumArt: t.albumArt },
+        openDjItem: match ?? null,
+        isMine: !!match && myGuestId !== null && match.guestId === myGuestId,
+      });
+    }
+    for (const q of opendj) {
+      if (used.has(q.id)) continue;
+      entries.push({
+        key: `o-${q.id}`,
+        track: {
+          uri: q.trackUri,
+          name: q.trackName,
+          artist: q.artistName,
+          albumArt: q.albumArtUrl,
+        },
+        openDjItem: q,
+        isMine: myGuestId !== null && q.guestId === myGuestId,
+      });
+    }
+    return entries;
+  });
 
   readonly sessionEnded = computed(() => {
     const s = this.session();
