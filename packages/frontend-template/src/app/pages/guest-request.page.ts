@@ -103,6 +103,29 @@ import { buildQueueEtaMs, formatEta } from '../utils/queue-eta.js';
           />
         </section>
 
+        @if (myPendingItems().length > 0) {
+          <section class="card pending-section">
+            <h2>Awaiting host approval</h2>
+            <p class="pending-hint">Your requests will appear in Up Next once the host approves.</p>
+            <ul class="pending-list">
+              @for (item of myPendingItems(); track item.id) {
+                <li class="pending-row">
+                  @if (item.albumArtUrl) {
+                    <img class="art" [src]="item.albumArtUrl" alt="" />
+                  } @else {
+                    <span class="art empty" aria-hidden="true">♪</span>
+                  }
+                  <span class="meta">
+                    <span class="name">{{ item.trackName }}</span>
+                    <span class="artist">{{ item.artistName }}</span>
+                  </span>
+                  <span class="badge pending">Pending</span>
+                </li>
+              }
+            </ul>
+          </section>
+        }
+
         <section class="card request-form">
           <h2>Request a song</h2>
           <app-search-result-list
@@ -383,6 +406,69 @@ import { buildQueueEtaMs, formatEta } from '../utils/queue-eta.js';
         text-align: center;
         padding: 16px 0;
       }
+      .pending-section {
+        border-color: rgba(250, 204, 21, 0.35);
+      }
+      .pending-hint {
+        margin: 0 0 12px;
+        font-size: 12px;
+        color: #a294c5;
+      }
+      .pending-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .pending-row {
+        display: grid;
+        grid-template-columns: 40px 1fr auto;
+        gap: 10px;
+        align-items: center;
+        padding: 8px 12px;
+        background: #0c0a14;
+        border: 1px solid rgba(250, 204, 21, 0.25);
+        border-radius: 8px;
+      }
+      .pending-row .art {
+        width: 40px;
+        height: 40px;
+        border-radius: 4px;
+        object-fit: cover;
+        background: #0c0a14;
+      }
+      .pending-row .art.empty {
+        display: grid;
+        place-items: center;
+        color: #6e5e8a;
+      }
+      .pending-row .meta {
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .pending-row .name {
+        font-size: 13px;
+        font-weight: 500;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .pending-row .artist {
+        font-size: 11px;
+        color: #a294c5;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .badge.pending {
+        background: rgba(250, 204, 21, 0.15);
+        border: 1px solid rgba(250, 204, 21, 0.4);
+        color: #fde68a;
+      }
     `,
   ],
 })
@@ -453,6 +539,19 @@ export class GuestRequestPage {
   );
 
   /**
+   * The guest's own pending requests (moderation sessions only). Surface
+   * them as a separate strip so the guest can see what they've already
+   * submitted while the host is still approving — otherwise they have
+   * no visual reference and tend to keep re-clicking Add on the same
+   * track.
+   */
+  readonly myPendingItems = computed(() => {
+    const myGuestId = this.slot()?.guestId ?? null;
+    if (!myGuestId) return [];
+    return this.queue().filter((i) => i.status === 'pending' && i.guestId === myGuestId);
+  });
+
+  /**
    * Map of trackUri → ms until that track plays. Indexed against the
    * provider queue + now-playing remaining time. Backs the search-result
    * "in queue · ~5 min" pill and the future host ETA badges.
@@ -464,7 +563,11 @@ export class GuestRequestPage {
   /**
    * Closure for SearchResultListComponent — returns null when the track
    * isn't in the active queue, otherwise a `{label, tooltip}` for the
-   * pill.
+   * pill. Distinguishes pending (host hasn't approved yet, moderation
+   * sessions only) from queued (approved, on its way to Spotify) so
+   * guests don't double-click a track that's already awaiting review.
+   * `played`/`rejected` items are intentionally ignored — the guest may
+   * legitimately re-request them.
    */
   readonly searchQueueLookup = (trackUri: string): { label: string; tooltip: string } | null => {
     const eta = this.etaMap().get(trackUri);
@@ -474,9 +577,20 @@ export class GuestRequestPage {
         tooltip: 'Already in the queue.',
       };
     }
-    // Match against OpenDJ items that haven't pushed to Spotify yet.
-    const pendingMatch = this.visibleQueue().find((i) => i.trackUri === trackUri);
-    if (pendingMatch) {
+    const items = this.queue();
+    if (items.some((i) => i.trackUri === trackUri && i.status === 'pending')) {
+      return {
+        label: 'awaiting approval',
+        tooltip: 'You already requested this — waiting for the host to approve.',
+      };
+    }
+    if (
+      items.some(
+        (i) =>
+          i.trackUri === trackUri &&
+          (i.status === 'approved' || i.status === 'queued' || i.status === 'playing'),
+      )
+    ) {
       return {
         label: 'queued',
         tooltip: 'Already requested — waiting for the host to make space.',
