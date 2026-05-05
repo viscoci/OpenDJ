@@ -187,7 +187,12 @@ import { buildQueueEtaMs, formatEta } from '../utils/queue-eta.js';
                         <span class="badge requested">Requested</span>
                       }
                     </span>
-                    <span class="artist">{{ entry.track.artist }}</span>
+                    <span class="artist">
+                      <span>{{ entry.track.artist }}</span>
+                      @if (formatEntryEta(entry.track.uri); as eta) {
+                        <span class="eta">· {{ eta }}</span>
+                      }
+                    </span>
                   </span>
                   @if (slot()?.status === 'active') {
                     @if (entry.openDjItem) {
@@ -408,6 +413,14 @@ import { buildQueueEtaMs, formatEta } from '../utils/queue-eta.js';
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
+        display: flex;
+        gap: 6px;
+        align-items: center;
+      }
+      .merged-row .artist .eta {
+        font-family: 'JetBrains Mono', ui-monospace, monospace;
+        color: #6e5e8a;
+        flex: 0 0 auto;
       }
       .badge {
         display: inline-block;
@@ -809,6 +822,12 @@ export class GuestRequestPage {
 
   hasVotedItem(itemId: string): boolean {
     return this.votedItemIds().has(itemId);
+  }
+
+  /** Wait-time string for an Up Next row, or null if we don't have one. */
+  formatEntryEta(trackUri: string): string | null {
+    const ms = this.etaMap().get(trackUri);
+    return ms === undefined ? null : formatEta(ms);
   }
 
   /**

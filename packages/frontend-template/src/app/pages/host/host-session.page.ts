@@ -37,6 +37,7 @@ import { QrCodeComponent } from '../../components/qr-code.component.js';
 import { QueueListComponent, type QueueListItem } from '../../components/queue-list.component.js';
 import { RecentlyPlayedListComponent } from '../../components/recently-played-list.component.js';
 import { OpenDjClientService } from '../../services/opendj-client.service.js';
+import { buildQueueEtaMs, formatEta } from '../../utils/queue-eta.js';
 
 @Component({
   selector: 'app-host-session',
@@ -171,7 +172,12 @@ import { OpenDjClientService } from '../../services/opendj-client.service.js';
                   }
                   <span class="meta">
                     <span class="name">{{ entry.track.name }}</span>
-                    <span class="artist">{{ entry.track.artist }}</span>
+                    <span class="artist">
+                      <span>{{ entry.track.artist }}</span>
+                      @if (formatEntryEta(entry.track.uri); as eta) {
+                        <span class="eta">· {{ eta }}</span>
+                      }
+                    </span>
                   </span>
                   <span class="row-actions">
                     @if (entry.openDjItem) {
@@ -424,6 +430,14 @@ import { OpenDjClientService } from '../../services/opendj-client.service.js';
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
+        display: flex;
+        gap: 6px;
+        align-items: center;
+      }
+      .up-next-list .artist .eta {
+        font-family: 'JetBrains Mono', ui-monospace, monospace;
+        color: #6e5e8a;
+        flex: 0 0 auto;
       }
       .badge.requested {
         background: linear-gradient(135deg, rgba(168, 85, 247, 0.2), rgba(236, 72, 153, 0.2));
@@ -636,6 +650,14 @@ export class HostSessionPage {
   /** OpenDJ-mediated requests that have been approved (moderation on or off). */
   readonly approvedItems = computed(() =>
     this.queue().filter((i) => i.status === 'approved' || i.status === 'queued'),
+  );
+
+  /**
+   * Wait-time per provider-queue trackUri. Same model as guest-side
+   * `etaMap`: now-playing remaining + sum of preceding durations.
+   */
+  readonly etaMap = computed(() =>
+    buildQueueEtaMs(this.nowPlaying(), this.providerQueue(), this.nowPlayingAt()),
   );
 
   /**
@@ -894,6 +916,11 @@ export class HostSessionPage {
     } finally {
       this.auditLoading.set(false);
     }
+  }
+
+  formatEntryEta(trackUri: string): string | null {
+    const ms = this.etaMap().get(trackUri);
+    return ms === undefined ? null : formatEta(ms);
   }
 
   formatAuditTime(epochMs: number): string {
