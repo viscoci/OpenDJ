@@ -137,6 +137,7 @@ import { OpenDjClientService } from '../services/opendj-client.service.js';
             <app-queue-list
               [items]="visibleQueue()"
               mode="guest"
+              [currentGuestId]="slot()?.guestId ?? null"
               [voteThreshold]="session()!.voteSkipThreshold ?? 5"
               [votedItemIds]="votedItemIds()"
               (voteSkip)="onVoteSkip($event)"
@@ -377,8 +378,9 @@ export class GuestRequestPage {
           ? 'Submitted for review.'
           : `Added "${result.trackName}" to the queue.`,
       });
-      this.searchResults.set([]);
-      this.latestQuery = '';
+      // Keep the search results visible — guests often want to add more
+      // tracks from the same search without retyping. They can clear the
+      // input themselves to start a new search.
     } catch (err) {
       const code = err instanceof ApiError ? err.code : 'error';
       this.submitToast.set({

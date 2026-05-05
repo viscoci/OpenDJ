@@ -49,9 +49,14 @@ export type QueueListMode = 'guest' | 'host';
     } @else {
       <ul class="queue">
         @for (item of items; track item.id) {
-          <li class="row" [attr.data-status]="item.status">
+          <li class="row" [attr.data-status]="item.status" [class.mine]="isMine(item)">
             <div class="meta">
-              <span class="name">{{ item.trackName }}</span>
+              <span class="name">
+                @if (isMine(item)) {
+                  <span class="badge mine" aria-label="You added this">Yours</span>
+                }
+                {{ item.trackName }}
+              </span>
               <span class="artist">{{ item.artistName }}</span>
               @if (mode === 'host' && item.status === 'pending') {
                 <span class="badge pending">Pending review</span>
@@ -147,6 +152,21 @@ export type QueueListMode = 'guest' | 'host';
         background: rgba(245, 158, 11, 0.12);
         color: #f59e0b;
       }
+      .badge.mine {
+        background: linear-gradient(135deg, rgba(168, 85, 247, 0.25), rgba(236, 72, 153, 0.25));
+        border: 1px solid rgba(168, 85, 247, 0.5);
+        color: #fff;
+        margin-right: 6px;
+        padding: 2px 6px;
+        border-radius: 999px;
+        font-size: 9px;
+        font-family: 'JetBrains Mono', ui-monospace, monospace;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      .row.mine {
+        border-color: rgba(168, 85, 247, 0.4);
+      }
       .actions {
         display: flex;
         gap: 6px;
@@ -221,5 +241,9 @@ export class QueueListComponent {
 
   protected hasVoted(itemId: string): boolean {
     return this.votedItemIds.has(itemId);
+  }
+
+  protected isMine(item: QueueListItem): boolean {
+    return this.currentGuestId !== null && item.guestId === this.currentGuestId;
   }
 }
