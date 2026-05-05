@@ -447,7 +447,9 @@ export class GuestRequestPage {
   });
 
   readonly visibleQueue = computed(() =>
-    this.queue().filter((i) => i.status !== 'rejected' && i.status !== 'pending'),
+    this.queue().filter(
+      (i) => i.status === 'approved' || i.status === 'queued' || i.status === 'playing',
+    ),
   );
 
   /**
@@ -571,7 +573,7 @@ export class GuestRequestPage {
     if (!session || !slot || slot.status !== 'active') return;
     this.submitting.set(true);
     try {
-      await this.clientService.client.queue.request(session.id, slot.slotToken, {
+      const created = await this.clientService.client.queue.request(session.id, slot.slotToken, {
         uri: result.trackUri,
         name: result.trackName,
         artist: result.artistName,
@@ -583,6 +585,27 @@ export class GuestRequestPage {
           ? 'Submitted for review.'
           : `Added "${result.trackName}" to the queue.`,
       );
+      // Optimistic: the realtime fanout + Spotify queue poll can take a
+      // few seconds; in the meantime fold the new item into local state
+      // so the search row's pill flips to "queued" and the merged Up
+      // Next list shows it immediately. Server snapshot will reconcile.
+      this.queue.update((items) => [...items, created]);
+      if (!session.moderationEnabled) {
+        this.providerQueue.update((curr) =>
+          curr.some((t) => t.uri === result.trackUri)
+            ? curr
+            : [
+                ...curr,
+                {
+                  uri: result.trackUri,
+                  name: result.trackName,
+                  artist: result.artistName,
+                  albumArt: result.albumArtUrl,
+                  durationMs: result.durationMs ?? 0,
+                },
+              ],
+        );
+      }
       // Keep the search results visible — guests often want to add more
       // tracks from the same search without retyping.
     } catch (err) {

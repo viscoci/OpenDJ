@@ -477,6 +477,14 @@ export class HostSessionPage {
   readonly settingsError = signal<string | null>(null);
   /** URIs currently being removed — used to disable the row's button. */
   readonly removingUris: WritableSignal<ReadonlySet<string>> = signal(new Set());
+  /**
+   * URIs the host has removed but Spotify still surfaces in its queue
+   * (Spotify has no "remove from queue" API — only "skip when playing").
+   * The row is optimistically hidden until the URI rolls out of the
+   * provider queue (usually because the auto-skip-on-rejected logic
+   * fires when it reaches the now-playing slot).
+   */
+  readonly removedUris: WritableSignal<ReadonlySet<string>> = signal(new Set());
 
   readonly guestUrl = computed(() => {
     const s = this.session();
@@ -506,21 +514,24 @@ export class HostSessionPage {
   readonly mergedQueue = computed(() => {
     const provider = this.providerQueue();
     const approved = this.approvedItems();
+    const removed = this.removedUris();
     const used = new Set<string>();
-    return provider.map((t, i) => {
-      const match = approved.find((q) => q.trackUri === t.uri && !used.has(q.id));
-      if (match) used.add(match.id);
-      const entry: {
-        key: string;
-        track: { uri: string; name: string; artist: string; albumArt: string | null };
-        openDjItem: QueueListItem | null;
-      } = {
-        key: `p-${i}-${t.uri}`,
-        track: { uri: t.uri, name: t.name, artist: t.artist, albumArt: t.albumArt },
-        openDjItem: match ?? null,
-      };
-      return entry;
-    });
+    return provider
+      .filter((t) => !removed.has(t.uri))
+      .map((t, i) => {
+        const match = approved.find((q) => q.trackUri === t.uri && !used.has(q.id));
+        if (match) used.add(match.id);
+        const entry: {
+          key: string;
+          track: { uri: string; name: string; artist: string; albumArt: string | null };
+          openDjItem: QueueListItem | null;
+        } = {
+          key: `p-${i}-${t.uri}`,
+          track: { uri: t.uri, name: t.name, artist: t.artist, albumArt: t.albumArt },
+          openDjItem: match ?? null,
+        };
+        return entry;
+      });
   });
 
   private realtime: RealtimeClient | null = null;
@@ -610,6 +621,10 @@ export class HostSessionPage {
     const uri = entry.track.uri;
     if (this.removingUris().has(uri)) return;
     this.removingUris.update((s) => new Set(s).add(uri));
+    // Optimistic — hide the row right away. Spotify won't actually drop
+    // the URI from its queue until auto-skip-on-rejected fires when it
+    // reaches the now-playing slot, which can be many minutes away.
+    this.removedUris.update((s) => new Set(s).add(uri));
     try {
       if (entry.openDjItem) {
         await this.client.client.queue.moderate(session.id, entry.openDjItem.id, {
@@ -620,7 +635,12 @@ export class HostSessionPage {
         await this.client.client.queue.hostRejectProviderTrack(session.id, uri);
       }
     } catch {
-      // realtime + the next now-playing tick will resync
+      // Couldn't talk to the server — restore the row so the host can retry.
+      this.removedUris.update((s) => {
+        const next = new Set(s);
+        next.delete(uri);
+        return next;
+      });
     } finally {
       this.removingUris.update((s) => {
         const next = new Set(s);
@@ -787,6 +807,15 @@ export class HostSessionPage {
     });
     this.realtime.on('provider_queue.updated', (event) => {
       this.providerQueue.set(event.tracks);
+      // Drop optimistic-removal entries for URIs Spotify itself dropped;
+      // keep entries that are still surfaced (track hasn't been auto-
+      // skipped yet) so the row stays hidden.
+      const stillThere = new Set(event.tracks.map((t) => t.uri));
+      this.removedUris.update((s) => {
+        const next = new Set<string>();
+        for (const uri of s) if (stillThere.has(uri)) next.add(uri);
+        return next;
+      });
     });
     this.realtime.onEvent((event: SessionEvent) => {
       if (
