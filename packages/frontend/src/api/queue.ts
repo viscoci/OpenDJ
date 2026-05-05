@@ -81,6 +81,19 @@ export class QueueApi {
   }
 
   /**
+   * Host force-rejects a provider-queue track. Cookie-authenticated host
+   * action — bypasses the vote threshold. Server skips immediately if the
+   * URI is currently playing; otherwise the next now-playing tick skips
+   * when it lands. Returns `{skippedNow}` for UX feedback.
+   */
+  hostRejectProviderTrack(sessionId: string, trackUri: string): Promise<{ skippedNow: boolean }> {
+    return this.http.request(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/queue/provider-reject`,
+      { method: 'POST', body: { trackUri } },
+    );
+  }
+
+  /**
    * Search the session's connected streaming provider.
    *
    * Public — no slot token required. Surfaces 503 `no_provider_connected`

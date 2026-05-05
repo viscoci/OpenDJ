@@ -195,6 +195,39 @@ export function queueRoutes(deps: QueueRouteDeps): Hono<{ Variables: AuthVariabl
     }
   });
 
+  /**
+   * POST /queue/provider-reject — host force-rejects a provider-queue track
+   * that has no OpenDJ counterpart. Same downstream handling as a vote
+   * threshold landing (URI added to rejected set, immediate skip if it's
+   * playing). Cookie session + `queue:moderate` claim.
+   */
+  app.post('/provider-reject', requireClaim(deps.authService, 'queue:moderate'), async (c) => {
+    const sessionId = c.req.param('id') ?? '';
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: 'invalid_body' }, 400);
+    }
+    const parsed = v.safeParse(ProviderVoteSkipBody, body);
+    if (!parsed.success) {
+      return c.json({ error: 'invalid_body', issues: parsed.issues.map((i) => i.message) }, 400);
+    }
+    try {
+      const result = await deps.queueService.hostRejectProviderTrack({
+        sessionId,
+        trackUri: parsed.output.trackUri,
+      });
+      return c.json(result);
+    } catch (err) {
+      if (err instanceof QueueServiceError) {
+        const { status, payload } = mapErrorToStatus(err.code);
+        return c.json(payload, status as 400 | 401 | 403 | 404);
+      }
+      throw err;
+    }
+  });
+
   /** POST /queue/:itemId/skip-vote — guest casts a vote. */
   app.post('/:itemId/skip-vote', async (c) => {
     const sessionId = c.req.param('id') ?? '';

@@ -86,6 +86,21 @@ import { OpenDjClientService } from '../../services/opendj-client.service.js';
           <label class="toggle">
             <input
               type="checkbox"
+              [checked]="!!session()!.moderationEnabled"
+              [disabled]="settingsBusy()"
+              (change)="toggleModerationEnabled($any($event.target).checked)"
+            />
+            <span class="toggle-label">
+              Approve guest requests before they hit the queue
+              <span class="toggle-hint"
+                >Default: off. Turn on to review every guest pick — they go to "Pending review"
+                until you approve.</span
+              >
+            </span>
+          </label>
+          <label class="toggle">
+            <input
+              type="checkbox"
               [checked]="!!session()!.allowDuplicates"
               [disabled]="settingsBusy()"
               (change)="toggleAllowDuplicates($any($event.target).checked)"
@@ -157,9 +172,20 @@ import { OpenDjClientService } from '../../services/opendj-client.service.js';
                     <span class="name">{{ entry.track.name }}</span>
                     <span class="artist">{{ entry.track.artist }}</span>
                   </span>
-                  @if (entry.openDjItem) {
-                    <span class="badge requested">Requested</span>
-                  }
+                  <span class="row-actions">
+                    @if (entry.openDjItem) {
+                      <span class="badge requested">Requested</span>
+                    }
+                    <button
+                      type="button"
+                      class="remove"
+                      [disabled]="removingUris().has(entry.track.uri)"
+                      (click)="onRemoveRow(entry)"
+                      title="Remove from queue"
+                    >
+                      Remove
+                    </button>
+                  </span>
                 </li>
               }
             </ul>
@@ -371,6 +397,30 @@ import { OpenDjClientService } from '../../services/opendj-client.service.js';
         text-transform: uppercase;
         letter-spacing: 0.08em;
       }
+      .row-actions {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      .remove {
+        appearance: none;
+        background: transparent;
+        border: 1px solid #2c2440;
+        color: #fda4af;
+        border-radius: 999px;
+        padding: 4px 10px;
+        font: inherit;
+        font-size: 11px;
+        cursor: pointer;
+      }
+      .remove:hover:not(:disabled) {
+        background: rgba(253, 164, 175, 0.1);
+        border-color: #fda4af;
+      }
+      .remove:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
       .empty {
         margin: 0;
         font-size: 13px;
@@ -425,6 +475,8 @@ export class HostSessionPage {
   readonly urlCopied = signal(false);
   readonly settingsBusy = signal(false);
   readonly settingsError = signal<string | null>(null);
+  /** URIs currently being removed — used to disable the row's button. */
+  readonly removingUris: WritableSignal<ReadonlySet<string>> = signal(new Set());
 
   readonly guestUrl = computed(() => {
     const s = this.session();
@@ -483,6 +535,26 @@ export class HostSessionPage {
 
   // ─── Session settings ──────────────────────────────────────────────────
 
+  async toggleModerationEnabled(checked: boolean): Promise<void> {
+    const session = this.session();
+    if (!session) return;
+    this.settingsBusy.set(true);
+    this.settingsError.set(null);
+    try {
+      const updated = await this.client.client.sessions.update(session.id, {
+        moderationEnabled: checked,
+      });
+      this.session.set(updated);
+    } catch (err) {
+      this.settingsError.set(
+        err instanceof ApiError ? `Couldn't save (${err.code}).` : "Couldn't save the setting.",
+      );
+      this.session.update((s) => (s ? { ...s, moderationEnabled: !checked } : s));
+    } finally {
+      this.settingsBusy.set(false);
+    }
+  }
+
   async toggleAllowDuplicates(checked: boolean): Promise<void> {
     const session = this.session();
     if (!session) return;
@@ -521,6 +593,41 @@ export class HostSessionPage {
     // Host has no separate "remove" route in this slice — moderate as
     // rejected which removes from the visible queue.
     await this.moderate(itemId, 'rejected');
+  }
+
+  /**
+   * Remove a row from the merged Up Next list. OpenDJ-mediated rows go
+   * through the moderation route (PATCH → rejected). Provider-only rows
+   * (host queued via Spotify directly) hit the host-reject route which
+   * stages the URI for the next now-playing tick to skip.
+   */
+  async onRemoveRow(entry: {
+    track: { uri: string };
+    openDjItem: QueueListItem | null;
+  }): Promise<void> {
+    const session = this.session();
+    if (!session) return;
+    const uri = entry.track.uri;
+    if (this.removingUris().has(uri)) return;
+    this.removingUris.update((s) => new Set(s).add(uri));
+    try {
+      if (entry.openDjItem) {
+        await this.client.client.queue.moderate(session.id, entry.openDjItem.id, {
+          decision: 'rejected',
+        });
+        await this.refreshQueue();
+      } else {
+        await this.client.client.queue.hostRejectProviderTrack(session.id, uri);
+      }
+    } catch {
+      // realtime + the next now-playing tick will resync
+    } finally {
+      this.removingUris.update((s) => {
+        const next = new Set(s);
+        next.delete(uri);
+        return next;
+      });
+    }
   }
 
   // ─── Playback control ─────────────────────────────────────────────────

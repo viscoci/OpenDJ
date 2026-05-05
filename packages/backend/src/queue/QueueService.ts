@@ -476,6 +476,67 @@ export class QueueService {
   private readonly rejectedProviderUris = new Map<string, Set<string>>();
 
   /**
+   * Host action: reject a provider-queue track that has no OpenDJ
+   * counterpart. Adds the URI to {@link rejectedProviderUris} so the
+   * NowPlayingPoller skips it when it reaches the now-playing slot, and
+   * best-effort calls `provider.skipTrack()` immediately if it's the
+   * current track. No vote ledger — bypasses the threshold entirely.
+   */
+  async hostRejectProviderTrack(input: {
+    sessionId: string;
+    trackUri: string;
+  }): Promise<{ skippedNow: boolean }> {
+    const session = await this.deps.sessions.findById(input.sessionId);
+    if (!session) throw new QueueServiceError('session_not_found', 'Unknown session.');
+
+    const room = this.deps.rooms?.forSession(input.sessionId);
+    if (!room) throw new QueueServiceError('no_room', 'Realtime room not materialized.');
+    const snapshot = await room.getSnapshot();
+    const inProviderQueue = snapshot.providerQueue.some((t) => t.uri === input.trackUri);
+    const isNowPlaying = snapshot.nowPlaying?.uri === input.trackUri;
+    if (!inProviderQueue && !isNowPlaying) {
+      throw new QueueServiceError(
+        'track_not_in_queue',
+        'That track is not in the provider queue right now.',
+      );
+    }
+
+    let rejected = this.rejectedProviderUris.get(input.sessionId);
+    if (!rejected) {
+      rejected = new Set();
+      this.rejectedProviderUris.set(input.sessionId, rejected);
+    }
+    rejected.add(input.trackUri);
+
+    let skippedNow = false;
+    if (isNowPlaying && this.deps.streamingRouter && this.deps.providerConnections) {
+      try {
+        const conns = await this.deps.providerConnections.findAllForAccount(session.accountId);
+        const conn = conns[0];
+        if (conn) {
+          const provider = await this.deps.streamingRouter.getProvider(
+            session.accountId,
+            conn.providerId,
+          );
+          if (supportsSkipTrack(provider)) {
+            await provider.skipTrack();
+            this.consumeProviderRejection(input.sessionId, input.trackUri);
+            skippedNow = true;
+          }
+        }
+      } catch (err) {
+        console.warn(
+          `[QueueService] hostRejectProviderTrack skip-on-now-playing failed: ${(err as Error).message}`,
+        );
+      }
+    }
+    // Drop any in-flight vote tally for this URI — host action overrides.
+    this.providerQueueVotes.get(input.sessionId)?.delete(input.trackUri);
+
+    return { skippedNow };
+  }
+
+  /**
    * Diagnostic / NowPlayingPoller hook. Returns the live rejected-URI
    * set for `sessionId`, or an empty set if none. Caller should treat
    * the set as read-only — mutations belong to {@link consumeProviderRejection}.
