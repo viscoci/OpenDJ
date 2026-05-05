@@ -321,3 +321,87 @@ describe('SpotifyProvider — volume', () => {
     expect(calls[2]).toContain('volume_percent=73');
   });
 });
+
+describe('SpotifyProvider — token refresh on 401', () => {
+  it('refreshes the access token on 401, retries once, persists the new token', async () => {
+    let apiCalls = 0;
+    let tokenCalls = 0;
+    const fetchImpl = fakeFetch(async (url, init) => {
+      if (url.startsWith('https://accounts.spotify.com/api/token')) {
+        tokenCalls += 1;
+        const body = String(init?.body ?? '');
+        expect(body).toContain('grant_type=refresh_token');
+        expect(body).toContain('refresh_token=RT-old');
+        expect((init?.headers as Record<string, string>)['authorization']).toBe(
+          // base64('cid:csecret') === 'Y2lkOmNzZWNyZXQ='
+          'Basic Y2lkOmNzZWNyZXQ=',
+        );
+        return jsonResponse({
+          access_token: 'AT-new',
+          refresh_token: 'RT-new',
+          token_type: 'Bearer',
+          expires_in: 3600,
+        });
+      }
+      apiCalls += 1;
+      const auth = (init?.headers as Record<string, string>)['authorization'];
+      // First call carries the stale token (AT-old); after refresh the
+      // retry carries AT-new.
+      if (apiCalls === 1) {
+        expect(auth).toBe('Bearer AT-old');
+        return new Response('{"error":{"status":401}}', { status: 401 });
+      }
+      expect(auth).toBe('Bearer AT-new');
+      return jsonResponse({ tracks: { items: [] } });
+    });
+
+    const persisted: Array<{ accessToken: string; refreshToken?: string }> = [];
+    const provider = new SpotifyProvider({
+      fetchImpl,
+      clientId: 'cid',
+      clientSecret: 'csecret',
+    });
+    provider.setOnTokenRefreshed((tokens) => {
+      persisted.push({
+        accessToken: tokens.accessToken,
+        ...(tokens.refreshToken !== undefined && { refreshToken: tokens.refreshToken }),
+      });
+    });
+    await provider.connect({ accessToken: 'AT-old', refreshToken: 'RT-old' });
+
+    const tracks = await provider.search('whatever');
+    expect(tracks).toEqual([]);
+    expect(apiCalls).toBe(2);
+    expect(tokenCalls).toBe(1);
+    expect(persisted).toEqual([{ accessToken: 'AT-new', refreshToken: 'RT-new' }]);
+  });
+
+  it('falls back to InvalidProviderCredentialsError when refresh creds are missing', async () => {
+    const fetchImpl = fakeFetch(async () => new Response('{}', { status: 401 }));
+    const provider = new SpotifyProvider({ fetchImpl });
+    // No clientId/clientSecret on the provider — refresh should be skipped
+    // and the original 401 surfaces.
+    await provider.connect({ accessToken: 'AT', refreshToken: 'RT' });
+    await expect(provider.search('x')).rejects.toBeInstanceOf(InvalidProviderCredentialsError);
+  });
+
+  it('throws InvalidProviderCredentialsError when refresh itself fails', async () => {
+    let apiCalls = 0;
+    const fetchImpl = fakeFetch(async (url) => {
+      if (url.startsWith('https://accounts.spotify.com/api/token')) {
+        return new Response('{"error":"invalid_grant"}', { status: 400 });
+      }
+      apiCalls += 1;
+      return new Response('{}', { status: 401 });
+    });
+    const provider = new SpotifyProvider({
+      fetchImpl,
+      clientId: 'cid',
+      clientSecret: 'csecret',
+    });
+    await provider.connect({ accessToken: 'AT', refreshToken: 'RT' });
+    await expect(provider.search('x')).rejects.toBeInstanceOf(InvalidProviderCredentialsError);
+    // Only the initial request — refresh failed so we don't retry.
+    expect(apiCalls).toBe(1);
+  });
+});

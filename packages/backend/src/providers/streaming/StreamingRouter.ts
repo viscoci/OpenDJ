@@ -82,6 +82,33 @@ export class StreamingRouter {
     if (connection.tokenType) credentials['tokenType'] = connection.tokenType;
     if (connection.scopes) credentials['scopes'] = connection.scopes.join(' ');
 
+    // Wire token-refresh persistence: when the provider's underlying
+    // client trades the refresh token for a fresh access token, write the
+    // new tokens back to provider_connections so they survive a restart.
+    // Provider must opt in via `setOnTokenRefreshed` — providers without
+    // it (Soundtrack stub, etc.) just skip the wiring.
+    const providerWithRefresh = provider as IStreamingProvider & {
+      setOnTokenRefreshed?: (
+        cb: (tokens: {
+          accessToken: string;
+          refreshToken?: string;
+          expiresAt?: Date;
+          tokenType?: string;
+        }) => void | Promise<void>,
+      ) => void;
+    };
+    if (typeof providerWithRefresh.setOnTokenRefreshed === 'function') {
+      providerWithRefresh.setOnTokenRefreshed(async (tokens) => {
+        await this.deps.providerConnections.updateTokens({
+          id: connection.id,
+          accessToken: tokens.accessToken,
+          ...(tokens.refreshToken !== undefined && { refreshToken: tokens.refreshToken }),
+          ...(tokens.expiresAt !== undefined && { expiresAt: tokens.expiresAt }),
+          ...(tokens.tokenType !== undefined && { tokenType: tokens.tokenType }),
+        });
+      });
+    }
+
     await provider.connect(credentials);
     return provider;
   }

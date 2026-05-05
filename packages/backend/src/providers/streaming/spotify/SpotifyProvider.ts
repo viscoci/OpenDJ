@@ -227,7 +227,23 @@ function toTrack(spotify: SpotifyTrack): Track {
 export interface SpotifyProviderOptions {
   fetchImpl?: typeof fetch;
   baseUrl?: string;
+  /**
+   * App-level Spotify Developer credentials. When supplied, the client
+   * refreshes the user's access token on 401 instead of bubbling the
+   * error. Without these the provider behaves as before — host has to
+   * manually re-Connect Spotify when the access token expires.
+   */
+  clientId?: string;
+  clientSecret?: string;
 }
+
+/** Persistence callback wired by the StreamingRouter — see `setOnTokenRefreshed`. */
+export type SpotifyTokenRefreshCallback = (tokens: {
+  accessToken: string;
+  refreshToken?: string;
+  expiresAt?: Date;
+  tokenType?: string;
+}) => void | Promise<void>;
 
 export class SpotifyProvider
   implements
@@ -248,19 +264,35 @@ export class SpotifyProvider
 
   private client: SpotifyClient | null = null;
   private credentials: ProviderCredentials | null = null;
+  private onTokenRefreshed: SpotifyTokenRefreshCallback | null = null;
 
   constructor(private readonly options: SpotifyProviderOptions = {}) {}
+
+  /**
+   * Wire a persistence callback for refreshed access tokens. Called by the
+   * StreamingRouter just before `connect` so the client can write the new
+   * token back to provider_connections without the provider knowing
+   * anything about the repo.
+   */
+  setOnTokenRefreshed(cb: SpotifyTokenRefreshCallback): void {
+    this.onTokenRefreshed = cb;
+  }
 
   async connect(credentials: ProviderCredentials): Promise<void> {
     if (!credentials['accessToken']) {
       throw new Error('SpotifyProvider.connect requires an accessToken in credentials.');
     }
     this.credentials = { ...credentials };
-    this.client = new SpotifyClient({
+    const clientOptions: ConstructorParameters<typeof SpotifyClient>[0] = {
       accessToken: credentials['accessToken'],
       fetchImpl: this.options.fetchImpl ?? globalThis.fetch,
-      ...(this.options.baseUrl !== undefined && { baseUrl: this.options.baseUrl }),
-    });
+    };
+    if (this.options.baseUrl !== undefined) clientOptions.baseUrl = this.options.baseUrl;
+    if (credentials['refreshToken']) clientOptions.refreshToken = credentials['refreshToken'];
+    if (this.options.clientId) clientOptions.clientId = this.options.clientId;
+    if (this.options.clientSecret) clientOptions.clientSecret = this.options.clientSecret;
+    if (this.onTokenRefreshed) clientOptions.onTokenRefreshed = this.onTokenRefreshed;
+    this.client = new SpotifyClient(clientOptions);
   }
 
   async disconnect(): Promise<void> {

@@ -182,7 +182,19 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
   const providerRegistry: ProviderRegistry =
     options.providerRegistry ??
     ({
-      spotify: () => new SpotifyProvider({ fetchImpl }),
+      spotify: () =>
+        new SpotifyProvider({
+          fetchImpl,
+          // Forward the app-level Spotify Developer credentials so the
+          // client can refresh the user's access token on 401 instead of
+          // throwing. Falls back to no-refresh when SPOTIFY_* aren't set.
+          ...(options.config.spotify?.clientId !== undefined && {
+            clientId: options.config.spotify.clientId,
+          }),
+          ...(options.config.spotify?.clientSecret !== undefined && {
+            clientSecret: options.config.spotify.clientSecret,
+          }),
+        }),
       soundtrack: () => new SoundtrackProvider(),
       'apple-music': () => new AppleMusicProvider(),
     } as ProviderRegistry);
