@@ -30,15 +30,22 @@ export class SpotifyClient {
    * Issue a request and return the Response (caller decides whether to parse JSON
    * or treat 204 as void). Throws structured errors for known Spotify failure
    * shapes; unknown 5xx surface as `SpotifyApiError`.
+   *
+   * `body` (optional) is JSON-serialized and sent with `content-type:
+   * application/json`. Spotify accepts JSON bodies on PUT/POST endpoints
+   * like `/v1/me/player` (transfer playback).
    */
-  async request(method: string, path: string): Promise<Response> {
-    const response = await this.options.fetchImpl(`${this.baseUrl}${path}`, {
-      method,
-      headers: {
-        accept: 'application/json',
-        authorization: `Bearer ${this.options.accessToken}`,
-      },
-    });
+  async request(method: string, path: string, opts: { body?: unknown } = {}): Promise<Response> {
+    const headers: Record<string, string> = {
+      accept: 'application/json',
+      authorization: `Bearer ${this.options.accessToken}`,
+    };
+    const init: RequestInit = { method, headers };
+    if (opts.body !== undefined) {
+      headers['content-type'] = 'application/json';
+      init.body = JSON.stringify(opts.body);
+    }
+    const response = await this.options.fetchImpl(`${this.baseUrl}${path}`, init);
     if (response.ok || response.status === 204) return response;
     if (response.status === 401) {
       throw new InvalidProviderCredentialsError(

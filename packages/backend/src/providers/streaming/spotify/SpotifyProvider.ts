@@ -24,6 +24,7 @@ import {
   defineCapabilities,
   PROVIDER_FEATURES,
   type IStreamingProvider,
+  type ISupportsDevices,
   type ISupportsNowPlayingRead,
   type ISupportsPause,
   type ISupportsQueueTrack,
@@ -33,6 +34,7 @@ import {
   type ISupportsVolumeRead,
   type ISupportsVolumeSetAbsolute,
   type NowPlayingTrack,
+  type PlaybackDevice,
   type ProviderCapabilities,
   type ProviderCredentials,
   type QueueResult,
@@ -104,7 +106,56 @@ const capabilities: ProviderCapabilities = defineCapabilities('spotify', {
     reliability: 'unsupported',
     notes: 'Spotify uses devices, not OpenDJ zones. A synthetic "default" zone is exposed.',
   },
+  [PROVIDER_FEATURES.DevicesRead]: {
+    id: PROVIDER_FEATURES.DevicesRead,
+    supported: true,
+    access: 'host',
+    reliability: 'native',
+  },
+  [PROVIDER_FEATURES.DeviceTransferPlayback]: {
+    id: PROVIDER_FEATURES.DeviceTransferPlayback,
+    supported: true,
+    access: 'host',
+    reliability: 'native',
+  },
 });
+
+/**
+ * Spotify device "type" strings come back capitalized ("Computer", "Smartphone",
+ * "Speaker", "TV"). Normalize to the OpenDJ-canonical lowercase set; map
+ * unknown values to 'unknown'.
+ */
+function normalizeDeviceType(spotifyType: string): PlaybackDevice['type'] {
+  switch (spotifyType.toLowerCase()) {
+    case 'computer':
+      return 'computer';
+    case 'smartphone':
+    case 'phone':
+      return 'phone';
+    case 'tablet':
+      return 'tablet';
+    case 'speaker':
+      return 'speaker';
+    case 'tv':
+      return 'tv';
+    case 'avr':
+      return 'avr';
+    case 'stb':
+      return 'stb';
+    case 'audiodongle':
+      return 'audio_dongle';
+    case 'gameconsole':
+      return 'game_console';
+    case 'castaudio':
+      return 'cast_audio';
+    case 'castvideo':
+      return 'cast_video';
+    case 'automobile':
+      return 'automobile';
+    default:
+      return 'unknown';
+  }
+}
 
 interface SpotifyArtist {
   name: string;
@@ -181,7 +232,8 @@ export class SpotifyProvider
     ISupportsPause,
     ISupportsResume,
     ISupportsVolumeRead,
-    ISupportsVolumeSetAbsolute
+    ISupportsVolumeSetAbsolute,
+    ISupportsDevices
 {
   readonly providerId = 'spotify';
   readonly displayName = 'Spotify';
@@ -292,6 +344,35 @@ export class SpotifyProvider
   async setVolume(volumePercent: number, _zoneId?: string): Promise<void> {
     const clamped = Math.max(0, Math.min(100, Math.round(volumePercent)));
     await this.requireClient().request('PUT', `/v1/me/player/volume?volume_percent=${clamped}`);
+  }
+
+  // ─── ISupportsDevices ────────────────────────────────────────────────
+
+  async getDevices(): Promise<PlaybackDevice[]> {
+    const response = await this.requireClient().request('GET', '/v1/me/player/devices');
+    if (response.status === 204) return [];
+    const body = (await response.json()) as { devices?: SpotifyDevice[] };
+    return (body.devices ?? []).map((d) => ({
+      id: d.id,
+      name: d.name,
+      type: normalizeDeviceType(d.type),
+      isActive: d.is_active,
+      volumePercent: d.volume_percent,
+      isRestricted: d.is_restricted,
+    }));
+  }
+
+  /**
+   * Move active playback to `deviceId`. Spotify's `PUT /v1/me/player`
+   * accepts `device_ids: [string]` (one element only — they require an
+   * array for backward-compat) and an optional `play` toggle to start
+   * playing on transfer. We default `play: false` so the host keeps
+   * whatever state they were in.
+   */
+  async transferPlayback(deviceId: string, opts: { play?: boolean } = {}): Promise<void> {
+    await this.requireClient().request('PUT', '/v1/me/player', {
+      body: { device_ids: [deviceId], play: opts.play === true },
+    });
   }
 
   private requireClient(): SpotifyClient {

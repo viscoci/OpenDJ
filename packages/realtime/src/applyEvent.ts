@@ -8,7 +8,7 @@
  */
 
 import type { SessionEvent } from './types/event.js';
-import type { SessionSnapshot } from './types/snapshot.js';
+import { RECENTLY_PLAYED_MAX, type SessionSnapshot } from './types/snapshot.js';
 
 export function applyEvent(snapshot: SessionSnapshot, event: SessionEvent): SessionSnapshot {
   switch (event.type) {
@@ -52,8 +52,27 @@ export function applyEvent(snapshot: SessionSnapshot, event: SessionEvent): Sess
         pending: snapshot.pending.filter((i) => i.id !== event.itemId),
       };
 
-    case 'now_playing.updated':
-      return { ...snapshot, nowPlaying: event.track };
+    case 'now_playing.updated': {
+      // Roll the previous track onto recentlyPlayed when it actually
+      // changes (different uri or null transition). Same-track updates
+      // (progress/isPlaying flips) do NOT churn the history.
+      const prev = snapshot.nowPlaying;
+      const next = event.track;
+      const trackChanged =
+        (prev === null && next !== null) ||
+        (prev !== null && next === null) ||
+        (prev !== null && next !== null && prev.uri !== next.uri);
+      let recentlyPlayed = snapshot.recentlyPlayed;
+      if (trackChanged && prev !== null) {
+        // Avoid duplicate adjacent entries (defensive — `prev !== next.uri`
+        // already gated this, but just in case applyEvent is called twice).
+        const head = recentlyPlayed[0];
+        if (!head || head.uri !== prev.uri) {
+          recentlyPlayed = [prev, ...recentlyPlayed].slice(0, RECENTLY_PLAYED_MAX);
+        }
+      }
+      return { ...snapshot, nowPlaying: next, recentlyPlayed };
+    }
 
     case 'skip_vote.updated': {
       const queueIdx = snapshot.queue.findIndex((i) => i.id === event.itemId);

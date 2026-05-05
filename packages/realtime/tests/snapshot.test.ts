@@ -7,6 +7,7 @@ describe('createEmptySnapshot', () => {
     expect(snapshot).toEqual({
       sessionId: 'sess-42',
       nowPlaying: null,
+      recentlyPlayed: [],
       playbackClock: null,
       lyrics: null,
       activeLyricsWindow: [],
@@ -24,5 +25,6 @@ describe('createEmptySnapshot', () => {
     expect(a.queue).not.toBe(b.queue);
     expect(a.pending).not.toBe(b.pending);
     expect(a.activeLyricsWindow).not.toBe(b.activeLyricsWindow);
+    expect(a.recentlyPlayed).not.toBe(b.recentlyPlayed);
   });
 });

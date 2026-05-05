@@ -148,6 +148,8 @@ async function main(): Promise<void> {
   for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     process.once(signal, () => {
       console.log(`[opendj-oss-demo] received ${signal}, shutting down`);
+      // Tear down per-session timers so the event loop can exit cleanly.
+      deps.nowPlayingPoller?.stopAll();
       server.close(() => process.exit(0));
       // Hard timeout in case a connection lingers.
       setTimeout(() => process.exit(1), 5000).unref();

@@ -48,6 +48,7 @@ import type {
   QueueItemRecord,
   QueueItemRepository,
   QueueItemStatus,
+  QueueSkipVoteRepository,
   Repositories,
   SessionRecord,
   SessionRepository,
@@ -909,6 +910,34 @@ export class InMemoryQueueItemRepository implements QueueItemRepository {
   }
 }
 
+export class InMemoryQueueSkipVoteRepository implements QueueSkipVoteRepository {
+  /** Composite key: `${queueItemId}:${guestId}`. */
+  readonly rows = new Map<string, { queueItemId: string; guestId: string; createdAt: Date }>();
+  constructor(
+    private readonly queueItems: InMemoryQueueItemRepository,
+    private readonly clock: InMemoryClock = systemClock,
+  ) {}
+
+  async recordVote(input: {
+    queueItemId: string;
+    guestId: string;
+  }): Promise<{ inserted: boolean; voteCount: number }> {
+    const key = `${input.queueItemId}:${input.guestId}`;
+    const item = await this.queueItems.findById(input.queueItemId);
+    const currentCount = item?.skipVotes ?? 0;
+    if (this.rows.has(key)) {
+      return { inserted: false, voteCount: currentCount };
+    }
+    this.rows.set(key, { ...input, createdAt: this.clock.now() });
+    const next = await this.queueItems.incrementSkipVotes(input.queueItemId);
+    return { inserted: true, voteCount: next };
+  }
+
+  async hasVoted(input: { queueItemId: string; guestId: string }): Promise<boolean> {
+    return this.rows.has(`${input.queueItemId}:${input.guestId}`);
+  }
+}
+
 export class InMemoryLyricsCacheRepository implements LyricsCacheRepository {
   /** Composite key: `${source}:${lookupKeyHash}`. */
   readonly rows = new Map<string, LyricsCacheRecord>();
@@ -1139,6 +1168,9 @@ export class InMemoryActionEventRepository implements ActionEventRepository {
 }
 
 export function createInMemoryRepositories(clock: InMemoryClock = systemClock): Repositories {
+  // queueItems is shared with queueSkipVotes — declare first so we can hand
+  // the same instance to the votes repo for atomic counter increments.
+  const queueItems = new InMemoryQueueItemRepository(clock);
   return {
     users: new InMemoryUserRepository(clock),
     accounts: new InMemoryAccountRepository(clock),
@@ -1154,7 +1186,8 @@ export function createInMemoryRepositories(clock: InMemoryClock = systemClock): 
     guests: new InMemoryGuestRepository(clock),
     guestSlots: new InMemoryGuestSlotRepository(clock),
     fingerprintPriority: new InMemoryFingerprintPriorityRepository(clock),
-    queueItems: new InMemoryQueueItemRepository(clock),
+    queueItems,
+    queueSkipVotes: new InMemoryQueueSkipVoteRepository(queueItems, clock),
     lyricsCache: new InMemoryLyricsCacheRepository(clock),
     lyricsFeedback: new InMemoryLyricsFeedbackRepository(clock),
     abuseSubjects: new InMemoryAbuseSubjectRepository(clock),

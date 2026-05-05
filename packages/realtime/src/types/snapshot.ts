@@ -13,6 +13,14 @@ import type { QueueItemSummary } from './queue-summary.js';
 export interface SessionSnapshot {
   sessionId: string;
   nowPlaying: NowPlayingTrack | null;
+  /**
+   * Last few tracks that played in this session, most recent first. Capped
+   * to a small window (default 10) — this is a transient, in-room view, not
+   * an analytics archive. The first entry is the track that was playing
+   * RIGHT BEFORE `nowPlaying`. Use it for "Recently played" strips on
+   * guest + TV views without making a separate query.
+   */
+  recentlyPlayed: NowPlayingTrack[];
   /** Most recent playback clock sample. Clients interpolate locally. */
   playbackClock: PlaybackClockSample | null;
   /** Current lyrics document (synced or unsynced). null when no match. */
@@ -31,11 +39,15 @@ export interface SessionSnapshot {
   snapshotAtEpochMs: number;
 }
 
+/** Cap on `SessionSnapshot.recentlyPlayed` length. Older entries fall off. */
+export const RECENTLY_PLAYED_MAX = 10;
+
 /** Empty snapshot for a fresh session — useful for initialization in tests + room boot. */
 export function createEmptySnapshot(sessionId: string, nowEpochMs: number): SessionSnapshot {
   return {
     sessionId,
     nowPlaying: null,
+    recentlyPlayed: [],
     playbackClock: null,
     lyrics: null,
     activeLyricsWindow: [],

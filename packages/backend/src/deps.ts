@@ -44,6 +44,7 @@ import { SoundtrackProvider } from './providers/streaming/SoundtrackProvider.js'
 import { SpotifyProvider } from './providers/streaming/spotify/SpotifyProvider.js';
 import { StreamingRouter } from './providers/streaming/StreamingRouter.js';
 import { QueueService, type RealtimeRoomRegistry } from './queue/QueueService.js';
+import { NowPlayingPoller } from './realtime/NowPlayingPoller.js';
 import { RoomRegistryImpl, type RealtimeRoomManager } from './realtime/RoomRegistryImpl.js';
 import { createDrizzleRepositories } from './repositories/drizzle/index.js';
 import type { Repositories } from './repositories/types.js';
@@ -77,6 +78,13 @@ export interface AppDeps {
    * `rooms` view above.
    */
   roomManager: RealtimeRoomManager | null;
+  /**
+   * Per-session "what's playing on the host's Spotify" poller. Driven by
+   * the realtime route's WS lifecycle: started on first subscriber,
+   * stopped after the last leaves (with a small idle grace). Null when
+   * `realtime: 'none'` because there's no room manager to publish to.
+   */
+  nowPlayingPoller: NowPlayingPoller | null;
 }
 
 export interface CreateDepsOptions {
@@ -160,11 +168,17 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
     roomManager = new RoomRegistryImpl();
     rooms = roomManager;
   }
+
+  // Defer constructing the poller until we have a roomManager + the
+  // streaming router below. We hold a ref here so it can be returned in
+  // AppDeps.
+  let nowPlayingPoller: NowPlayingPoller | null = null;
   const queueService = new QueueService({
     sessions: repositories.sessions,
     guests: repositories.guests,
     guestSlots: repositories.guestSlots,
     queueItems: repositories.queueItems,
+    queueSkipVotes: repositories.queueSkipVotes,
     rooms,
   });
 
@@ -182,6 +196,15 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
     registry: providerRegistry,
     context: { fetch: fetchImpl },
   });
+
+  if (roomManager) {
+    nowPlayingPoller = new NowPlayingPoller({
+      sessions: repositories.sessions,
+      providerConnections: repositories.providerConnections,
+      streamingRouter,
+      roomManager,
+    });
+  }
 
   const lyricsProvider = options.lyricsProvider ?? new LrclibAdapter({ fetchImpl });
   const lyricsLookupService = new LyricsLookupService({
@@ -270,5 +293,6 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
     passwordResetService,
     rooms,
     roomManager,
+    nowPlayingPoller,
   };
 }

@@ -19,10 +19,17 @@
 
 import { Hono } from 'hono';
 import type { SessionEvent } from '@opendj/realtime';
+import type { NowPlayingPoller } from '../realtime/NowPlayingPoller.js';
 import type { RealtimeRoomManager } from '../realtime/RoomRegistryImpl.js';
 
 export interface RealtimeRouteDeps {
   rooms: RealtimeRoomManager;
+  /**
+   * Optional. When supplied, the WS route starts the poller on first
+   * subscriber and schedules a stop on last disconnect. Tests + Workers
+   * deploys can omit it.
+   */
+  nowPlayingPoller?: NowPlayingPoller | null;
 }
 
 /**
@@ -74,12 +81,25 @@ export function realtimeRoutes(deps: RealtimeRouteDeps, upgradeWebSocket: Upgrad
           room.subscribe(clientId, (event: SessionEvent) => {
             ws.send(JSON.stringify(event));
           });
+          // Now-playing poller starts on first subscriber. Idempotent — the
+          // poller no-ops if it's already running for this session and
+          // cancels a pending teardown if the previous subscriber dropped
+          // within the idle grace.
+          if (deps.nowPlayingPoller) {
+            deps.nowPlayingPoller.start(sessionId);
+          }
           // Initial snapshot so the client doesn't render blank until the next event.
           const snapshot = await room.getSnapshot();
           ws.send(JSON.stringify({ type: '_snapshot', snapshot, sessionId }));
         },
         async onClose() {
           if (clientId) await room.disconnect(clientId);
+          // If we just disconnected the LAST subscriber, schedule the
+          // poller's teardown after the idle grace. A guest reload within
+          // that window cancels the teardown via the next onOpen's `start`.
+          if (deps.nowPlayingPoller && room.subscribedCount === 0) {
+            deps.nowPlayingPoller.stop(sessionId);
+          }
         },
         onError(_evt: unknown, ws: MinimalWSContext) {
           ws.close();

@@ -8,6 +8,13 @@
       "when": 1777731922487,
       "tag": "0000_tranquil_terrax",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1777989391455,
+      "tag": "0001_majestic_kinsey_walden",
+      "breakpoints": true
     }
   ]
 }

@@ -9,6 +9,7 @@ import {
   InMemoryGuestRepository,
   InMemoryGuestSlotRepository,
   InMemoryQueueItemRepository,
+  InMemoryQueueSkipVoteRepository,
   InMemorySessionRepository,
 } from '../../src/repositories/in-memory/index.js';
 import type { GuestRecord, GuestSlotRecord, SessionRecord } from '../../src/repositories/types.js';
@@ -36,6 +37,7 @@ function setup(opts: { moderationEnabled?: boolean; capOverride?: number | null 
   const guests = new InMemoryGuestRepository(clock);
   const guestSlots = new InMemoryGuestSlotRepository(clock);
   const queueItems = new InMemoryQueueItemRepository(clock);
+  const queueSkipVotes = new InMemoryQueueSkipVoteRepository(queueItems, clock);
 
   sessions.seed({
     ...baseSession,
@@ -48,7 +50,14 @@ function setup(opts: { moderationEnabled?: boolean; capOverride?: number | null 
     forSession: (id) => (id === SESSION_ID ? room : null),
   };
 
-  const service = new QueueService({ sessions, guests, guestSlots, queueItems, rooms });
+  const service = new QueueService({
+    sessions,
+    guests,
+    guestSlots,
+    queueItems,
+    queueSkipVotes,
+    rooms,
+  });
 
   // Convenience: register a guest + slot.
   async function addGuest(fingerprint = 'fp-1', userId: string | null = null) {
@@ -62,7 +71,17 @@ function setup(opts: { moderationEnabled?: boolean; capOverride?: number | null 
     return { guest, slot };
   }
 
-  return { sessions, guests, guestSlots, queueItems, rooms, room, service, addGuest };
+  return {
+    sessions,
+    guests,
+    guestSlots,
+    queueItems,
+    queueSkipVotes,
+    rooms,
+    room,
+    service,
+    addGuest,
+  };
 }
 
 const TRACK = {

@@ -26,6 +26,7 @@ import type {
   GuestSlotRepository,
   QueueItemRecord,
   QueueItemRepository,
+  QueueSkipVoteRepository,
   SessionRepository,
 } from '../repositories/types.js';
 
@@ -43,6 +44,8 @@ export interface QueueServiceDeps {
   guests: GuestRepository;
   guestSlots: GuestSlotRepository;
   queueItems: QueueItemRepository;
+  /** Persistent (cross-instance) skip-vote dedupe + counter. */
+  queueSkipVotes: QueueSkipVoteRepository;
   /** Optional room — when provided, mutations broadcast events. */
   rooms?: RealtimeRoomRegistry;
 }
@@ -210,18 +213,16 @@ export class QueueService {
   /**
    * Guest action: cast a skip vote. Returns the new vote count + threshold.
    *
-   * v1 dedupe: in-memory `Set<itemId>` per QueueService instance — stops a
-   * single guest from voting twice within a single backend process. Hosted
-   * deployments will replace this with a `skip_votes` table for cross-instance
-   * dedupe.
+   * Dedupe + counter live in `queue_skip_votes` (composite PK on
+   * (queue_item_id, guest_id)) so a guest's second vote returns
+   * `already_voted` whether or not it lands on the same backend instance.
    */
-  private readonly castedVotes = new Set<string>();
-
-  async castSkipVote(input: {
-    itemId: string;
-    sessionId: string;
-    slotToken: string;
-  }): Promise<{ votes: number; threshold: number; voteSkipMode: Session['voteSkipMode'] }> {
+  async castSkipVote(input: { itemId: string; sessionId: string; slotToken: string }): Promise<{
+    votes: number;
+    threshold: number;
+    voteSkipMode: Session['voteSkipMode'];
+    thresholdReached: boolean;
+  }> {
     const slot = await this.deps.guestSlots.findBySlotToken(input.slotToken);
     if (!slot) throw new QueueServiceError('unknown_slot_token', 'Unknown slot token.');
     if (slot.sessionId !== input.sessionId) {
@@ -237,26 +238,38 @@ export class QueueService {
       throw new QueueServiceError('item_session_mismatch', 'Item is not in this session.');
     }
 
-    const dedupeKey = `${input.itemId}:${slot.id}`;
-    if (this.castedVotes.has(dedupeKey)) {
+    const guest = await this.deps.guests.findBySessionAndFingerprint(
+      input.sessionId,
+      slot.fingerprintHash,
+    );
+    if (!guest) throw new QueueServiceError('guest_not_found', 'No guest row for this slot.');
+
+    const result = await this.deps.queueSkipVotes.recordVote({
+      queueItemId: input.itemId,
+      guestId: guest.id,
+    });
+    if (!result.inserted) {
       throw new QueueServiceError(
         'already_voted',
-        'This slot has already voted to skip this item.',
+        'This guest has already voted to skip this item.',
       );
     }
-    this.castedVotes.add(dedupeKey);
 
-    const votes = await this.deps.queueItems.incrementSkipVotes(input.itemId);
+    const votes = result.voteCount;
+    const thresholdReached = votes >= session.voteSkipThreshold;
+
     await this.publishToRoom(input.sessionId, {
       type: 'skip_vote.updated',
       itemId: input.itemId,
       votes,
       threshold: session.voteSkipThreshold,
     });
+
     return {
       votes,
       threshold: session.voteSkipThreshold,
       voteSkipMode: session.voteSkipMode,
+      thresholdReached,
     };
   }
 

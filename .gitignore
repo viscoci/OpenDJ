@@ -49,3 +49,6 @@ Thumbs.db
 
 # Local agent state
 .claude/
+
+# Closed-source design canvas (lives in opendj-live, not OSS).
+docs/designs/

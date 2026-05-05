@@ -99,6 +99,37 @@ export type QueueItemRow = typeof queueItems.$inferSelect;
 export type QueueItemInsert = typeof queueItems.$inferInsert;
 
 /**
+ * Per-(queueItem, guest) skip-vote ledger. Enforces "one vote per guest per
+ * item" via the composite primary key. The aggregate `queue_items.skip_votes`
+ * counter is maintained alongside this table for fast reads.
+ *
+ * `guests.id` is the canonical voter identity — a session-scoped guest row,
+ * not the cross-session `users.id`. This means an anonymous guest who scans
+ * twice from two different devices counts as two votes; that's a deliberate
+ * tradeoff to keep the OSS demo simple. Hosted abuse layer can de-dupe by
+ * fingerprint/ip if needed.
+ */
+export const queueSkipVotes = pgTable(
+  'queue_skip_votes',
+  {
+    queueItemId: uuid('queue_item_id')
+      .notNull()
+      .references(() => queueItems.id, { onDelete: 'cascade' }),
+    guestId: uuid('guest_id')
+      .notNull()
+      .references(() => guests.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.queueItemId, table.guestId] }),
+    itemIdx: index('queue_skip_votes_item').on(table.queueItemId),
+  }),
+);
+
+export type QueueSkipVoteRow = typeof queueSkipVotes.$inferSelect;
+export type QueueSkipVoteInsert = typeof queueSkipVotes.$inferInsert;
+
+/**
  * Append-only event stream for realtime replay/debugging. Payload is
  * public/session-safe only — no secrets, no PII.
  */

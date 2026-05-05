@@ -122,6 +122,66 @@ describe('applyEvent — playback / now-playing', () => {
     expect(s.nowPlaying).toBeNull();
   });
 
+  it('rolls the previous track onto recentlyPlayed when uri changes', () => {
+    const trackA = {
+      uri: 'spotify:track:a',
+      name: 'A',
+      artist: 'A',
+      albumArt: null,
+      durationMs: 200_000,
+      progressMs: 0,
+      isPlaying: true,
+      zoneId: 'default',
+    };
+    const trackB = { ...trackA, uri: 'spotify:track:b', name: 'B' };
+    let s = snapshot();
+    s = applyEvent(s, { type: 'now_playing.updated', track: trackA });
+    expect(s.recentlyPlayed).toEqual([]);
+    s = applyEvent(s, { type: 'now_playing.updated', track: trackB });
+    expect(s.recentlyPlayed).toHaveLength(1);
+    expect(s.recentlyPlayed[0]?.uri).toBe('spotify:track:a');
+    expect(s.nowPlaying?.uri).toBe('spotify:track:b');
+  });
+
+  it('does not duplicate recentlyPlayed when the same track refreshes (progress drift)', () => {
+    const t = {
+      uri: 'spotify:track:a',
+      name: 'A',
+      artist: 'A',
+      albumArt: null,
+      durationMs: 200_000,
+      progressMs: 0,
+      isPlaying: true,
+      zoneId: 'default',
+    };
+    let s = snapshot();
+    s = applyEvent(s, { type: 'now_playing.updated', track: t });
+    s = applyEvent(s, { type: 'now_playing.updated', track: { ...t, progressMs: 5000 } });
+    expect(s.recentlyPlayed).toEqual([]);
+  });
+
+  it('caps recentlyPlayed at the configured maximum', () => {
+    let s = snapshot();
+    for (let i = 0; i < 15; i += 1) {
+      s = applyEvent(s, {
+        type: 'now_playing.updated',
+        track: {
+          uri: `spotify:track:${i}`,
+          name: `T${i}`,
+          artist: 'A',
+          albumArt: null,
+          durationMs: 1000,
+          progressMs: 0,
+          isPlaying: true,
+          zoneId: 'default',
+        },
+      });
+    }
+    expect(s.recentlyPlayed.length).toBe(10);
+    // Most-recent-first ordering: previous track 13 sits at the head.
+    expect(s.recentlyPlayed[0]?.uri).toBe('spotify:track:13');
+  });
+
   it('playback.clock_sampled stores the sample', () => {
     const next = applyEvent(snapshot(), {
       type: 'playback.clock_sampled',

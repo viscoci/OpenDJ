@@ -19,6 +19,8 @@ import { loginAuthRoutes } from './routes/loginAuth.js';
 import { guestRoutes } from './routes/guest.js';
 import { healthRoutes } from './routes/health.js';
 import { lyricsRoutes, sessionLyricsRoutes } from './routes/lyrics.js';
+import { deviceRoutes } from './routes/devices.js';
+import { playbackRoutes } from './routes/playback.js';
 import { providerOAuthRoutes } from './routes/providerOAuth.js';
 import { publicConfigRoutes } from './routes/publicConfig.js';
 import { queueRoutes } from './routes/queue.js';
@@ -85,7 +87,13 @@ export function createApp(options: AppOptions): Hono<{ Variables: AuthVariables 
   );
   v1.route(
     '/sessions',
-    sessionRoutes({ authService: deps.authService, sessionService: deps.sessionService }),
+    sessionRoutes({
+      authService: deps.authService,
+      sessionService: deps.sessionService,
+      rooms: deps.rooms,
+      queueItems: deps.repositories.queueItems,
+      guestSlots: deps.repositories.guestSlots,
+    }),
   );
   v1.route(
     '/sessions/:id/queue',
@@ -94,6 +102,24 @@ export function createApp(options: AppOptions): Hono<{ Variables: AuthVariables 
   v1.route(
     '/sessions/:id/search',
     searchRoutes({
+      sessions: deps.repositories.sessions,
+      providerConnections: deps.repositories.providerConnections,
+      streamingRouter: deps.streamingRouter,
+    }),
+  );
+  v1.route(
+    '/sessions/:id/playback',
+    playbackRoutes({
+      authService: deps.authService,
+      sessions: deps.repositories.sessions,
+      providerConnections: deps.repositories.providerConnections,
+      streamingRouter: deps.streamingRouter,
+    }),
+  );
+  v1.route(
+    '/sessions/:id/devices',
+    deviceRoutes({
+      authService: deps.authService,
       sessions: deps.repositories.sessions,
       providerConnections: deps.repositories.providerConnections,
       streamingRouter: deps.streamingRouter,
@@ -131,7 +157,10 @@ export function createApp(options: AppOptions): Hono<{ Variables: AuthVariables 
   if (options.upgradeWebSocket && deps.roomManager) {
     v1.route(
       '/sessions/:id/realtime',
-      realtimeRoutes({ rooms: deps.roomManager }, options.upgradeWebSocket),
+      realtimeRoutes(
+        { rooms: deps.roomManager, nowPlayingPoller: deps.nowPlayingPoller },
+        options.upgradeWebSocket,
+      ),
     );
   }
 

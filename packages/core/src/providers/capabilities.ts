@@ -24,6 +24,8 @@ export const PROVIDER_FEATURES = {
   VolumeStepDown: 'volume.step_down',
   ZonesRead: 'zones.read',
   ZoneSelect: 'zones.select',
+  DevicesRead: 'devices.read',
+  DeviceTransferPlayback: 'devices.transfer_playback',
   PlaylistsRead: 'playlists.read',
   PlaylistsCreate: 'playlists.create',
   PlaylistTracksRead: 'playlist_tracks.read',

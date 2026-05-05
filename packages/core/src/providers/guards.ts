@@ -11,6 +11,7 @@
 
 import { isFeatureSupported, PROVIDER_FEATURES, type ProviderFeatureId } from './capabilities.js';
 import type {
+  ISupportsDevices,
   ISupportsNowPlayingRead,
   ISupportsPause,
   ISupportsPlaylistsRead,
@@ -138,5 +139,22 @@ export function supportsPlaylistTracksAdd(
     provider,
     PROVIDER_FEATURES.PlaylistTracksAdd,
     'addTracksToPlaylist',
+  );
+}
+
+/**
+ * Provider exposes BOTH `getDevices()` AND `transferPlayback()`. Some
+ * providers may eventually only support listing — keep them split if/when
+ * that happens.
+ */
+export function supportsDevices(
+  provider: IStreamingProvider,
+): provider is IStreamingProvider & ISupportsDevices {
+  const capabilities = provider.getCapabilities();
+  return (
+    isFeatureSupported(capabilities, PROVIDER_FEATURES.DevicesRead) &&
+    isFeatureSupported(capabilities, PROVIDER_FEATURES.DeviceTransferPlayback) &&
+    hasMethod(provider, 'getDevices') &&
+    hasMethod(provider, 'transferPlayback')
   );
 }

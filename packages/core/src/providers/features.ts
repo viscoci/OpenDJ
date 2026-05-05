@@ -95,3 +95,39 @@ export interface ISupportsPlaylistTracksRead {
 export interface ISupportsPlaylistTracksAdd {
   addTracksToPlaylist(playlistUri: string, trackUris: string[]): Promise<void>;
 }
+
+/**
+ * A discoverable playback device the provider can target. Modeled on
+ * Spotify Connect's device list — the host UI uses it to switch which
+ * speaker / phone / browser tab actually plays audio.
+ */
+export interface PlaybackDevice {
+  id: string;
+  name: string;
+  type:
+    | 'computer'
+    | 'speaker'
+    | 'phone'
+    | 'tablet'
+    | 'tv'
+    | 'avr'
+    | 'stb'
+    | 'audio_dongle'
+    | 'game_console'
+    | 'cast_audio'
+    | 'cast_video'
+    | 'automobile'
+    | 'unknown';
+  isActive: boolean;
+  /** Provider-controlled volume on this device (0-100), if known. */
+  volumePercent?: number | null;
+  /** Some devices restrict transfer (e.g. browser tabs that have lost focus). */
+  isRestricted?: boolean;
+}
+
+export interface ISupportsDevices {
+  /** List currently-known playback devices for the connected provider account. */
+  getDevices(): Promise<PlaybackDevice[]>;
+  /** Move active playback to the given device. Provider may keep current state (paused vs playing). */
+  transferPlayback(deviceId: string, opts?: { play?: boolean }): Promise<void>;
+}

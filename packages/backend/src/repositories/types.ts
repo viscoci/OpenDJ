@@ -222,6 +222,30 @@ export interface QueueItemRepository {
   incrementSkipVotes(id: string): Promise<number>;
 }
 
+export interface QueueSkipVoteRepository {
+  /**
+   * Atomically record a (queueItemId, guestId) vote. Returns the new
+   * aggregate vote count for the item AND a flag indicating whether THIS
+   * call was the one that inserted (i.e. `true` for a fresh vote, `false`
+   * for a duplicate).
+   *
+   * Used by `QueueService.castSkipVote` so dedupe survives restarts and
+   * works across multiple backend instances. The aggregate counter on
+   * `queue_items.skip_votes` is the read-side cache; this table is the
+   * append-only ledger.
+   */
+  recordVote(input: {
+    queueItemId: string;
+    guestId: string;
+  }): Promise<{ inserted: boolean; voteCount: number }>;
+  /**
+   * Did this guest already vote on this item? Cheap helper for the UI to
+   * avoid hitting the dedupe error path. Optional in repos that don't
+   * support it efficiently; callers should fall back to `recordVote`.
+   */
+  hasVoted(input: { queueItemId: string; guestId: string }): Promise<boolean>;
+}
+
 export interface LyricsCacheRecord {
   id: string;
   source: string;
@@ -608,6 +632,7 @@ export interface Repositories {
   guestSlots: GuestSlotRepository;
   fingerprintPriority: FingerprintPriorityRepository;
   queueItems: QueueItemRepository;
+  queueSkipVotes: QueueSkipVoteRepository;
   lyricsCache: LyricsCacheRepository;
   lyricsFeedback: LyricsFeedbackRepository;
   abuseSubjects: AbuseSubjectRepository;

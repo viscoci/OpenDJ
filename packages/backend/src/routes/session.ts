@@ -11,11 +11,18 @@ import * as v from 'valibot';
 import type { AuthContext } from '@opendj/auth';
 import type { AuthService } from '../auth/AuthService.js';
 import { requireAuth, requireClaim, type AuthVariables } from '../auth/middleware.js';
+import type { RealtimeRoomRegistry } from '../queue/QueueService.js';
 import { SessionService, SessionServiceError } from '../session/SessionService.js';
+import { toQueueItemSummary } from '@opendj/realtime';
+import type { GuestSlotRepository, QueueItemRepository } from '../repositories/types.js';
 
 export interface SessionRouteDeps {
   authService: AuthService;
   sessionService: SessionService;
+  /** Optional — when supplied, exposes the public TV snapshot endpoint. */
+  rooms?: RealtimeRoomRegistry;
+  queueItems?: QueueItemRepository;
+  guestSlots?: GuestSlotRepository;
 }
 
 const VoteSkipMode = v.union([
@@ -110,6 +117,57 @@ export function sessionRoutes(deps: SessionRouteDeps): Hono<{ Variables: AuthVar
       }
       throw err;
     }
+  });
+
+  /**
+   * GET /by-slug/:slug/tv-snapshot — public, no auth.
+   *
+   * Used by the TV page (cast to a room screen). Returns enough state for an
+   * initial fullscreen render without going through the WS handshake. The
+   * realtime snapshot (when a room is live) is the source of truth for
+   * `nowPlaying` + `recentlyPlayed`; falling back to empty values when the
+   * room hasn't materialized (no guests connected yet).
+   */
+  app.get('/by-slug/:slug/tv-snapshot', async (c) => {
+    const slug = c.req.param('slug') ?? '';
+    let session;
+    try {
+      session = await deps.sessionService.getBySlug(slug);
+    } catch (err) {
+      if (err instanceof SessionServiceError) {
+        const { status, payload } = mapErrorToStatus(err.code);
+        return c.json(payload, status as 400 | 403 | 404 | 409);
+      }
+      throw err;
+    }
+
+    const room = deps.rooms?.forSession(session.id) ?? null;
+    const snapshot = room ? await room.getSnapshot() : null;
+
+    let queueSummaries: ReturnType<typeof toQueueItemSummary>[];
+    if (snapshot && snapshot.queue.length > 0) {
+      queueSummaries = [...snapshot.queue];
+    } else if (deps.queueItems) {
+      const items = await deps.queueItems.findAllForSession(session.id);
+      queueSummaries = items
+        .filter((i) => i.status === 'approved' || i.status === 'queued' || i.status === 'playing')
+        .map(toQueueItemSummary);
+    } else {
+      queueSummaries = [];
+    }
+
+    let activeGuestCount = snapshot?.activeGuestCount ?? 0;
+    if (deps.guestSlots && activeGuestCount === 0) {
+      activeGuestCount = await deps.guestSlots.countByStatus(session.id, 'active');
+    }
+
+    return c.json({
+      session,
+      nowPlaying: snapshot?.nowPlaying ?? null,
+      recentlyPlayed: snapshot?.recentlyPlayed ?? [],
+      queue: queueSummaries,
+      activeGuestCount,
+    });
   });
 
   /** GET /:id — public read for hydration. */
