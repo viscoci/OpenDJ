@@ -146,6 +146,21 @@ async function captureHostDashboard(browser: Browser, cookieValue: string): Prom
   await page.context().close();
 }
 
+async function captureHostSession(
+  browser: Browser,
+  cookieValue: string,
+  sessionId: string,
+): Promise<void> {
+  const page = await newAuthedPage(browser, cookieValue);
+  await page.goto(`${BASE_URL}/host/sessions/${sessionId}`, { waitUntil: 'networkidle' });
+  // Wait for the now-playing card to render. It might say "Nothing playing
+  // yet" but that's still a fully-rendered state worth capturing.
+  await page.waitForSelector('app-now-playing-card', { timeout: 5_000 });
+  await page.waitForTimeout(500);
+  await page.screenshot({ path: resolve(OUT_DIR, 'host-session.png'), fullPage: false });
+  await page.context().close();
+}
+
 async function captureGuestLanding(browser: Browser, qrSlug: string): Promise<void> {
   const ctx = await browser.newContext({
     viewport: MOBILE_VIEWPORT,
@@ -158,6 +173,21 @@ async function captureGuestLanding(browser: Browser, qrSlug: string): Promise<vo
   // Guest fingerprint + identity calls happen on mount — give them a moment.
   await page.waitForTimeout(800);
   await page.screenshot({ path: resolve(OUT_DIR, 'guest-landing.png'), fullPage: false });
+  await ctx.close();
+}
+
+async function captureTvView(browser: Browser, qrSlug: string): Promise<void> {
+  // TV view targets a 1280x720 fullscreen surface — common for casts to a
+  // browser tab on a TV. Higher res Playwright takes for free at @2.
+  const ctx = await browser.newContext({
+    viewport: { width: 1280, height: 720 },
+    deviceScaleFactor: 2,
+  });
+  const page = await ctx.newPage();
+  await page.goto(`${BASE_URL}/tv/${qrSlug}`, { waitUntil: 'networkidle' });
+  // tvSnapshot fetch + WS open happen on mount; allow them to settle.
+  await page.waitForTimeout(1000);
+  await page.screenshot({ path: resolve(OUT_DIR, 'tv-view.png'), fullPage: false });
   await ctx.close();
 }
 
@@ -180,13 +210,17 @@ async function main(): Promise<void> {
     console.log('[screenshots] captured host-login.png');
     await captureHostDashboard(browser, setup.cookieValue);
     console.log('[screenshots] captured host-dashboard.png');
+    await captureHostSession(browser, setup.cookieValue, setup.sessionId);
+    console.log('[screenshots] captured host-session.png');
     await captureGuestLanding(browser, setup.qrSlug);
     console.log('[screenshots] captured guest-landing.png');
+    await captureTvView(browser, setup.qrSlug);
+    console.log('[screenshots] captured tv-view.png');
   } finally {
     await browser.close();
   }
 
-  console.log(`[screenshots] done — wrote 3 files to ${OUT_DIR}`);
+  console.log(`[screenshots] done — wrote 5 files to ${OUT_DIR}`);
 }
 
 main().catch((err) => {

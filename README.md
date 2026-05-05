@@ -19,14 +19,14 @@ A working hosted implementation lives at [opendj.live](https://opendj.live), bui
 
 End-to-end demo via `docker compose up`:
 
-- 🎟️ **Guest journey** — scan QR → land on `/u/:slug` → fingerprint-based identity → request songs (3-per-guest cap, configurable)
-- 🎛️ **Host journey** — register / log in (email + password or Google OAuth) → personal account auto-bootstrapped → create session → moderate the queue (approve / reject pending) → end session
-- 🎵 **Spotify provider** — OAuth connect from the host dashboard, search proxied through `/api/v1/sessions/:id/search`
-- 🔌 **Realtime** — WebSocket room per session, in-process registry on Node, swappable backend
-- 📧 **Account flows** — email verification + password reset (both single-use, SHA-256-hashed token storage)
-- 🛡️ **Auth model** — `__Host-` prefixed cookies for hosts, opaque bearer tokens for guest slots, capability-based claims (`session:create`, `queue:moderate`, etc.) checked per-request
+- 🎟️ **Guest journey** — scan QR → land on `/u/:slug` → live Spotify search → click a result to add it to the queue. Now-playing card + skip-vote + recently-played strip, all kept in sync over WebSocket.
+- 🎛️ **Host journey** — register / log in (email + password or Google OAuth) → personal account auto-bootstrapped → create session → moderate the queue → **skip / pause / resume playback** → swap which Spotify Connect device plays audio → end session.
+- 📺 **TV view** — public read-only `/tv/:slug` for casting to a room screen. Fullscreen now-playing, QR to join, up-next queue, listener count.
+- 🎵 **Spotify provider** — search, queue track, now-playing read, skip / pause / resume, volume read+set, device list + transfer playback. Plus the now-playing poller that publishes diff-based updates to the realtime room every 5s while subscribers are connected.
+- 🔌 **Realtime** — per-session WebSocket room with snapshot-on-connect + delta events (`now_playing.updated`, `queue.item_*`, `skip_vote.updated`, `session.ended`). In-process registry on Node, swappable for Cloudflare Durable Objects on hosted.
+- 🛡️ **Auth model** — `__Host-` prefixed cookies for hosts, opaque bearer tokens for guest slots, capability-based claims (`session:create`, `queue:moderate`, `provider:control_playback`, etc.) checked per-request. Email verification + password reset wired (single-use, SHA-256-hashed tokens).
 
-> **Status:** every package has a real implementation, `pnpm turbo run typecheck test` is green across the workspace (~600 tests), and `apps/oss-demo` boots end-to-end behind a single port. The first migration is generated and applied automatically on container start.
+> **Status:** every P0 package is real (no stubs), `pnpm turbo run typecheck test` is green across the workspace (~700 tests), and `apps/oss-demo` boots end-to-end behind a single port. Migrations apply on container start.
 
 ## Quickstart (self-host)
 
@@ -58,17 +58,22 @@ The container runs Drizzle migrations against the bundled Postgres on startup, s
 
 ### Use the demo
 
-1. Open http://127.0.0.1:8888/host/register and create a host account
+1. Open http://127.0.0.1:8888/host/login and **Create account**
 2. From the dashboard, click **Connect Spotify** (requires Spotify creds in `.env`)
 3. Click **Create session** — you get a `qrSlug`
-4. Open `http://127.0.0.1:8888/u/<qrSlug>` in another browser / mobile to play guest
-5. Search + request a song; back on the host page, approve it from the queue
+4. On the session page, click **Choose device** to pick which Spotify Connect endpoint plays audio
+5. Open `http://127.0.0.1:8888/u/<qrSlug>` in another browser / mobile — search any song and click a result to add it to the queue
+6. Cast `http://127.0.0.1:8888/tv/<qrSlug>` on a TV / second monitor for a fullscreen "now playing + scan to join" view
 
 ### Screenshots
 
-| Host login                                                                                    | Host dashboard                                                                                                                    | Guest request                                                                                                                   |
-| --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| ![Host login screen showing email + password sign-in tabs](./docs/screenshots/host-login.png) | ![Host dashboard with Music providers card, session creation form, and a live session row](./docs/screenshots/host-dashboard.png) | ![Mobile guest landing showing 'You're at Friday Night Karaoke' and a track request form](./docs/screenshots/guest-landing.png) |
+| Host login                                                                         | Host dashboard                                                                                      | Host session                                                                                                         |
+| ---------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| ![Host login screen with email + password tabs](./docs/screenshots/host-login.png) | ![Host dashboard with Music providers card and live session](./docs/screenshots/host-dashboard.png) | ![Host session page with QR code, now-playing, device picker, queue moderation](./docs/screenshots/host-session.png) |
+
+| Guest request                                                                                         | TV view                                                                                                        |
+| ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| ![Mobile guest landing — search box + now-playing card + queue](./docs/screenshots/guest-landing.png) | ![Fullscreen TV view — now-playing, QR to join, up-next queue, listener count](./docs/screenshots/tv-view.png) |
 
 > Generated by `pnpm screenshots` — runs Playwright headlessly against the live `:8888` stack and writes PNGs to `docs/screenshots/`. Re-run any time the UI changes.
 
