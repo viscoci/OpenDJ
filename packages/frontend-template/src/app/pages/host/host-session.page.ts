@@ -140,7 +140,7 @@ import { OpenDjClientService } from '../../services/opendj-client.service.js';
 
         <section class="card up-next">
           <h2>Up next</h2>
-          @if (providerQueue().length === 0 && approvedItems().length === 0) {
+          @if (providerQueue().length === 0) {
             <p class="empty">
               Queue is empty. Send guests to the URL above to start filling it up.
             </p>
@@ -442,49 +442,33 @@ export class HostSessionPage {
   );
 
   /**
-   * One unified Up-Next list. Spotify's queue is the source of truth — each
-   * entry knows whether it came from an OpenDJ guest request (matched by
-   * trackUri against the approved queue) so the UI can badge it. Approved
-   * OpenDJ items that haven't yet shown up on Spotify (e.g. push failed,
-   * not yet polled) tail the list so the host still sees them.
+   * One unified Up-Next list. Spotify's queue is the SOLE source of
+   * truth — we never display OpenDJ items that aren't in Spotify's
+   * queue, because that lies to the host. The backend's
+   * NowPlayingPoller retries pushing unsynced approved items each tick
+   * and marks them played/rejected if they stay stuck past the grace
+   * window. Each entry annotates whether it came from an OpenDJ guest
+   * request (matched by trackUri against the approved queue) so the UI
+   * can badge it.
    */
   readonly mergedQueue = computed(() => {
     const provider = this.providerQueue();
     const approved = this.approvedItems();
     const used = new Set<string>();
-    const entries: Array<{
-      key: string;
-      track: { uri: string; name: string; artist: string; albumArt: string | null };
-      openDjItem: QueueListItem | null;
-    }> = [];
-
-    let i = 0;
-    for (const t of provider) {
+    return provider.map((t, i) => {
       const match = approved.find((q) => q.trackUri === t.uri && !used.has(q.id));
       if (match) used.add(match.id);
-      entries.push({
-        key: `p-${i++}-${t.uri}`,
+      const entry: {
+        key: string;
+        track: { uri: string; name: string; artist: string; albumArt: string | null };
+        openDjItem: QueueListItem | null;
+      } = {
+        key: `p-${i}-${t.uri}`,
         track: { uri: t.uri, name: t.name, artist: t.artist, albumArt: t.albumArt },
         openDjItem: match ?? null,
-      });
-    }
-    // OpenDJ items the provider hasn't picked up yet — likely a queue push
-    // that didn't make it (e.g. NO_ACTIVE_DEVICE). Show them so the host
-    // doesn't think the request vanished.
-    for (const q of approved) {
-      if (used.has(q.id)) continue;
-      entries.push({
-        key: `o-${q.id}`,
-        track: {
-          uri: q.trackUri,
-          name: q.trackName,
-          artist: q.artistName,
-          albumArt: q.albumArtUrl,
-        },
-        openDjItem: q,
-      });
-    }
-    return entries;
+      };
+      return entry;
+    });
   });
 
   private realtime: RealtimeClient | null = null;

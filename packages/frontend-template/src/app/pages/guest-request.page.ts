@@ -48,6 +48,7 @@ import {
 } from '../components/search-result-list.component.js';
 import { getOrCreateGuestFingerprintHash } from '../services/guest-fingerprint.js';
 import { OpenDjClientService } from '../services/opendj-client.service.js';
+import { SnackbarService } from '../services/snackbar.service.js';
 import { buildQueueEtaMs, formatEta } from '../utils/queue-eta.js';
 
 @Component({
@@ -107,9 +108,6 @@ import { buildQueueEtaMs, formatEta } from '../utils/queue-eta.js';
             (query)="onQueryChange($event)"
             (pick)="onPick($event)"
           />
-          @if (submitToast(); as toast) {
-            <p class="toast" [class.error]="toast.kind === 'error'">{{ toast.message }}</p>
-          }
         </section>
 
         <section class="card queue-section">
@@ -319,6 +317,7 @@ export class GuestRequestPage {
   private readonly route = inject(ActivatedRoute);
   private readonly destroyRef = inject(DestroyRef);
   private readonly clientService = inject(OpenDjClientService);
+  private readonly snackbar = inject(SnackbarService);
 
   readonly session: WritableSignal<SessionWire | null> = signal(null);
   readonly slot: WritableSignal<GuestIdentityResponse | null> = signal(null);
@@ -333,8 +332,6 @@ export class GuestRequestPage {
   readonly searchError = signal<string | null>(null);
   readonly searchDisabledReason = signal<string | null>(null);
   readonly submitting = signal(false);
-  readonly submitToast: WritableSignal<{ kind: 'ok' | 'error'; message: string } | null> =
-    signal(null);
   readonly votedItemIds = signal<ReadonlySet<string>>(new Set());
 
   readonly visibleQueue = computed(() =>
@@ -375,51 +372,29 @@ export class GuestRequestPage {
   };
 
   /**
-   * Unified Up-Next list: provider queue is the source of truth, with
-   * OpenDJ-mediated rows annotated. Items the guest themselves added get
-   * the "Yours" pill; other guest-requested items get the "Requested"
-   * pill. Items that are still waiting to push to Spotify (e.g. host has
-   * no active device) tail the list so guests see their request didn't
-   * vanish.
+   * Unified Up-Next list. The provider's queue (Spotify) is the SOLE
+   * source of truth — we never display OpenDJ items that aren't in
+   * Spotify's queue, because that lies to the guest. The backend's
+   * NowPlayingPoller retries pushing unsynced approved items each tick
+   * and marks them played/rejected if they stay stuck past the grace
+   * window. Guest-requested rows still get annotated for "Yours" /
+   * "Requested" badging by matching trackUri.
    */
   readonly mergedQueue = computed(() => {
     const provider = this.providerQueue();
     const opendj = this.visibleQueue();
     const myGuestId = this.slot()?.guestId ?? null;
     const used = new Set<string>();
-    const entries: Array<{
-      key: string;
-      track: { uri: string; name: string; artist: string; albumArt: string | null };
-      openDjItem: { id: string; guestId: string } | null;
-      isMine: boolean;
-    }> = [];
-
-    let i = 0;
-    for (const t of provider) {
+    return provider.map((t, i) => {
       const match = opendj.find((q) => q.trackUri === t.uri && !used.has(q.id));
       if (match) used.add(match.id);
-      entries.push({
-        key: `p-${i++}-${t.uri}`,
+      return {
+        key: `p-${i}-${t.uri}`,
         track: { uri: t.uri, name: t.name, artist: t.artist, albumArt: t.albumArt },
         openDjItem: match ?? null,
         isMine: !!match && myGuestId !== null && match.guestId === myGuestId,
-      });
-    }
-    for (const q of opendj) {
-      if (used.has(q.id)) continue;
-      entries.push({
-        key: `o-${q.id}`,
-        track: {
-          uri: q.trackUri,
-          name: q.trackName,
-          artist: q.artistName,
-          albumArt: q.albumArtUrl,
-        },
-        openDjItem: q,
-        isMine: myGuestId !== null && q.guestId === myGuestId,
-      });
-    }
-    return entries;
+      };
+    });
   });
 
   readonly sessionEnded = computed(() => {
@@ -483,7 +458,6 @@ export class GuestRequestPage {
     const slot = this.slot();
     if (!session || !slot || slot.status !== 'active') return;
     this.submitting.set(true);
-    this.submitToast.set(null);
     try {
       await this.clientService.client.queue.request(session.id, slot.slotToken, {
         uri: result.trackUri,
@@ -492,21 +466,16 @@ export class GuestRequestPage {
         albumArt: result.albumArtUrl,
         durationMs: result.durationMs ?? 0,
       });
-      this.submitToast.set({
-        kind: 'ok',
-        message: session.moderationEnabled
+      this.snackbar.success(
+        session.moderationEnabled
           ? 'Submitted for review.'
           : `Added "${result.trackName}" to the queue.`,
-      });
+      );
       // Keep the search results visible — guests often want to add more
-      // tracks from the same search without retyping. They can clear the
-      // input themselves to start a new search.
+      // tracks from the same search without retyping.
     } catch (err) {
       const code = err instanceof ApiError ? err.code : 'error';
-      this.submitToast.set({
-        kind: 'error',
-        message: this.errorMessageForCode(code),
-      });
+      this.snackbar.error(this.errorMessageForCode(code), 6000);
     } finally {
       this.submitting.set(false);
     }

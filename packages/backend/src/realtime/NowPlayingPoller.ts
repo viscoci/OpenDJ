@@ -41,6 +41,7 @@ import {
   InvalidProviderCredentialsError,
   supportsNowPlayingRead,
   supportsQueueRead,
+  supportsQueueTrack,
   type IStreamingProvider,
   type NowPlayingTrack,
   type Track,
@@ -360,15 +361,19 @@ export class NowPlayingPoller {
   }
 
   /**
-   * Mark approved OpenDJ queue items as `played` once they're no longer
-   * present on the provider side. Items < `RECONCILE_GRACE_MS` old are
-   * skipped — they may have been pushed to Spotify but not yet appear in
-   * the next /queue response.
+   * Reconcile OpenDJ queue items against the provider's reality. Two
+   * passes per tick, both gated on `queueItems` being wired:
    *
-   * Approved items whose URI matches the current now-playing track are
-   * promoted to `playing`; when the now-playing then transitions to a
-   * different URI on the next tick the same approved items will be
-   * reconciled to `played`.
+   * 1. **Retry pump**: approved items younger than `RECONCILE_GRACE_MS`
+   *    that aren't on the provider's queue and aren't currently playing
+   *    get re-pushed via `provider.queueTrack`. Covers the case where
+   *    the initial push failed (NO_ACTIVE_DEVICE at request time, host
+   *    came online late, transient network blip).
+   *
+   * 2. **Status reconciliation**: items older than the grace window get
+   *    a deterministic terminal status — `playing` if their URI is now
+   *    playing, `played` if they're past the queue + now-playing, so
+   *    they stop counting against the per-guest cap.
    */
   private async reconcileQueue(
     sessionId: string,
@@ -378,19 +383,74 @@ export class NowPlayingPoller {
     const repo = this.deps.queueItems!;
     const RECONCILE_GRACE_MS = 30_000;
     const now = Date.now();
-    const liveUris = new Set<string>();
-    if (nowPlaying) liveUris.add(nowPlaying.uri);
-    for (const t of providerQueue) liveUris.add(t.uri);
 
     const items = await repo.findAllForSession(sessionId);
+
+    // Resolve the provider once for the retry pump (only if we'll need it).
+    let providerForRetry: IStreamingProvider | null = null;
+    const hasUnsyncedYoung = items.some((item) => {
+      if (item.status !== 'approved') return false;
+      const ageMs = now - item.createdAt.getTime();
+      if (ageMs >= RECONCILE_GRACE_MS) return false;
+      if (nowPlaying?.uri === item.trackUri) return false;
+      return !providerQueue.some((t) => t.uri === item.trackUri);
+    });
+    if (hasUnsyncedYoung) {
+      const cached = this.state.get(sessionId);
+      if (cached?.cachedAccountId && cached.cachedProviderId) {
+        try {
+          providerForRetry = await this.deps.streamingRouter.getProvider(
+            cached.cachedAccountId,
+            cached.cachedProviderId,
+          );
+        } catch {
+          // already logged in tick(); skip retry this round.
+        }
+      }
+    }
+
     for (const item of items) {
       if (item.status !== 'approved' && item.status !== 'playing') continue;
       const ageMs = now - item.createdAt.getTime();
-      if (ageMs < RECONCILE_GRACE_MS) continue;
-
       const isCurrent = nowPlaying?.uri === item.trackUri;
       const isQueued = providerQueue.some((t) => t.uri === item.trackUri);
 
+      if (ageMs < RECONCILE_GRACE_MS) {
+        // Within grace: try to retry-push if missing on the provider.
+        if (
+          !isCurrent &&
+          !isQueued &&
+          providerForRetry &&
+          supportsQueueTrack(providerForRetry) &&
+          item.status === 'approved'
+        ) {
+          try {
+            await providerForRetry.queueTrack({
+              uri: item.trackUri,
+              name: item.trackName,
+              artist: item.artistName,
+              albumArt: item.albumArtUrl,
+              durationMs: item.durationMs ?? 0,
+            });
+            this.logger.warn('[NowPlayingPoller] retry-pushed unsynced item to provider', {
+              sessionId,
+              itemId: item.id,
+              trackUri: item.trackUri,
+            });
+          } catch (err) {
+            // Swallow — most common cause is NO_ACTIVE_DEVICE; we'll try
+            // again next tick or eventually mark played after grace.
+            this.logger.warn('[NowPlayingPoller] retry-push failed', {
+              sessionId,
+              itemId: item.id,
+              error: (err as Error).message,
+            });
+          }
+        }
+        continue;
+      }
+
+      // Past grace: deterministic terminal status.
       if (isCurrent && item.status !== 'playing') {
         await repo.setStatus({ id: item.id, status: 'playing' });
       } else if (!isCurrent && !isQueued) {
