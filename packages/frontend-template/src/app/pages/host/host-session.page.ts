@@ -608,6 +608,13 @@ export class HostSessionPage {
   readonly auditOpen = signal(false);
   readonly auditLoading = signal(false);
   /**
+   * Polling timer for the audit panel. Only runs while the panel is
+   * open — torn down on close or page destroy. 5s cadence is plenty
+   * given audit writes are best-effort and the host is reading, not
+   * acting, when this is open.
+   */
+  private auditPollTimer: ReturnType<typeof setInterval> | null = null;
+  /**
    * URIs the host has removed but Spotify still surfaces in its queue
    * (Spotify has no "remove from queue" API — only "skip when playing").
    * The row is optimistically hidden until the URI rolls out of the
@@ -671,7 +678,10 @@ export class HostSessionPage {
       const id = p.get('id');
       if (id) void this.bootstrap(id);
     });
-    this.destroyRef.onDestroy(() => this.realtime?.close());
+    this.destroyRef.onDestroy(() => {
+      this.realtime?.close();
+      this.stopAuditPolling();
+    });
   }
 
   // ─── Session settings ──────────────────────────────────────────────────
@@ -850,8 +860,25 @@ export class HostSessionPage {
   async toggleAuditLog(): Promise<void> {
     const next = !this.auditOpen();
     this.auditOpen.set(next);
-    if (next && this.auditLog().length === 0) {
+    if (next) {
       await this.loadAuditLog();
+      this.startAuditPolling();
+    } else {
+      this.stopAuditPolling();
+    }
+  }
+
+  private startAuditPolling(): void {
+    this.stopAuditPolling();
+    this.auditPollTimer = setInterval(() => {
+      void this.loadAuditLog();
+    }, 5000);
+  }
+
+  private stopAuditPolling(): void {
+    if (this.auditPollTimer) {
+      clearInterval(this.auditPollTimer);
+      this.auditPollTimer = null;
     }
   }
 
