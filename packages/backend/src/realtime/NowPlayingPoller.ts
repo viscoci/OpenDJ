@@ -109,6 +109,14 @@ interface PerSession {
   cachedProviderId: string | null;
   /** Current backoff delay (only set after a 429). */
   backoffMs: number | null;
+  /**
+   * Per-item last-pushed-at-epoch-ms map. Reconcile uses it to throttle
+   * retry pushes — Spotify's queue-read endpoint can lag the queue-write
+   * by several seconds, so a freshly pushed track briefly looks
+   * "unsynced" on the very next tick and naively retrying creates
+   * duplicate Spotify entries.
+   */
+  lastPushedAt: Map<string, number>;
 }
 
 const SPOTIFY_PROVIDER_ID = 'spotify';
@@ -146,6 +154,7 @@ export class NowPlayingPoller {
         cachedAccountId: null,
         cachedProviderId: null,
         backoffMs: null,
+        lastPushedAt: new Map(),
       };
       this.state.set(sessionId, entry);
     }
@@ -186,6 +195,7 @@ export class NowPlayingPoller {
     if (!entry) return;
     if (entry.timer) clearTimeout(entry.timer);
     if (entry.idleTimer) clearTimeout(entry.idleTimer);
+    entry.lastPushedAt.clear();
     this.state.delete(sessionId);
   }
 
@@ -434,8 +444,19 @@ export class NowPlayingPoller {
   ): Promise<boolean> {
     const repo = this.deps.queueItems!;
     const RECONCILE_GRACE_MS = 30_000;
+    /**
+     * Spotify's queue-read endpoint lags the queue-write by several
+     * seconds: a track posted to /me/player/queue might not surface
+     * in the next /me/player/queue read for 3–8s. Don't even consider
+     * a retry until enough time has passed for that read to settle —
+     * otherwise we double-push the same track and the host sees it
+     * twice in their Up Next.
+     */
+    const RETRY_AFTER_PUSH_MS = 12_000;
     const now = Date.now();
     let skipDispatched = false;
+    const sessionState = this.state.get(sessionId);
+    const lastPushedAt = sessionState?.lastPushedAt;
 
     const items = await repo.findAllForSession(sessionId);
 
@@ -505,12 +526,20 @@ export class NowPlayingPoller {
 
       if (ageMs < RECONCILE_GRACE_MS) {
         // Within grace: try to retry-push if missing on the provider.
+        // Throttle by last push time — Spotify's queue-read endpoint
+        // lags writes by several seconds, so a freshly pushed track
+        // legitimately looks "unsynced" on the very next tick. Without
+        // this gate we'd POST it again and end up with duplicates in
+        // the host's Spotify queue.
+        const lastPush = lastPushedAt?.get(item.id) ?? item.createdAt.getTime();
+        const sincePush = now - lastPush;
         if (
           !isCurrent &&
           !isQueued &&
           providerForRetry &&
           supportsQueueTrack(providerForRetry) &&
-          item.status === 'approved'
+          item.status === 'approved' &&
+          sincePush >= RETRY_AFTER_PUSH_MS
         ) {
           try {
             await providerForRetry.queueTrack({
@@ -520,10 +549,12 @@ export class NowPlayingPoller {
               albumArt: item.albumArtUrl,
               durationMs: item.durationMs ?? 0,
             });
+            lastPushedAt?.set(item.id, now);
             this.logger.warn('[NowPlayingPoller] retry-pushed unsynced item to provider', {
               sessionId,
               itemId: item.id,
               trackUri: item.trackUri,
+              sincePushMs: sincePush,
             });
           } catch (err) {
             // Swallow — most common cause is NO_ACTIVE_DEVICE; we'll try
