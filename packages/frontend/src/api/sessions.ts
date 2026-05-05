@@ -23,6 +23,23 @@ export interface TvSnapshotResponse {
 }
 
 /**
+ * One audit-log row as returned by `GET /api/v1/sessions/:id/audit-log`.
+ * Action vocabulary mirrors `SessionAuditAction` on the backend; consumers
+ * format unknown action strings verbatim so adding new entries doesn't
+ * require a frontend bump.
+ */
+export interface AuditEventWire {
+  id: string;
+  sessionId: string;
+  actorKind: 'host' | 'guest' | 'system';
+  actorId: string | null;
+  actorLabel: string | null;
+  action: string;
+  details: Record<string, unknown>;
+  createdAtEpochMs: number;
+}
+
+/**
  * Sessions resource — `/api/v1/sessions/*`.
  *
  * `getById` is public (guests use it to hydrate the request page). Mutations
@@ -94,5 +111,27 @@ export class SessionsApi {
     return this.http.request<TvSnapshotResponse>(
       `/api/v1/sessions/by-slug/${encodeURIComponent(qrSlug)}/tv-snapshot`,
     );
+  }
+
+  /**
+   * Host-only audit log for a session. Newest-first. Supports `limit`
+   * (default 200, max 500) + `before` (ISO timestamp) for pagination
+   * older than the current window.
+   */
+  auditLog(
+    sessionId: string,
+    options?: { limit?: number; before?: Date },
+  ): Promise<ReadonlyArray<AuditEventWire>> {
+    const query: Record<string, string | number> = {};
+    if (options?.limit !== undefined) query['limit'] = options.limit;
+    if (options?.before) query['before'] = options.before.toISOString();
+    return this.http
+      .request<{
+        events: AuditEventWire[];
+      }>(
+        `/api/v1/sessions/${encodeURIComponent(sessionId)}/audit-log`,
+        Object.keys(query).length > 0 ? { query } : undefined,
+      )
+      .then((r) => r.events);
   }
 }

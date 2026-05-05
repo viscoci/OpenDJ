@@ -48,6 +48,7 @@ import { NowPlayingPoller } from './realtime/NowPlayingPoller.js';
 import { RoomRegistryImpl, type RealtimeRoomManager } from './realtime/RoomRegistryImpl.js';
 import { createDrizzleRepositories } from './repositories/drizzle/index.js';
 import type { Repositories } from './repositories/types.js';
+import { SessionAuditService } from './session/SessionAuditService.js';
 import { SessionService } from './session/SessionService.js';
 
 export interface AppDeps {
@@ -59,6 +60,7 @@ export interface AppDeps {
   guestIdentityService: GuestIdentityService;
   sessionService: SessionService;
   queueService: QueueService;
+  sessionAuditService: SessionAuditService;
   streamingRouter: StreamingRouter;
   streamingProviderOAuthConfigs: StreamingProviderOAuthRegistry;
   lyricsLookupService: LyricsLookupService;
@@ -205,6 +207,10 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
     context: { fetch: fetchImpl },
   });
 
+  const sessionAuditService = new SessionAuditService({
+    repository: repositories.sessionAuditEvents,
+  });
+
   // Now construct QueueService with the provider integration in scope so
   // approved guest requests get pushed into the host's actual playback
   // queue (Spotify queue, etc.).
@@ -217,6 +223,7 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
     rooms,
     streamingRouter,
     providerConnections: repositories.providerConnections,
+    audit: sessionAuditService,
   });
 
   if (roomManager) {
@@ -302,6 +309,7 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
     guestIdentityService,
     sessionService,
     queueService,
+    sessionAuditService,
     streamingRouter,
     streamingProviderOAuthConfigs:
       options.streamingProviderOAuthConfigs ?? defaultStreamingProviderOAuthConfigs,

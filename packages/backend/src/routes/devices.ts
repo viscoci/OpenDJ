@@ -20,8 +20,10 @@ import {
   type IStreamingProvider,
 } from '@opendj/core';
 import * as v from 'valibot';
+import type { AuthContext } from '@opendj/auth';
 import type { AuthService } from '../auth/AuthService.js';
 import { requireClaim, type AuthVariables } from '../auth/middleware.js';
+import type { SessionAuditService } from '../session/SessionAuditService.js';
 import {
   ProviderConnectionNotFoundError,
   StreamingRouter,
@@ -34,6 +36,7 @@ export interface DeviceRouteDeps {
   sessions: SessionRepository;
   providerConnections: ProviderConnectionRepository;
   streamingRouter: StreamingRouter;
+  audit?: SessionAuditService;
 }
 
 interface ResolvedProvider {
@@ -149,6 +152,15 @@ export function deviceRoutes(deps: DeviceRouteDeps): Hono<{ Variables: AuthVaria
         deviceId,
         parsed.output.play !== undefined ? { play: parsed.output.play } : {},
       );
+      const auth = c.get('auth') as AuthContext | undefined;
+      void deps.audit?.record({
+        sessionId,
+        actorKind: 'host',
+        actorId: auth?.userId ?? null,
+        actorLabel: 'Host',
+        action: 'playback.device_activated',
+        details: { providerId, deviceId },
+      });
       return c.json({ ok: true, providerId, deviceId }, 200);
     } catch (err) {
       return c.json(

@@ -619,6 +619,38 @@ export interface ProviderConnectionRepository {
   delete(id: string): Promise<void>;
 }
 
+/**
+ * Append-only host-facing audit log row. Distinct from realtime events
+ * (`session_events`) — these are durably stored, carry actor identity,
+ * and use a stable action vocabulary that survives wire-format changes.
+ */
+export interface SessionAuditEventRecord {
+  id: string;
+  sessionId: string;
+  actorKind: 'host' | 'guest' | 'system';
+  actorId: string | null;
+  actorLabel: string | null;
+  action: string;
+  details: Record<string, unknown>;
+  createdAt: Date;
+}
+
+export interface SessionAuditEventRepository {
+  record(input: {
+    sessionId: string;
+    actorKind: 'host' | 'guest' | 'system';
+    actorId?: string | null;
+    actorLabel?: string | null;
+    action: string;
+    details?: Record<string, unknown>;
+  }): Promise<SessionAuditEventRecord>;
+  /** Newest-first list. `limit` defaults to 200. */
+  listForSession(
+    sessionId: string,
+    options?: { limit?: number; before?: Date },
+  ): Promise<SessionAuditEventRecord[]>;
+}
+
 export interface Repositories {
   users: UserRepository;
   accounts: AccountRepository;
@@ -636,6 +668,7 @@ export interface Repositories {
   fingerprintPriority: FingerprintPriorityRepository;
   queueItems: QueueItemRepository;
   queueSkipVotes: QueueSkipVoteRepository;
+  sessionAuditEvents: SessionAuditEventRepository;
   lyricsCache: LyricsCacheRepository;
   lyricsFeedback: LyricsFeedbackRepository;
   abuseSubjects: AbuseSubjectRepository;

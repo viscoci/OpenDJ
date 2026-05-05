@@ -50,6 +50,8 @@ import type {
   QueueItemStatus,
   QueueSkipVoteRepository,
   Repositories,
+  SessionAuditEventRecord,
+  SessionAuditEventRepository,
   SessionRecord,
   SessionRepository,
   UserRecord,
@@ -942,6 +944,45 @@ export class InMemoryQueueSkipVoteRepository implements QueueSkipVoteRepository 
   }
 }
 
+export class InMemorySessionAuditEventRepository implements SessionAuditEventRepository {
+  readonly rows: SessionAuditEventRecord[] = [];
+  constructor(private readonly clock: InMemoryClock = systemClock) {}
+
+  async record(input: {
+    sessionId: string;
+    actorKind: 'host' | 'guest' | 'system';
+    actorId?: string | null;
+    actorLabel?: string | null;
+    action: string;
+    details?: Record<string, unknown>;
+  }): Promise<SessionAuditEventRecord> {
+    const row: SessionAuditEventRecord = {
+      id: crypto.randomUUID(),
+      sessionId: input.sessionId,
+      actorKind: input.actorKind,
+      actorId: input.actorId ?? null,
+      actorLabel: input.actorLabel ?? null,
+      action: input.action,
+      details: input.details ?? {},
+      createdAt: this.clock.now(),
+    };
+    this.rows.push(row);
+    return row;
+  }
+
+  async listForSession(
+    sessionId: string,
+    options?: { limit?: number; before?: Date },
+  ): Promise<SessionAuditEventRecord[]> {
+    const limit = options?.limit ?? 200;
+    return this.rows
+      .filter((r) => r.sessionId === sessionId)
+      .filter((r) => !options?.before || r.createdAt < options.before)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .slice(0, limit);
+  }
+}
+
 export class InMemoryLyricsCacheRepository implements LyricsCacheRepository {
   /** Composite key: `${source}:${lookupKeyHash}`. */
   readonly rows = new Map<string, LyricsCacheRecord>();
@@ -1192,6 +1233,7 @@ export function createInMemoryRepositories(clock: InMemoryClock = systemClock): 
     fingerprintPriority: new InMemoryFingerprintPriorityRepository(clock),
     queueItems,
     queueSkipVotes: new InMemoryQueueSkipVoteRepository(queueItems, clock),
+    sessionAuditEvents: new InMemorySessionAuditEventRepository(clock),
     lyricsCache: new InMemoryLyricsCacheRepository(clock),
     lyricsFeedback: new InMemoryLyricsFeedbackRepository(clock),
     abuseSubjects: new InMemoryAbuseSubjectRepository(clock),

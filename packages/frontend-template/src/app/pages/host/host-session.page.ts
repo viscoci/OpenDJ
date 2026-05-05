@@ -25,6 +25,7 @@ import { ActivatedRoute, Router } from '@angular/router';
 import {
   ApiError,
   RealtimeClient,
+  type AuditEventWire,
   type PlaybackDeviceWire,
   type SessionWire,
 } from '@opendj/frontend';
@@ -198,6 +199,44 @@ import { OpenDjClientService } from '../../services/opendj-client.service.js';
             <app-recently-played-list [tracks]="recentlyPlayed()" [max]="6" />
           </section>
         }
+
+        <section class="card audit">
+          <button
+            type="button"
+            class="audit-toggle"
+            (click)="toggleAuditLog()"
+            [attr.aria-expanded]="auditOpen()"
+          >
+            <h2>Activity log</h2>
+            <span class="audit-caret">{{ auditOpen() ? '▾' : '▸' }}</span>
+          </button>
+          @if (auditOpen()) {
+            @if (auditLoading()) {
+              <p class="hint">Loading…</p>
+            } @else if (auditLog().length === 0) {
+              <p class="empty">Nothing logged yet.</p>
+            } @else {
+              <ul class="audit-list">
+                @for (e of auditLog(); track e.id) {
+                  <li class="audit-row" [attr.data-actor]="e.actorKind">
+                    <span class="audit-time">{{ formatAuditTime(e.createdAtEpochMs) }}</span>
+                    <span class="audit-actor">{{ e.actorLabel ?? e.actorKind }}</span>
+                    <span class="audit-action">{{ formatAuditAction(e.action) }}</span>
+                    <span class="audit-detail">{{ formatAuditDetail(e) }}</span>
+                  </li>
+                }
+              </ul>
+              <button
+                type="button"
+                class="audit-refresh"
+                (click)="loadAuditLog()"
+                [disabled]="auditLoading()"
+              >
+                Refresh
+              </button>
+            }
+          }
+        </section>
       }
     </main>
   `,
@@ -421,6 +460,94 @@ import { OpenDjClientService } from '../../services/opendj-client.service.js';
         opacity: 0.5;
         cursor: default;
       }
+      .audit-toggle {
+        all: unset;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        cursor: pointer;
+        width: 100%;
+      }
+      .audit-toggle:focus-visible {
+        outline: 2px solid #a855f7;
+        outline-offset: 2px;
+        border-radius: 4px;
+      }
+      .audit-toggle h2 {
+        margin: 0;
+      }
+      .audit-caret {
+        font-family: 'JetBrains Mono', ui-monospace, monospace;
+        font-size: 14px;
+        color: #a294c5;
+      }
+      .audit-list {
+        list-style: none;
+        margin: 12px 0 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        max-height: 360px;
+        overflow-y: auto;
+      }
+      .audit-row {
+        display: grid;
+        grid-template-columns: auto auto auto 1fr;
+        gap: 8px;
+        font-size: 12px;
+        font-family: 'JetBrains Mono', ui-monospace, monospace;
+        padding: 4px 6px;
+        border-radius: 4px;
+        background: #0c0a14;
+        border: 1px solid transparent;
+      }
+      .audit-row[data-actor='host'] {
+        border-color: rgba(168, 85, 247, 0.25);
+      }
+      .audit-row[data-actor='guest'] {
+        border-color: rgba(52, 211, 153, 0.25);
+      }
+      .audit-row[data-actor='system'] {
+        border-color: rgba(250, 204, 21, 0.25);
+      }
+      .audit-time {
+        color: #6e5e8a;
+        white-space: nowrap;
+      }
+      .audit-actor {
+        color: #c8b8e9;
+        white-space: nowrap;
+      }
+      .audit-action {
+        color: #f3eef9;
+        white-space: nowrap;
+      }
+      .audit-detail {
+        color: #a294c5;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .audit-refresh {
+        margin-top: 8px;
+        font: inherit;
+        font-size: 11px;
+        background: transparent;
+        border: 1px solid #2c2440;
+        color: #c8b8e9;
+        padding: 4px 12px;
+        border-radius: 999px;
+        cursor: pointer;
+      }
+      .audit-refresh:hover:not(:disabled) {
+        border-color: #a855f7;
+      }
+      .audit-refresh:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
       .empty {
         margin: 0;
         font-size: 13px;
@@ -477,6 +604,9 @@ export class HostSessionPage {
   readonly settingsError = signal<string | null>(null);
   /** URIs currently being removed — used to disable the row's button. */
   readonly removingUris: WritableSignal<ReadonlySet<string>> = signal(new Set());
+  readonly auditLog: WritableSignal<ReadonlyArray<AuditEventWire>> = signal([]);
+  readonly auditOpen = signal(false);
+  readonly auditLoading = signal(false);
   /**
    * URIs the host has removed but Spotify still surfaces in its queue
    * (Spotify has no "remove from queue" API — only "skip when playing").
@@ -713,6 +843,81 @@ export class HostSessionPage {
     } finally {
       this.devicesBusy.set(false);
     }
+  }
+
+  // ─── Audit log ────────────────────────────────────────────────────────
+
+  async toggleAuditLog(): Promise<void> {
+    const next = !this.auditOpen();
+    this.auditOpen.set(next);
+    if (next && this.auditLog().length === 0) {
+      await this.loadAuditLog();
+    }
+  }
+
+  async loadAuditLog(): Promise<void> {
+    const session = this.session();
+    if (!session) return;
+    this.auditLoading.set(true);
+    try {
+      const events = await this.client.client.sessions.auditLog(session.id, { limit: 200 });
+      this.auditLog.set(events);
+    } catch {
+      this.auditLog.set([]);
+    } finally {
+      this.auditLoading.set(false);
+    }
+  }
+
+  formatAuditTime(epochMs: number): string {
+    const d = new Date(epochMs);
+    return d.toLocaleTimeString(undefined, {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+  }
+
+  formatAuditAction(action: string): string {
+    const labels: Record<string, string> = {
+      'queue.requested': 'requested',
+      'queue.approved': 'approved',
+      'queue.rejected': 'rejected',
+      'queue.removed': 'removed',
+      'queue.host_provider_rejected': 'removed Spotify track',
+      'skip_vote.cast': 'voted to skip',
+      'skip_vote.now_playing_cast': 'voted to skip (now playing)',
+      'skip_vote.provider_track_cast': 'voted to skip (Spotify track)',
+      'skip_vote.threshold_reached': 'skip threshold reached',
+      'playback.skip': 'skipped',
+      'playback.pause': 'paused',
+      'playback.resume': 'resumed',
+      'playback.device_activated': 'activated device',
+      'session.created': 'created session',
+      'session.ended': 'ended session',
+      'session.settings_updated': 'updated settings',
+      'system.auto_skip_rejected': 'auto-skipped rejected track',
+      'system.item_marked_played': 'marked played',
+    };
+    return labels[action] ?? action;
+  }
+
+  formatAuditDetail(event: AuditEventWire): string {
+    const d = event.details;
+    if (!d || typeof d !== 'object') return '';
+    const trackName = typeof d['trackName'] === 'string' ? d['trackName'] : null;
+    if (trackName) {
+      const artist = typeof d['artistName'] === 'string' ? d['artistName'] : null;
+      return artist ? `${trackName} — ${artist}` : trackName;
+    }
+    if (event.action === 'session.settings_updated' && typeof d['changes'] === 'object') {
+      const keys = Object.keys(d['changes'] as object);
+      return keys.join(', ');
+    }
+    if (event.action === 'playback.device_activated' && typeof d['deviceId'] === 'string') {
+      return `device ${(d['deviceId'] as string).slice(0, 8)}`;
+    }
+    return '';
   }
 
   // ─── End session ──────────────────────────────────────────────────────

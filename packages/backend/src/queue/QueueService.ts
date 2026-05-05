@@ -33,6 +33,10 @@ import type {
   SessionRepository,
 } from '../repositories/types.js';
 import type { StreamingRouter } from '../providers/streaming/StreamingRouter.js';
+import {
+  guestLabelFromFingerprint,
+  type SessionAuditService,
+} from '../session/SessionAuditService.js';
 
 export class QueueServiceError extends Error {
   readonly code: string;
@@ -60,6 +64,12 @@ export interface QueueServiceDeps {
    */
   streamingRouter?: StreamingRouter;
   providerConnections?: ProviderConnectionRepository;
+  /**
+   * Optional. When wired, every mutation funnels into the host-facing
+   * audit log so the host can review who did what later. Best-effort —
+   * failures don't block the user-facing action.
+   */
+  audit?: SessionAuditService;
 }
 
 export interface RealtimeRoomRegistry {
@@ -159,12 +169,32 @@ export class QueueService {
       await this.pushToProviderQueue(session.accountId, input.track);
     }
 
+    void this.deps.audit?.record({
+      sessionId: input.sessionId,
+      actorKind: 'guest',
+      actorId: guest.id,
+      actorLabel: guestLabelFromFingerprint(slot.fingerprintHash),
+      action: 'queue.requested',
+      details: {
+        itemId: created.id,
+        trackUri: input.track.uri,
+        trackName: input.track.name,
+        artistName: input.track.artist,
+        moderation: session.moderationEnabled ? 'pending' : 'auto_approved',
+      },
+    });
+
     return created;
   }
 
   /** Host action: approve or reject a pending item. */
   async moderate(
-    input: { itemId: string; decision: 'approved' | 'rejected'; sessionId: string },
+    input: {
+      itemId: string;
+      decision: 'approved' | 'rejected';
+      sessionId: string;
+      actor?: { userId: string; label?: string };
+    },
     nowEpochMs?: number,
   ): Promise<QueueItemRecord> {
     const now = nowEpochMs ?? Date.now();
@@ -188,6 +218,19 @@ export class QueueService {
     await this.publishToRoom(input.sessionId, {
       type: input.decision === 'approved' ? 'queue.item_approved' : 'queue.item_rejected',
       itemId: input.itemId,
+    });
+
+    void this.deps.audit?.record({
+      sessionId: input.sessionId,
+      actorKind: 'host',
+      actorId: input.actor?.userId ?? null,
+      actorLabel: input.actor?.label ?? 'Host',
+      action: input.decision === 'approved' ? 'queue.approved' : 'queue.rejected',
+      details: {
+        itemId: input.itemId,
+        trackUri: updated.trackUri,
+        trackName: updated.trackName,
+      },
     });
 
     if (input.decision === 'approved') {
@@ -274,6 +317,18 @@ export class QueueService {
     }
     await this.deps.queueItems.delete(input.itemId);
     await this.publishToRoom(input.sessionId, { type: 'queue.item_removed', itemId: input.itemId });
+    void this.deps.audit?.record({
+      sessionId: input.sessionId,
+      actorKind: 'guest',
+      actorId: guest.id,
+      actorLabel: guestLabelFromFingerprint(slot.fingerprintHash),
+      action: 'queue.removed',
+      details: {
+        itemId: input.itemId,
+        trackUri: item.trackUri,
+        trackName: item.trackName,
+      },
+    });
   }
 
   /**
@@ -331,6 +386,21 @@ export class QueueService {
       threshold: session.voteSkipThreshold,
     });
 
+    void this.deps.audit?.record({
+      sessionId: input.sessionId,
+      actorKind: 'guest',
+      actorId: guest.id,
+      actorLabel: guestLabelFromFingerprint(slot.fingerprintHash),
+      action: 'skip_vote.cast',
+      details: {
+        itemId: input.itemId,
+        trackUri: item.trackUri,
+        trackName: item.trackName,
+        votes,
+        threshold: session.voteSkipThreshold,
+      },
+    });
+
     // Auto-reject when the threshold is crossed (fixed/percentage modes).
     // host_approval defers — host has to approve the skip via moderation.
     if (
@@ -346,6 +416,18 @@ export class QueueService {
         await this.publishToRoom(input.sessionId, {
           type: 'queue.item_rejected',
           itemId: input.itemId,
+        });
+        void this.deps.audit?.record({
+          sessionId: input.sessionId,
+          actorKind: 'system',
+          action: 'skip_vote.threshold_reached',
+          details: {
+            itemId: input.itemId,
+            trackUri: item.trackUri,
+            trackName: item.trackName,
+            votes,
+            threshold: session.voteSkipThreshold,
+          },
         });
       }
       // Best-effort: if the rejected track is the one currently playing,
@@ -465,6 +547,20 @@ export class QueueService {
       threshold,
     });
 
+    void this.deps.audit?.record({
+      sessionId: input.sessionId,
+      actorKind: 'guest',
+      actorId: guest.id,
+      actorLabel: guestLabelFromFingerprint(slot.fingerprintHash),
+      action: 'skip_vote.now_playing_cast',
+      details: {
+        trackUri: nowPlaying.uri,
+        trackName: nowPlaying.name,
+        count,
+        threshold,
+      },
+    });
+
     if (thresholdReached) {
       // Best-effort: call provider.skipTrack. The next now-playing tick
       // will broadcast the new track + the snapshot's
@@ -490,6 +586,18 @@ export class QueueService {
       // Clear the bucket so the next track starts at zero — the new
       // now_playing.updated will reset the snapshot field via applyEvent.
       this.nowPlayingVotes.delete(input.sessionId);
+      void this.deps.audit?.record({
+        sessionId: input.sessionId,
+        actorKind: 'system',
+        action: 'skip_vote.threshold_reached',
+        details: {
+          trackUri: nowPlaying.uri,
+          trackName: nowPlaying.name,
+          count,
+          threshold,
+          target: 'now_playing',
+        },
+      });
     }
 
     return { count, threshold, thresholdReached, trackUri: nowPlaying.uri };
@@ -520,6 +628,7 @@ export class QueueService {
   async hostRejectProviderTrack(input: {
     sessionId: string;
     trackUri: string;
+    actor?: { userId: string; label?: string };
   }): Promise<{ skippedNow: boolean }> {
     const session = await this.deps.sessions.findById(input.sessionId);
     if (!session) throw new QueueServiceError('session_not_found', 'Unknown session.');
@@ -567,6 +676,19 @@ export class QueueService {
     }
     // Drop any in-flight vote tally for this URI — host action overrides.
     this.providerQueueVotes.get(input.sessionId)?.delete(input.trackUri);
+
+    void this.deps.audit?.record({
+      sessionId: input.sessionId,
+      actorKind: 'host',
+      actorId: input.actor?.userId ?? null,
+      actorLabel: input.actor?.label ?? 'Host',
+      action: 'queue.host_provider_rejected',
+      details: {
+        trackUri: input.trackUri,
+        trackName: snapshot.providerQueue.find((t) => t.uri === input.trackUri)?.name ?? null,
+        skippedNow,
+      },
+    });
 
     return { skippedNow };
   }
@@ -662,6 +784,20 @@ export class QueueService {
       threshold,
     });
 
+    void this.deps.audit?.record({
+      sessionId: input.sessionId,
+      actorKind: 'guest',
+      actorId: guest.id,
+      actorLabel: guestLabelFromFingerprint(slot.fingerprintHash),
+      action: 'skip_vote.provider_track_cast',
+      details: {
+        trackUri: input.trackUri,
+        trackName: snapshot.providerQueue.find((t) => t.uri === input.trackUri)?.name ?? null,
+        count,
+        threshold,
+      },
+    });
+
     if (
       thresholdReached &&
       (session.voteSkipMode === 'fixed' || session.voteSkipMode === 'percentage')
@@ -698,6 +834,18 @@ export class QueueService {
       // Drop the per-URI bucket so the same URI re-queued later starts fresh.
       perSession.delete(input.trackUri);
       if (perSession.size === 0) this.providerQueueVotes.delete(input.sessionId);
+      void this.deps.audit?.record({
+        sessionId: input.sessionId,
+        actorKind: 'system',
+        action: 'skip_vote.threshold_reached',
+        details: {
+          trackUri: input.trackUri,
+          trackName: snapshot.providerQueue.find((t) => t.uri === input.trackUri)?.name ?? null,
+          count,
+          threshold,
+          target: 'provider_track',
+        },
+      });
     }
 
     return { count, threshold, thresholdReached };

@@ -24,6 +24,7 @@ import { DrizzlePasswordResetTokenRepository } from './password-reset-tokens.js'
 import { DrizzleProviderConnectionRepository } from './provider-connections.js';
 import { DrizzleQueueItemRepository } from './queue-items.js';
 import { DrizzleQueueSkipVoteRepository } from './queue-skip-votes.js';
+import { DrizzleSessionAuditEventRepository } from './session-audit-events.js';
 import { DrizzleSessionRepository } from './sessions.js';
 import { DrizzleUserRepository } from './users.js';
 
@@ -46,6 +47,7 @@ export * from './email-verification-tokens.js';
 export * from './provider-connections.js';
 export * from './queue-items.js';
 export * from './queue-skip-votes.js';
+export * from './session-audit-events.js';
 export * from './sessions.js';
 
 export function createDrizzleRepositories(db: Database): Repositories {
@@ -66,6 +68,7 @@ export function createDrizzleRepositories(db: Database): Repositories {
     fingerprintPriority: new DrizzleFingerprintPriorityRepository(db),
     queueItems: new DrizzleQueueItemRepository(db),
     queueSkipVotes: new DrizzleQueueSkipVoteRepository(db),
+    sessionAuditEvents: new DrizzleSessionAuditEventRepository(db),
     lyricsCache: new DrizzleLyricsCacheRepository(db),
     lyricsFeedback: new DrizzleLyricsFeedbackRepository(db),
     abuseSubjects: new DrizzleAbuseSubjectRepository(db),

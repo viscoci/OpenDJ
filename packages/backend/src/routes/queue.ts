@@ -11,6 +11,7 @@
 
 import { Hono } from 'hono';
 import * as v from 'valibot';
+import type { AuthContext } from '@opendj/auth';
 import type { AuthService } from '../auth/AuthService.js';
 import { requireClaim, type AuthVariables } from '../auth/middleware.js';
 import { QueueService, QueueServiceError } from '../queue/QueueService.js';
@@ -123,10 +124,12 @@ export function queueRoutes(deps: QueueRouteDeps): Hono<{ Variables: AuthVariabl
       return c.json({ error: 'invalid_body' }, 400);
     }
     try {
+      const auth = c.get('auth') as AuthContext;
       const updated = await deps.queueService.moderate({
         itemId,
         sessionId,
         decision: parsed.output.decision,
+        ...(auth.userId && { actor: { userId: auth.userId } }),
       });
       return c.json({ item: toQueueItemSummary(updated) });
     } catch (err) {
@@ -214,9 +217,11 @@ export function queueRoutes(deps: QueueRouteDeps): Hono<{ Variables: AuthVariabl
       return c.json({ error: 'invalid_body', issues: parsed.issues.map((i) => i.message) }, 400);
     }
     try {
+      const auth = c.get('auth') as AuthContext;
       const result = await deps.queueService.hostRejectProviderTrack({
         sessionId,
         trackUri: parsed.output.trackUri,
+        ...(auth.userId && { actor: { userId: auth.userId } }),
       });
       return c.json(result);
     } catch (err) {

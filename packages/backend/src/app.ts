@@ -93,6 +93,7 @@ export function createApp(options: AppOptions): Hono<{ Variables: AuthVariables 
       rooms: deps.rooms,
       queueItems: deps.repositories.queueItems,
       guestSlots: deps.repositories.guestSlots,
+      audit: deps.sessionAuditService,
     }),
   );
   v1.route(
@@ -115,6 +116,7 @@ export function createApp(options: AppOptions): Hono<{ Variables: AuthVariables 
       providerConnections: deps.repositories.providerConnections,
       streamingRouter: deps.streamingRouter,
       queueService: deps.queueService,
+      audit: deps.sessionAuditService,
     }),
   );
   v1.route(
@@ -124,6 +126,7 @@ export function createApp(options: AppOptions): Hono<{ Variables: AuthVariables 
       sessions: deps.repositories.sessions,
       providerConnections: deps.repositories.providerConnections,
       streamingRouter: deps.streamingRouter,
+      audit: deps.sessionAuditService,
     }),
   );
   v1.route(

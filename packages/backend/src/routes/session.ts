@@ -15,6 +15,7 @@ import type { RealtimeRoomRegistry } from '../queue/QueueService.js';
 import { SessionService, SessionServiceError } from '../session/SessionService.js';
 import { toQueueItemSummary } from '@opendj/realtime';
 import type { GuestSlotRepository, QueueItemRepository } from '../repositories/types.js';
+import type { SessionAuditService } from '../session/SessionAuditService.js';
 
 export interface SessionRouteDeps {
   authService: AuthService;
@@ -23,6 +24,7 @@ export interface SessionRouteDeps {
   rooms?: RealtimeRoomRegistry;
   queueItems?: QueueItemRepository;
   guestSlots?: GuestSlotRepository;
+  audit?: SessionAuditService;
 }
 
 const VoteSkipMode = v.union([
@@ -95,6 +97,14 @@ export function sessionRoutes(deps: SessionRouteDeps): Hono<{ Variables: AuthVar
       const session = await deps.sessionService.create({
         accountId: auth.currentAccountId,
         ...parsed.output,
+      });
+      void deps.audit?.record({
+        sessionId: session.id,
+        actorKind: 'host',
+        actorId: auth.userId ?? null,
+        actorLabel: 'Host',
+        action: 'session.created',
+        details: { name: session.name, qrSlug: session.qrSlug },
       });
       return c.json({ session }, 201);
     } catch (err) {
@@ -209,6 +219,14 @@ export function sessionRoutes(deps: SessionRouteDeps): Hono<{ Variables: AuthVar
         accountId: auth.currentAccountId,
         ...parsed.output,
       });
+      void deps.audit?.record({
+        sessionId: id,
+        actorKind: 'host',
+        actorId: auth.userId ?? null,
+        actorLabel: 'Host',
+        action: 'session.settings_updated',
+        details: { changes: parsed.output },
+      });
       return c.json({ session });
     } catch (err) {
       if (err instanceof SessionServiceError) {
@@ -226,6 +244,13 @@ export function sessionRoutes(deps: SessionRouteDeps): Hono<{ Variables: AuthVar
     const id = c.req.param('id') ?? '';
     try {
       const ended = await deps.sessionService.end(id, auth.currentAccountId);
+      void deps.audit?.record({
+        sessionId: id,
+        actorKind: 'host',
+        actorId: auth.userId ?? null,
+        actorLabel: 'Host',
+        action: 'session.ended',
+      });
       return c.json({ session: ended });
     } catch (err) {
       if (err instanceof SessionServiceError) {
@@ -234,6 +259,53 @@ export function sessionRoutes(deps: SessionRouteDeps): Hono<{ Variables: AuthVar
       }
       throw err;
     }
+  });
+
+  /**
+   * GET /:id/audit-log — host-facing audit log of every interesting
+   * mutation against the session. Cookie session + `session:read`
+   * claim. Newest-first; supports `?limit=` (max 500) and
+   * `?before=<isoTimestamp>` for pagination.
+   */
+  app.get('/:id/audit-log', requireClaim(deps.authService, 'session:read'), async (c) => {
+    const auth = c.get('auth') as AuthContext;
+    if (!auth.currentAccountId) return c.json({ error: 'no_active_account' }, 400);
+    const id = c.req.param('id') ?? '';
+    if (!UUID_RE.test(id)) return c.json({ error: 'session_not_found' }, 404);
+    if (!deps.audit) return c.json({ error: 'audit_log_not_configured' }, 501);
+    // Verify caller owns this session.
+    try {
+      const session = await deps.sessionService.getById(id);
+      if (session.accountId !== auth.currentAccountId) {
+        return c.json({ error: 'account_mismatch' }, 403);
+      }
+    } catch (err) {
+      if (err instanceof SessionServiceError) {
+        const { status, payload } = mapErrorToStatus(err.code);
+        return c.json(payload, status as 400 | 403 | 404 | 409);
+      }
+      throw err;
+    }
+    const limitParam = c.req.query('limit');
+    const beforeParam = c.req.query('before');
+    const limit = limitParam ? Math.min(500, Math.max(1, Number(limitParam))) : 200;
+    const before = beforeParam ? new Date(beforeParam) : undefined;
+    const events = await deps.audit.list(
+      id,
+      before && Number.isFinite(before.getTime()) ? { limit, before } : { limit },
+    );
+    return c.json({
+      events: events.map((e) => ({
+        id: e.id,
+        sessionId: e.sessionId,
+        actorKind: e.actorKind,
+        actorId: e.actorId,
+        actorLabel: e.actorLabel,
+        action: e.action,
+        details: e.details,
+        createdAtEpochMs: e.createdAt.getTime(),
+      })),
+    });
   });
 
   /** GET / — list current account's sessions (host dashboard). */

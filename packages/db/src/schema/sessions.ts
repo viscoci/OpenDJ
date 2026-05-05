@@ -157,6 +157,42 @@ export type SessionEventRow = typeof sessionEvents.$inferSelect;
 export type SessionEventInsert = typeof sessionEvents.$inferInsert;
 
 /**
+ * Host-facing audit log: a chronologically ordered stream of every
+ * meaningful action against a session — guest requests, host moderation,
+ * skip votes, playback control, system auto-skips. Distinct from
+ * `session_events` (realtime replay payload) because audit entries
+ * carry actor identity + an explicit action vocabulary the host UI
+ * formats; payload is intentionally small and PII-safe.
+ *
+ * `actor_kind`: 'host' | 'guest' | 'system'
+ * `actor_id`: guest_id when guest, user_id when host, null when system
+ * `actor_label`: short display string the UI shows without a join
+ *   (e.g. "Guest 8f3c", host display name) — denormalized so the audit
+ *   log keeps reading even if the underlying actor row is deleted.
+ */
+export const sessionAuditEvents = pgTable(
+  'session_audit_events',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    sessionId: uuid('session_id')
+      .notNull()
+      .references(() => sessions.id, { onDelete: 'cascade' }),
+    actorKind: text('actor_kind').notNull(),
+    actorId: uuid('actor_id'),
+    actorLabel: text('actor_label'),
+    action: text('action').notNull(),
+    details: jsonb('details').notNull().default({}),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    sessionCreatedIdx: index('session_audit_session_created').on(table.sessionId, table.createdAt),
+  }),
+);
+
+export type SessionAuditEventRow = typeof sessionAuditEvents.$inferSelect;
+export type SessionAuditEventInsert = typeof sessionAuditEvents.$inferInsert;
+
+/**
  * Reliable provider/background side effects. Workers/Queues consume and mark processed.
  */
 export const outboxEvents = pgTable(

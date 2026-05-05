@@ -25,8 +25,10 @@ import {
   supportsSkipTrack,
   type IStreamingProvider,
 } from '@opendj/core';
+import type { AuthContext } from '@opendj/auth';
 import type { AuthService } from '../auth/AuthService.js';
 import { requireClaim, type AuthVariables } from '../auth/middleware.js';
+import type { SessionAuditService } from '../session/SessionAuditService.js';
 import {
   ProviderConnectionNotFoundError,
   StreamingRouter,
@@ -42,6 +44,8 @@ export interface PlaybackRouteDeps {
   streamingRouter: StreamingRouter;
   /** Required only for the guest skip-vote route. */
   queueService?: QueueService;
+  /** Optional: audit-log host playback actions when wired. */
+  audit?: SessionAuditService;
 }
 
 type PlaybackAction = 'skip' | 'pause' | 'resume';
@@ -124,6 +128,20 @@ export function playbackRoutes(deps: PlaybackRouteDeps): Hono<{ Variables: AuthV
         }
         await provider.resume();
       }
+      const auth = c.get('auth') as AuthContext | undefined;
+      void deps.audit?.record({
+        sessionId,
+        actorKind: 'host',
+        actorId: auth?.userId ?? null,
+        actorLabel: 'Host',
+        action:
+          action === 'skip'
+            ? 'playback.skip'
+            : action === 'pause'
+              ? 'playback.pause'
+              : 'playback.resume',
+        details: { providerId },
+      });
       return c.json({ ok: true }, 200);
     } catch (err) {
       return c.json(
