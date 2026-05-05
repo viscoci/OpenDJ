@@ -180,12 +180,12 @@ import { buildQueueEtaMs, formatEta } from '../utils/queue-eta.js';
                   }
                   <span class="meta">
                     <span class="name">
+                      <span class="title">{{ entry.track.name }}</span>
                       @if (entry.isMine) {
                         <span class="badge mine">Yours</span>
                       } @else if (entry.openDjItem) {
                         <span class="badge requested">Requested</span>
                       }
-                      {{ entry.track.name }}
                     </span>
                     <span class="artist">{{ entry.track.artist }}</span>
                   </span>
@@ -386,9 +386,21 @@ import { buildQueueEtaMs, formatEta } from '../utils/queue-eta.js';
       .merged-row .name {
         font-size: 13px;
         font-weight: 500;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+      }
+      .merged-row .title {
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
+        min-width: 0;
+        flex: 0 1 auto;
+      }
+      .merged-row .badge {
+        margin-right: 0;
+        flex: 0 0 auto;
       }
       .merged-row .artist {
         font-size: 11px;
