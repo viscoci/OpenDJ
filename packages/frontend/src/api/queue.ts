@@ -52,6 +52,18 @@ export class QueueApi {
       .then((r) => r.item);
   }
 
+  /**
+   * Guest removes their own queue item. Slot-token auth, owner-only on
+   * the server. 400 `item_playing` when the track is currently on the
+   * playhead — guests can only pull pending/approved/queued rows.
+   */
+  remove(sessionId: string, itemId: string, slotToken: string): Promise<{ ok: true }> {
+    return this.http.request(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/queue/${encodeURIComponent(itemId)}`,
+      { method: 'DELETE', slotToken },
+    );
+  }
+
   voteSkip(
     sessionId: string,
     itemId: string,

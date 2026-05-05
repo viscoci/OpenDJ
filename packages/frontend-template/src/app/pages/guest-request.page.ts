@@ -105,8 +105,10 @@ import { buildQueueEtaMs, formatEta } from '../utils/queue-eta.js';
 
         @if (myPendingItems().length > 0) {
           <section class="card pending-section">
-            <h2>Awaiting host approval</h2>
-            <p class="pending-hint">Your requests will appear in Up Next once the host approves.</p>
+            <h2>Your requests</h2>
+            <p class="pending-hint">
+              These count against your limit until they play (or you remove them).
+            </p>
             <ul class="pending-list">
               @for (item of myPendingItems(); track item.id) {
                 <li class="pending-row">
@@ -119,7 +121,24 @@ import { buildQueueEtaMs, formatEta } from '../utils/queue-eta.js';
                     <span class="name">{{ item.trackName }}</span>
                     <span class="artist">{{ item.artistName }}</span>
                   </span>
-                  <span class="badge pending">Pending</span>
+                  @switch (item.status) {
+                    @case ('pending') {
+                      <span class="badge pending">Pending review</span>
+                    }
+                    @default {
+                      <span class="badge queueing">Queueing…</span>
+                    }
+                  }
+                  <button
+                    type="button"
+                    class="row-remove"
+                    [disabled]="removingMyItemIds().has(item.id)"
+                    (click)="onRemoveOwn(item.id)"
+                    aria-label="Remove from queue"
+                    title="Remove from queue"
+                  >
+                    ×
+                  </button>
                 </li>
               }
             </ul>
@@ -424,13 +443,42 @@ import { buildQueueEtaMs, formatEta } from '../utils/queue-eta.js';
       }
       .pending-row {
         display: grid;
-        grid-template-columns: 40px 1fr auto;
+        grid-template-columns: 40px 1fr auto auto;
         gap: 10px;
         align-items: center;
         padding: 8px 12px;
         background: #0c0a14;
         border: 1px solid rgba(250, 204, 21, 0.25);
         border-radius: 8px;
+      }
+      .badge.queueing {
+        background: rgba(168, 85, 247, 0.15);
+        border: 1px solid rgba(168, 85, 247, 0.4);
+        color: #d8b4fe;
+      }
+      .row-remove {
+        appearance: none;
+        background: transparent;
+        border: 1px solid #2c2440;
+        color: #fda4af;
+        border-radius: 999px;
+        width: 24px;
+        height: 24px;
+        display: grid;
+        place-items: center;
+        font: inherit;
+        font-size: 14px;
+        line-height: 1;
+        cursor: pointer;
+        padding: 0;
+      }
+      .row-remove:hover:not(:disabled) {
+        background: rgba(253, 164, 175, 0.1);
+        border-color: #fda4af;
+      }
+      .row-remove:disabled {
+        opacity: 0.5;
+        cursor: default;
       }
       .pending-row .art {
         width: 40px;
@@ -539,17 +587,32 @@ export class GuestRequestPage {
   );
 
   /**
-   * The guest's own pending requests (moderation sessions only). Surface
-   * them as a separate strip so the guest can see what they've already
-   * submitted while the host is still approving — otherwise they have
-   * no visual reference and tend to keep re-clicking Add on the same
-   * track.
+   * Every active item the guest has submitted that isn't already
+   * visible as a merged-queue row (i.e. not yet on Spotify's queue).
+   * Covers two cases that otherwise hide the request from the guest:
+   *
+   * - Moderation on: status='pending', host hasn't approved yet.
+   * - Moderation off: status='approved' but the push to Spotify failed
+   *   or hasn't been confirmed by the next provider-queue poll.
+   *
+   * Shown as a strip with a remove (×) button so the guest can clear
+   * stuck items themselves rather than burning their per-guest cap.
    */
   readonly myPendingItems = computed(() => {
     const myGuestId = this.slot()?.guestId ?? null;
     if (!myGuestId) return [];
-    return this.queue().filter((i) => i.status === 'pending' && i.guestId === myGuestId);
+    const inProvider = new Set(this.providerQueue().map((t) => t.uri));
+    return this.queue().filter(
+      (i) =>
+        i.guestId === myGuestId &&
+        (i.status === 'pending' ||
+          i.status === 'approved' ||
+          i.status === 'queued' ||
+          i.status === 'playing') &&
+        !inProvider.has(i.trackUri),
+    );
   });
+  readonly removingMyItemIds = signal<ReadonlySet<string>>(new Set());
 
   /**
    * Map of trackUri → ms until that track plays. Indexed against the
@@ -734,6 +797,37 @@ export class GuestRequestPage {
 
   hasVotedItem(itemId: string): boolean {
     return this.votedItemIds().has(itemId);
+  }
+
+  /**
+   * Remove one of the guest's own queue items. Backed by the existing
+   * DELETE /queue/:itemId route (slot-token auth, owner-only, blocks
+   * removal of an item that's currently playing). Optimistically drops
+   * it from local state so the cap pressure releases immediately.
+   */
+  async onRemoveOwn(itemId: string): Promise<void> {
+    const session = this.session();
+    const slot = this.slot();
+    if (!session || !slot) return;
+    if (this.removingMyItemIds().has(itemId)) return;
+    this.removingMyItemIds.update((s) => new Set(s).add(itemId));
+    try {
+      await this.clientService.client.queue.remove(session.id, itemId, slot.slotToken);
+      this.queue.update((items) => items.filter((i) => i.id !== itemId));
+    } catch (err) {
+      const code = err instanceof ApiError ? err.code : 'error';
+      if (code === 'item_playing') {
+        this.snackbar.error("Can't remove a track that's currently playing.", 4000);
+      } else {
+        this.snackbar.error("Couldn't remove that one. Try again.", 4000);
+      }
+    } finally {
+      this.removingMyItemIds.update((s) => {
+        const next = new Set(s);
+        next.delete(itemId);
+        return next;
+      });
+    }
   }
 
   hasVotedProviderUri(trackUri: string): boolean {
