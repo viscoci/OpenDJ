@@ -46,20 +46,22 @@ cp apps/oss-demo/.env.example apps/oss-demo/.env
 
 cd apps/oss-demo
 docker compose up --build
-# → http://localhost:8888
+# → http://127.0.0.1:8888
 #   GET /              → Angular frontend (guest landing)
 #   GET /host/login    → host login / register
 #   GET /api/v1/health → { ok: true }
 ```
 
+> **Always use `http://127.0.0.1:8888`, not `localhost`.** Spotify's OAuth dropped `localhost` from accepted redirect URIs in 2024 ([docs](https://developer.spotify.com/documentation/web-api/concepts/redirect_uri)), and cookies are origin-scoped — if you log in at `localhost` then Spotify bounces you back to `127.0.0.1`, you lose your session. Pick one origin and stick with it.
+
 The container runs Drizzle migrations against the bundled Postgres on startup, so the first boot self-bootstraps the schema.
 
 ### Use the demo
 
-1. Open http://localhost:8888/host/register and create a host account
+1. Open http://127.0.0.1:8888/host/register and create a host account
 2. From the dashboard, click **Connect Spotify** (requires Spotify creds in `.env`)
 3. Click **Create session** — you get a `qrSlug`
-4. Open `http://localhost:8888/u/<qrSlug>` in another browser / mobile to play guest
+4. Open `http://127.0.0.1:8888/u/<qrSlug>` in another browser / mobile to play guest
 5. Search + request a song; back on the host page, approve it from the queue
 
 ### Screenshots

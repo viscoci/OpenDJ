@@ -6,10 +6,16 @@ services:
     image: opendj-oss-demo:dev
     environment:
       DATABASE_URL: postgres://postgres:postgres@postgres:5432/opendj
-      BASE_URL: http://localhost:8888
+      # 127.0.0.1 (not localhost) because Spotify dropped `localhost` from
+      # accepted redirect URIs — see
+      # https://developer.spotify.com/documentation/web-api/concepts/redirect_uri.
+      # `__Host-` session cookies work fine on 127.0.0.1 since Chrome treats
+      # it as a secure context. Always access the app at the SAME origin you
+      # set here so the cookie + OAuth callback agree.
+      BASE_URL: ${BASE_URL:-http://127.0.0.1:8888}
       SPOTIFY_CLIENT_ID: ${SPOTIFY_CLIENT_ID:-}
       SPOTIFY_CLIENT_SECRET: ${SPOTIFY_CLIENT_SECRET:-}
-      SPOTIFY_REDIRECT_URI: ${SPOTIFY_REDIRECT_URI:-http://localhost:8888/api/v1/provider/connections/spotify/callback}
+      SPOTIFY_REDIRECT_URI: ${SPOTIFY_REDIRECT_URI:-http://127.0.0.1:8888/api/v1/provider/connections/spotify/callback}
       MAX_SONGS_PER_GUEST: ${MAX_SONGS_PER_GUEST:-3}
       MODERATION_ENABLED_DEFAULT: ${MODERATION_ENABLED_DEFAULT:-false}
       # VALKEY_URL: redis://valkey:6379  # uncomment if running multi-container OSS

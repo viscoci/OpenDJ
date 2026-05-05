@@ -21,7 +21,10 @@ import { mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { chromium, type Browser, type Page } from 'playwright';
 
-const BASE_URL = process.env['BASE_URL'] ?? 'http://localhost:8888';
+// Defaults to 127.0.0.1 to match apps/oss-demo/.env.example — see
+// https://developer.spotify.com/documentation/web-api/concepts/redirect_uri
+// for why we don't use `localhost` anywhere.
+const BASE_URL = process.env['BASE_URL'] ?? 'http://127.0.0.1:8888';
 const OUT_DIR = resolve(process.cwd(), 'docs/screenshots');
 const VIEWPORT = { width: 1280, height: 800 };
 // Mobile-flavored viewport for the guest journey (it's QR/phone-first).
@@ -104,13 +107,15 @@ async function newAuthedPage(browser: Browser, cookieValue: string): Promise<Pag
     viewport: VIEWPORT,
     deviceScaleFactor: 2,
   });
-  // The cookie has Secure + __Host- prefix. Playwright accepts Secure cookies
-  // on http://localhost just like Chrome does in dev.
+  // The cookie has Secure + __Host- prefix. Both 127.0.0.1 and localhost are
+  // secure contexts in Chromium, so Secure flags are honored. Cookie domain
+  // must match BASE_URL's host.
+  const host = new URL(BASE_URL).hostname;
   await ctx.addCookies([
     {
       name: '__Host-opendj_session',
       value: cookieValue,
-      domain: 'localhost',
+      domain: host,
       path: '/',
       httpOnly: true,
       secure: true,
