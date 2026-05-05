@@ -64,6 +64,23 @@ export class QueueApi {
   }
 
   /**
+   * Vote-to-skip a provider-queue track that has no OpenDJ counterpart
+   * (host queued it via Spotify directly, playlist context, etc.).
+   * Threshold semantics match `voteSkip` — server triggers the actual
+   * skip when the count crosses `voteSkipThreshold`.
+   */
+  voteSkipProviderTrack(
+    sessionId: string,
+    trackUri: string,
+    slotToken: string,
+  ): Promise<{ count: number; threshold: number; thresholdReached: boolean }> {
+    return this.http.request(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/queue/provider-vote-skip`,
+      { method: 'POST', body: { trackUri }, slotToken },
+    );
+  }
+
+  /**
    * Search the session's connected streaming provider.
    *
    * Public — no slot token required. Surfaces 503 `no_provider_connected`

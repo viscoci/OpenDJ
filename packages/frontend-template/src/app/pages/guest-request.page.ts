@@ -147,23 +147,42 @@ import { buildQueueEtaMs, formatEta } from '../utils/queue-eta.js';
                     </span>
                     <span class="artist">{{ entry.track.artist }}</span>
                   </span>
-                  @if (entry.openDjItem && slot()?.status === 'active') {
-                    <button
-                      type="button"
-                      class="vote-pill"
-                      [class.voted]="hasVotedItem(entry.openDjItem.id)"
-                      [disabled]="hasVotedItem(entry.openDjItem.id)"
-                      (click)="onVoteSkip(entry.openDjItem.id)"
-                      [attr.title]="
-                        hasVotedItem(entry.openDjItem.id)
-                          ? 'You voted to skip this'
-                          : 'Vote to skip this track'
-                      "
-                    >
-                      ▶|
-                      {{ entry.openDjItem.skipVotes }}<span class="sep">/</span
-                      >{{ session()!.voteSkipThreshold }}
-                    </button>
+                  @if (slot()?.status === 'active') {
+                    @if (entry.openDjItem) {
+                      <button
+                        type="button"
+                        class="vote-pill"
+                        [class.voted]="hasVotedItem(entry.openDjItem.id)"
+                        [disabled]="hasVotedItem(entry.openDjItem.id)"
+                        (click)="onVoteSkip(entry.openDjItem.id)"
+                        [attr.title]="
+                          hasVotedItem(entry.openDjItem.id)
+                            ? 'You voted to skip this'
+                            : 'Vote to skip this track'
+                        "
+                      >
+                        ▶|
+                        {{ entry.openDjItem.skipVotes }}<span class="sep">/</span
+                        >{{ session()!.voteSkipThreshold }}
+                      </button>
+                    } @else {
+                      <button
+                        type="button"
+                        class="vote-pill"
+                        [class.voted]="hasVotedProviderUri(entry.track.uri)"
+                        [disabled]="hasVotedProviderUri(entry.track.uri)"
+                        (click)="onVoteSkipProvider(entry.track.uri)"
+                        [attr.title]="
+                          hasVotedProviderUri(entry.track.uri)
+                            ? 'You voted to skip this'
+                            : 'Vote to skip this track'
+                        "
+                      >
+                        ▶|
+                        {{ providerVoteCount(entry.track.uri) }}<span class="sep">/</span
+                        >{{ session()!.voteSkipThreshold }}
+                      </button>
+                    }
                   }
                 </li>
               }
@@ -393,6 +412,18 @@ export class GuestRequestPage {
    */
   readonly votedNowPlayingUris: WritableSignal<ReadonlySet<string>> = signal(new Set());
   readonly nowPlayingVoteBusy = signal(false);
+  /**
+   * Provider-queue trackUris this guest has already voted to skip. Used for
+   * tracks that have no OpenDJ counterpart (host queued via Spotify).
+   */
+  readonly votedProviderUris: WritableSignal<ReadonlySet<string>> = signal(new Set());
+  /**
+   * Live skip-vote counts for provider-only tracks, mirrored from the
+   * realtime snapshot + `provider_queue_skip_vote.updated` events.
+   */
+  readonly providerSkipVotes: WritableSignal<
+    ReadonlyMap<string, { count: number; threshold: number }>
+  > = signal(new Map());
 
   /**
    * Live skip-vote tally for the currently-playing track, mirrored from
@@ -568,6 +599,36 @@ export class GuestRequestPage {
     return this.votedItemIds().has(itemId);
   }
 
+  hasVotedProviderUri(trackUri: string): boolean {
+    return this.votedProviderUris().has(trackUri);
+  }
+
+  providerVoteCount(trackUri: string): number {
+    return this.providerSkipVotes().get(trackUri)?.count ?? 0;
+  }
+
+  async onVoteSkipProvider(trackUri: string): Promise<void> {
+    const session = this.session();
+    const slot = this.slot();
+    if (!session || !slot || slot.status !== 'active') return;
+    if (this.hasVotedProviderUri(trackUri)) return;
+    try {
+      await this.clientService.client.queue.voteSkipProviderTrack(
+        session.id,
+        trackUri,
+        slot.slotToken,
+      );
+      this.votedProviderUris.update((s) => new Set(s).add(trackUri));
+    } catch (err) {
+      const code = err instanceof ApiError ? err.code : 'error';
+      if (code === 'already_voted') {
+        this.votedProviderUris.update((s) => new Set(s).add(trackUri));
+      } else {
+        this.snackbar.error("Couldn't record your vote.", 4000);
+      }
+    }
+  }
+
   async onVoteSkipNowPlaying(): Promise<void> {
     const session = this.session();
     const slot = this.slot();
@@ -653,6 +714,7 @@ export class GuestRequestPage {
       this.providerQueue.set(snapshot.providerQueue);
       this.queue.set(snapshot.queue);
       this.nowPlayingSkipVoteState.set(snapshot.nowPlayingSkipVote);
+      this.providerSkipVotes.set(new Map(Object.entries(snapshot.providerQueueSkipVotes)));
     });
     this.realtime.on('now_playing.updated', (event) => {
       const prevUri = this.nowPlaying()?.uri ?? null;
@@ -678,6 +740,27 @@ export class GuestRequestPage {
     });
     this.realtime.on('provider_queue.updated', (event) => {
       this.providerQueue.set(event.tracks);
+      // Drop client-side voted memory for URIs that left the queue, mirror
+      // the server-side cleanup in applyEvent.
+      const remaining = new Set(event.tracks.map((t) => t.uri));
+      const voted = this.votedProviderUris();
+      let changed = false;
+      const next = new Set<string>();
+      for (const uri of voted) {
+        if (remaining.has(uri)) next.add(uri);
+        else changed = true;
+      }
+      if (changed) this.votedProviderUris.set(next);
+    });
+    this.realtime.on('provider_queue_skip_vote.updated', (event) => {
+      this.providerSkipVotes.update((m) => {
+        const next = new Map(m);
+        next.set(event.trackUri, { count: event.count, threshold: event.threshold });
+        return next;
+      });
+      if (event.count >= event.threshold) {
+        this.snackbar.info('Track skipped by votes.', 4000);
+      }
     });
     this.realtime.onEvent((event: SessionEvent) => {
       if (event.type === 'session.ended') {

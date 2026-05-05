@@ -226,6 +226,7 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
       streamingRouter,
       roomManager,
       queueItems: repositories.queueItems,
+      providerQueueRejections: queueService,
     });
   }
 

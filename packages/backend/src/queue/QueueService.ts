@@ -460,6 +460,153 @@ export class QueueService {
     return { count, threshold, thresholdReached, trackUri: nowPlaying.uri };
   }
 
+  /**
+   * Per-process in-memory skip-vote tally for provider-queue tracks that
+   * have no OpenDJ counterpart (host added them directly via Spotify,
+   * playlist context, etc.). Keyed by sessionId → trackUri → voter
+   * guestIds. Mirrors {@link nowPlayingVotes} but indexed per-URI.
+   */
+  private readonly providerQueueVotes = new Map<string, Map<string, Set<string>>>();
+  /**
+   * URIs that crossed the skip-vote threshold but haven't yet been
+   * skipped (because they aren't currently playing). Consumed by the
+   * NowPlayingPoller — when it sees one of these reach the now-playing
+   * slot it calls `provider.skipTrack()` and removes the URI.
+   */
+  private readonly rejectedProviderUris = new Map<string, Set<string>>();
+
+  /**
+   * Diagnostic / NowPlayingPoller hook. Returns the live rejected-URI
+   * set for `sessionId`, or an empty set if none. Caller should treat
+   * the set as read-only — mutations belong to {@link consumeProviderRejection}.
+   */
+  getRejectedProviderUris(sessionId: string): ReadonlySet<string> {
+    return this.rejectedProviderUris.get(sessionId) ?? new Set();
+  }
+
+  /**
+   * Pop a rejected URI for `sessionId`, returning true iff it was
+   * present. Used by the NowPlayingPoller after it successfully calls
+   * `provider.skipTrack()`.
+   */
+  consumeProviderRejection(sessionId: string, trackUri: string): boolean {
+    const set = this.rejectedProviderUris.get(sessionId);
+    if (!set) return false;
+    const had = set.delete(trackUri);
+    if (set.size === 0) this.rejectedProviderUris.delete(sessionId);
+    return had;
+  }
+
+  /**
+   * Guest action: cast a skip-vote against a provider-queue track that
+   * doesn't have an OpenDJ queue_item (so {@link castSkipVote} can't
+   * apply). Threshold semantics match — fixed/percentage modes auto-
+   * reject + best-effort `provider.skipTrack` if currently playing,
+   * otherwise the URI joins {@link rejectedProviderUris} and the
+   * NowPlayingPoller skips it when it eventually reaches the slot.
+   */
+  async castProviderQueueSkipVote(input: {
+    sessionId: string;
+    slotToken: string;
+    trackUri: string;
+  }): Promise<{ count: number; threshold: number; thresholdReached: boolean }> {
+    const slot = await this.deps.guestSlots.findBySlotToken(input.slotToken);
+    if (!slot) throw new QueueServiceError('unknown_slot_token', 'Unknown slot token.');
+    if (slot.sessionId !== input.sessionId) {
+      throw new QueueServiceError('slot_session_mismatch', 'Slot does not belong to this session.');
+    }
+
+    const session = await this.deps.sessions.findById(input.sessionId);
+    if (!session) throw new QueueServiceError('session_not_found', 'Unknown session.');
+
+    const room = this.deps.rooms?.forSession(input.sessionId);
+    if (!room) throw new QueueServiceError('no_room', 'Realtime room not materialized.');
+    const snapshot = await room.getSnapshot();
+    const inProviderQueue = snapshot.providerQueue.some((t) => t.uri === input.trackUri);
+    const isNowPlaying = snapshot.nowPlaying?.uri === input.trackUri;
+    if (!inProviderQueue && !isNowPlaying) {
+      throw new QueueServiceError(
+        'track_not_in_queue',
+        'That track is not in the provider queue right now.',
+      );
+    }
+
+    const guest = await this.deps.guests.findBySessionAndFingerprint(
+      input.sessionId,
+      slot.fingerprintHash,
+    );
+    if (!guest) throw new QueueServiceError('guest_not_found', 'No guest row for this slot.');
+
+    let perSession = this.providerQueueVotes.get(input.sessionId);
+    if (!perSession) {
+      perSession = new Map();
+      this.providerQueueVotes.set(input.sessionId, perSession);
+    }
+    let voters = perSession.get(input.trackUri);
+    if (!voters) {
+      voters = new Set();
+      perSession.set(input.trackUri, voters);
+    }
+    if (voters.has(guest.id)) {
+      throw new QueueServiceError(
+        'already_voted',
+        'This guest has already voted to skip this track.',
+      );
+    }
+    voters.add(guest.id);
+
+    const count = voters.size;
+    const threshold = session.voteSkipThreshold;
+    const thresholdReached = count >= threshold;
+
+    await this.publishToRoom(input.sessionId, {
+      type: 'provider_queue_skip_vote.updated',
+      trackUri: input.trackUri,
+      count,
+      threshold,
+    });
+
+    if (
+      thresholdReached &&
+      (session.voteSkipMode === 'fixed' || session.voteSkipMode === 'percentage')
+    ) {
+      // Stash for poller pickup, even if we attempt the immediate skip.
+      let rejected = this.rejectedProviderUris.get(input.sessionId);
+      if (!rejected) {
+        rejected = new Set();
+        this.rejectedProviderUris.set(input.sessionId, rejected);
+      }
+      rejected.add(input.trackUri);
+
+      if (isNowPlaying && this.deps.streamingRouter && this.deps.providerConnections) {
+        try {
+          const conns = await this.deps.providerConnections.findAllForAccount(session.accountId);
+          const conn = conns[0];
+          if (conn) {
+            const provider = await this.deps.streamingRouter.getProvider(
+              session.accountId,
+              conn.providerId,
+            );
+            if (supportsSkipTrack(provider)) {
+              await provider.skipTrack();
+              // Successful immediate skip — no need for the poller to do it.
+              this.consumeProviderRejection(input.sessionId, input.trackUri);
+            }
+          }
+        } catch (err) {
+          console.warn(
+            `[QueueService] provider-queue skip-on-threshold failed: ${(err as Error).message}`,
+          );
+        }
+      }
+      // Drop the per-URI bucket so the same URI re-queued later starts fresh.
+      perSession.delete(input.trackUri);
+      if (perSession.size === 0) this.providerQueueVotes.delete(input.sessionId);
+    }
+
+    return { count, threshold, thresholdReached };
+  }
+
   private async publishToRoom(sessionId: string, event: SessionEvent): Promise<void> {
     const room = this.deps.rooms?.forSession(sessionId);
     if (room) await room.publish(event);

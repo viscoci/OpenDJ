@@ -50,6 +50,13 @@ export interface SessionSnapshot {
     count: number;
     threshold: number;
   } | null;
+  /**
+   * Live skip-vote tallies against provider-queue tracks (Spotify queue
+   * tracks the host added directly, etc.). Keyed by trackUri. Cleared
+   * server-side as URIs leave the provider queue. Empty object when no
+   * provider-track votes have been cast since boot.
+   */
+  providerQueueSkipVotes: Record<string, { count: number; threshold: number }>;
   /** Number of guest slots currently in the `active` state. */
   activeGuestCount: number;
   /** Number of guest slots currently waiting for a free slot. */
@@ -74,6 +81,7 @@ export function createEmptySnapshot(sessionId: string, nowEpochMs: number): Sess
     pending: [],
     providerQueue: [],
     nowPlayingSkipVote: null,
+    providerQueueSkipVotes: {},
     activeGuestCount: 0,
     queuedGuestCount: 0,
     snapshotAtEpochMs: nowEpochMs,

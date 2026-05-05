@@ -71,6 +71,15 @@ export interface NowPlayingPollerDeps {
    * deploys that don't materialize queue items.
    */
   queueItems?: QueueItemRepository;
+  /**
+   * Provider-queue skip-vote registry. When supplied, the poller calls
+   * `provider.skipTrack()` whenever the now-playing URI has been voted
+   * past threshold and consumes the rejection on success.
+   */
+  providerQueueRejections?: {
+    getRejectedProviderUris(sessionId: string): ReadonlySet<string>;
+    consumeProviderRejection(sessionId: string, trackUri: string): boolean;
+  };
 }
 
 export interface NowPlayingPollerOptions {
@@ -254,6 +263,30 @@ export class NowPlayingPoller {
 
       if (this.shouldPublish(prev, next)) {
         await room.publish({ type: 'now_playing.updated', track: next });
+      }
+
+      // Auto-skip rejected provider-queue URIs the moment they reach the
+      // now-playing slot. Cheaper than the post-fetch reconcile loop and
+      // gets the skip out before we even fan the snapshot to clients.
+      if (next && this.deps.providerQueueRejections) {
+        const rejectedSet = this.deps.providerQueueRejections.getRejectedProviderUris(sessionId);
+        if (rejectedSet.has(next.uri)) {
+          try {
+            if (supportsSkipTrack(provider)) {
+              await provider.skipTrack();
+              this.deps.providerQueueRejections.consumeProviderRejection(sessionId, next.uri);
+              this.logger.warn('[NowPlayingPoller] auto-skipped vote-rejected provider track', {
+                sessionId,
+                trackUri: next.uri,
+              });
+            }
+          } catch (err) {
+            this.logger.warn('[NowPlayingPoller] provider-rejection auto-skip failed', {
+              sessionId,
+              error: (err as Error).message,
+            });
+          }
+        }
       }
 
       // Provider queue (e.g. Spotify queue) — fetch + diff alongside

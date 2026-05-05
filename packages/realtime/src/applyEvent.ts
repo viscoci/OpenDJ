@@ -95,8 +95,31 @@ export function applyEvent(snapshot: SessionSnapshot, event: SessionEvent): Sess
       return { ...snapshot, queue };
     }
 
-    case 'provider_queue.updated':
-      return { ...snapshot, providerQueue: event.tracks };
+    case 'provider_queue.updated': {
+      // Drop any per-URI skip-vote tallies whose track has rolled out of
+      // the provider queue — the vote becomes meaningless once the track
+      // is no longer scheduled.
+      const remainingUris = new Set(event.tracks.map((t) => t.uri));
+      let providerQueueSkipVotes = snapshot.providerQueueSkipVotes;
+      for (const uri of Object.keys(providerQueueSkipVotes)) {
+        if (!remainingUris.has(uri)) {
+          if (providerQueueSkipVotes === snapshot.providerQueueSkipVotes) {
+            providerQueueSkipVotes = { ...providerQueueSkipVotes };
+          }
+          delete providerQueueSkipVotes[uri];
+        }
+      }
+      return { ...snapshot, providerQueue: event.tracks, providerQueueSkipVotes };
+    }
+
+    case 'provider_queue_skip_vote.updated':
+      return {
+        ...snapshot,
+        providerQueueSkipVotes: {
+          ...snapshot.providerQueueSkipVotes,
+          [event.trackUri]: { count: event.count, threshold: event.threshold },
+        },
+      };
 
     case 'guest_slots.updated':
       return {

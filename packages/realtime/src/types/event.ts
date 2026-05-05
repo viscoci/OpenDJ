@@ -34,6 +34,17 @@ export type SessionEvent =
   // poller sees a change. Separate from queue.item_* which only describes
   // the OpenDJ moderation list.
   | { type: 'provider_queue.updated'; tracks: Track[] }
+  // Live skip-vote tally against a provider-queue track that has no OpenDJ
+  // counterpart (host added it via Spotify directly, playlist context,
+  // etc.). Separate from `skip_vote.updated` (queue_items.id keyed) because
+  // there's no item id to reference. The server clears stale entries when
+  // the URI leaves the provider queue.
+  | {
+      type: 'provider_queue_skip_vote.updated';
+      trackUri: string;
+      count: number;
+      threshold: number;
+    }
   // Guest slots
   | { type: 'guest_slots.updated'; activeCount: number; queuedCount: number }
   // Playback clock + correction (sync layer)

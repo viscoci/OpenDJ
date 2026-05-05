@@ -54,6 +54,7 @@ function mapErrorToStatus(code: string): { status: number; payload: { error: str
     case 'duplicate_request':
     case 'no_room':
     case 'no_track_playing':
+    case 'track_not_in_queue':
       return { status: 400, payload: { error: code } };
     case 'not_owner':
       return { status: 403, payload: { error: code } };
@@ -146,6 +147,45 @@ export function queueRoutes(deps: QueueRouteDeps): Hono<{ Variables: AuthVariabl
     try {
       await deps.queueService.removeOwn({ itemId, sessionId, slotToken });
       return c.json({ ok: true });
+    } catch (err) {
+      if (err instanceof QueueServiceError) {
+        const { status, payload } = mapErrorToStatus(err.code);
+        return c.json(payload, status as 400 | 401 | 403 | 404);
+      }
+      throw err;
+    }
+  });
+
+  /**
+   * POST /queue/provider-vote-skip — guest votes to skip a provider-queue
+   * track that has no OpenDJ counterpart. Body: { trackUri }. Returns
+   * `{count, threshold, thresholdReached}` — same shape as queue-item skip
+   * vote so the client UI can share rendering logic.
+   */
+  const ProviderVoteSkipBody = v.object({
+    trackUri: v.pipe(v.string(), v.nonEmpty()),
+  });
+  app.post('/provider-vote-skip', async (c) => {
+    const sessionId = c.req.param('id') ?? '';
+    const slotToken = bearerFromAuthHeader(c.req.header('authorization'));
+    if (!slotToken) return c.json({ error: 'missing_slot_token' }, 401);
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: 'invalid_body' }, 400);
+    }
+    const parsed = v.safeParse(ProviderVoteSkipBody, body);
+    if (!parsed.success) {
+      return c.json({ error: 'invalid_body', issues: parsed.issues.map((i) => i.message) }, 400);
+    }
+    try {
+      const result = await deps.queueService.castProviderQueueSkipVote({
+        sessionId,
+        slotToken,
+        trackUri: parsed.output.trackUri,
+      });
+      return c.json(result);
     } catch (err) {
       if (err instanceof QueueServiceError) {
         const { status, payload } = mapErrorToStatus(err.code);
