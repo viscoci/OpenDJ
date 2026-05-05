@@ -205,6 +205,41 @@ export class QueueService {
           durationMs: updated.durationMs ?? 0,
         });
       }
+    } else {
+      // Decision was 'rejected' — if the rejected URI is the currently-
+      // playing track, best-effort skip immediately rather than waiting
+      // for the next NowPlayingPoller tick. The reconcile pass would
+      // catch it within ~5s but that delay reads as "Remove didn't
+      // work" to the host clicking the button.
+      const room = this.deps.rooms?.forSession(input.sessionId);
+      const nowPlaying = room ? (await room.getSnapshot()).nowPlaying : null;
+      if (
+        nowPlaying &&
+        updated.trackUri === nowPlaying.uri &&
+        this.deps.streamingRouter &&
+        this.deps.providerConnections
+      ) {
+        const session = await this.deps.sessions.findById(input.sessionId);
+        if (session) {
+          try {
+            const conns = await this.deps.providerConnections.findAllForAccount(session.accountId);
+            const conn = conns[0];
+            if (conn) {
+              const provider = await this.deps.streamingRouter.getProvider(
+                session.accountId,
+                conn.providerId,
+              );
+              if (supportsSkipTrack(provider)) {
+                await provider.skipTrack();
+              }
+            }
+          } catch (err) {
+            console.warn(
+              `[QueueService] moderate(rejected) skip-on-current failed: ${(err as Error).message}`,
+            );
+          }
+        }
+      }
     }
     return updated;
   }

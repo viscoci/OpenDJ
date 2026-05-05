@@ -125,7 +125,7 @@ export class NowPlayingPoller {
     private readonly deps: NowPlayingPollerDeps,
     options: NowPlayingPollerOptions = {},
   ) {
-    this.intervalMs = options.intervalMs ?? 5000;
+    this.intervalMs = options.intervalMs ?? 2500;
     this.driftThresholdMs = options.driftThresholdMs ?? 4000;
     this.idleGraceMs = options.idleGraceMs ?? 30_000;
     this.maxBackoffMs = options.maxBackoffMs ?? 60_000;
@@ -203,6 +203,14 @@ export class NowPlayingPoller {
     entry.timer = null;
 
     let nextDelayMs: number = this.intervalMs;
+    /**
+     * Set when this tick called provider.skipTrack(). Forces a fast
+     * follow-up so the new now-playing reaches clients within a second
+     * instead of waiting a full intervalMs. Spotify's API needs ~500ms
+     * to settle a skip — sub-second polls would just observe the old
+     * state.
+     */
+    let skipDispatched = false;
 
     try {
       // Auto-stop if the session was ended while we were ticking.
@@ -275,6 +283,7 @@ export class NowPlayingPoller {
             if (supportsSkipTrack(provider)) {
               await provider.skipTrack();
               this.deps.providerQueueRejections.consumeProviderRejection(sessionId, next.uri);
+              skipDispatched = true;
               this.logger.warn('[NowPlayingPoller] auto-skipped vote-rejected provider track', {
                 sessionId,
                 trackUri: next.uri,
@@ -319,7 +328,16 @@ export class NowPlayingPoller {
       // racing newly-pushed items that haven't yet shown up on the next
       // queue read.
       if (this.deps.queueItems) {
-        await this.reconcileQueue(sessionId, next, providerQueue);
+        const reconcileSkipped = await this.reconcileQueue(sessionId, next, providerQueue);
+        if (reconcileSkipped) skipDispatched = true;
+      }
+
+      // Tighten the next tick when we just dispatched a skip so the new
+      // now-playing reaches clients ASAP. Spotify needs ~500ms to settle
+      // a skip — anything sub-second risks reporting the old track as
+      // still playing.
+      if (skipDispatched) {
+        nextDelayMs = 750;
       }
 
       // Successful tick clears any backoff.
@@ -413,10 +431,11 @@ export class NowPlayingPoller {
     sessionId: string,
     nowPlaying: NowPlayingTrack | null,
     providerQueue: ReadonlyArray<Track>,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const repo = this.deps.queueItems!;
     const RECONCILE_GRACE_MS = 30_000;
     const now = Date.now();
+    let skipDispatched = false;
 
     const items = await repo.findAllForSession(sessionId);
 
@@ -461,6 +480,7 @@ export class NowPlayingPoller {
             );
             if (supportsSkipTrack(provider)) {
               await provider.skipTrack();
+              skipDispatched = true;
               this.logger.warn('[NowPlayingPoller] auto-skipped rejected track', {
                 sessionId,
                 itemId: rejectedHit.id,
@@ -525,6 +545,7 @@ export class NowPlayingPoller {
         await repo.setStatus({ id: item.id, status: 'played', decidedAt: new Date(now) });
       }
     }
+    return skipDispatched;
   }
 }
 
