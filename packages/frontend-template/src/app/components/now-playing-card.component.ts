@@ -83,6 +83,24 @@ import type { NowPlayingTrack } from '@opendj/core';
             </button>
           </div>
         }
+        @if (showVoteSkip()) {
+          <div class="vote-row">
+            <button
+              type="button"
+              class="vote-skip"
+              [class.voted]="alreadyVoted()"
+              [disabled]="alreadyVoted() || voteBusy()"
+              (click)="voteSkip.emit()"
+            >
+              <span class="vote-skip-label">
+                {{ alreadyVoted() ? 'Voted' : 'Vote to skip' }}
+              </span>
+              <span class="vote-skip-count" [class.met]="thresholdMet()">
+                {{ voteCount() }}<span class="sep">/</span>{{ voteThreshold() }}
+              </span>
+            </button>
+          </div>
+        }
       </article>
     } @else {
       <article class="card empty" [attr.data-testid]="'now-playing-empty'">
@@ -222,6 +240,52 @@ import type { NowPlayingTrack } from '@opendj/core';
         opacity: 0.5;
         cursor: not-allowed;
       }
+      .vote-row {
+        grid-column: 1 / -1;
+        display: flex;
+        justify-content: flex-end;
+        margin-top: 4px;
+      }
+      .vote-skip {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        background: rgba(168, 85, 247, 0.08);
+        border: 1px solid rgba(168, 85, 247, 0.4);
+        color: #d8b4fe;
+        font: inherit;
+        font-size: 12px;
+        padding: 6px 14px;
+        border-radius: 999px;
+        cursor: pointer;
+      }
+      .vote-skip:hover:not(:disabled) {
+        background: rgba(168, 85, 247, 0.16);
+      }
+      .vote-skip:disabled {
+        cursor: default;
+      }
+      .vote-skip.voted {
+        background: linear-gradient(135deg, rgba(168, 85, 247, 0.3), rgba(236, 72, 153, 0.3));
+        border-color: rgba(168, 85, 247, 0.6);
+        color: #fff;
+        opacity: 1;
+      }
+      .vote-skip-label {
+        font-weight: 500;
+      }
+      .vote-skip-count {
+        font-family: 'JetBrains Mono', ui-monospace, monospace;
+        font-size: 11px;
+        font-weight: 700;
+      }
+      .vote-skip-count.met {
+        color: #f59e0b;
+      }
+      .vote-skip-count .sep {
+        opacity: 0.5;
+        font-weight: 400;
+      }
     `,
   ],
 })
@@ -240,9 +304,23 @@ export class NowPlayingCardComponent {
   readonly lastUpdatedAtMs = input(0);
   readonly showControls = input(false);
   readonly controlsBusy = input(false);
+  /**
+   * Show the guest's vote-to-skip affordance. Pair with `voteCount` /
+   * `voteThreshold` / `alreadyVoted` to drive the pill state.
+   */
+  readonly showVoteSkip = input(false);
+  readonly voteCount = input(0);
+  readonly voteThreshold = input(5);
+  readonly alreadyVoted = input(false);
+  readonly voteBusy = input(false);
 
   @Output() readonly skip = new EventEmitter<void>();
   @Output() readonly togglePlay = new EventEmitter<void>();
+  @Output() readonly voteSkip = new EventEmitter<void>();
+
+  protected readonly thresholdMet = computed<boolean>(
+    () => this.voteCount() >= this.voteThreshold(),
+  );
 
   /** Tick driven by setInterval — bumps every 250ms while a track is playing. */
   private readonly tick = signal(0);

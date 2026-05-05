@@ -32,6 +32,7 @@ import {
   StreamingRouter,
   UnknownProviderError,
 } from '../providers/streaming/StreamingRouter.js';
+import { QueueService, QueueServiceError } from '../queue/QueueService.js';
 import type { ProviderConnectionRepository, SessionRepository } from '../repositories/types.js';
 
 export interface PlaybackRouteDeps {
@@ -39,6 +40,8 @@ export interface PlaybackRouteDeps {
   sessions: SessionRepository;
   providerConnections: ProviderConnectionRepository;
   streamingRouter: StreamingRouter;
+  /** Required only for the guest skip-vote route. */
+  queueService?: QueueService;
 }
 
 type PlaybackAction = 'skip' | 'pause' | 'resume';
@@ -137,6 +140,40 @@ export function playbackRoutes(deps: PlaybackRouteDeps): Hono<{ Variables: AuthV
   app.post('/skip', guard, (c) => runAction(c, 'skip'));
   app.post('/pause', guard, (c) => runAction(c, 'pause'));
   app.post('/resume', guard, (c) => runAction(c, 'resume'));
+
+  /**
+   * POST /skip-vote — guest cast a vote-to-skip the now-playing track.
+   * Slot-token auth (Authorization: Bearer <slotToken>). Server-side
+   * dedup is per (track URI, guestId). When threshold crossed, the
+   * server best-effort calls provider.skipTrack().
+   */
+  if (deps.queueService) {
+    const queueService = deps.queueService;
+    app.post('/skip-vote', async (c) => {
+      const sessionId = c.req.param('id') ?? '';
+      const auth = c.req.header('authorization') ?? '';
+      const m = /^Bearer\s+(.+)$/i.exec(auth);
+      const slotToken = m ? m[1]!.trim() : null;
+      if (!slotToken) return c.json({ error: 'missing_slot_token' }, 401);
+
+      try {
+        const result = await queueService.castNowPlayingSkipVote({
+          sessionId,
+          slotToken,
+        });
+        return c.json(result, 200);
+      } catch (err) {
+        if (err instanceof QueueServiceError) {
+          const code = err.code;
+          if (code === 'unknown_slot_token' || code === 'slot_not_active') {
+            return c.json({ error: code }, 401);
+          }
+          return c.json({ error: code }, 400);
+        }
+        throw err;
+      }
+    });
+  }
 
   return app;
 }

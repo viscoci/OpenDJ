@@ -38,6 +38,18 @@ export interface SessionSnapshot {
    * doesn't expose a queue read or no provider is connected.
    */
   providerQueue: Track[];
+  /**
+   * Live skip-vote tally against whatever's currently playing. Bound to
+   * the now-playing track's URI — when nowPlaying transitions to a
+   * different URI, this resets to count=0. `threshold` is read from
+   * `session.voteSkipThreshold` at the time of the first vote.
+   * Null when nothing is playing.
+   */
+  nowPlayingSkipVote: {
+    trackUri: string;
+    count: number;
+    threshold: number;
+  } | null;
   /** Number of guest slots currently in the `active` state. */
   activeGuestCount: number;
   /** Number of guest slots currently waiting for a free slot. */
@@ -61,6 +73,7 @@ export function createEmptySnapshot(sessionId: string, nowEpochMs: number): Sess
     queue: [],
     pending: [],
     providerQueue: [],
+    nowPlayingSkipVote: null,
     activeGuestCount: 0,
     queuedGuestCount: 0,
     snapshotAtEpochMs: nowEpochMs,

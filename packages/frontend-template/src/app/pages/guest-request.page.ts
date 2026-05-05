@@ -91,7 +91,16 @@ import { buildQueueEtaMs, formatEta } from '../utils/queue-eta.js';
         </header>
 
         <section class="card now-playing-section">
-          <app-now-playing-card [track]="nowPlaying()" [lastUpdatedAtMs]="nowPlayingAt()" />
+          <app-now-playing-card
+            [track]="nowPlaying()"
+            [lastUpdatedAtMs]="nowPlayingAt()"
+            [showVoteSkip]="!!nowPlaying() && slot()?.status === 'active'"
+            [voteCount]="nowPlayingVoteCount()"
+            [voteThreshold]="nowPlayingVoteThreshold()"
+            [alreadyVoted]="hasVotedNowPlaying()"
+            [voteBusy]="nowPlayingVoteBusy()"
+            (voteSkip)="onVoteSkipNowPlaying()"
+          />
         </section>
 
         <section class="card request-form">
@@ -333,6 +342,33 @@ export class GuestRequestPage {
   readonly searchDisabledReason = signal<string | null>(null);
   readonly submitting = signal(false);
   readonly votedItemIds = signal<ReadonlySet<string>>(new Set());
+  /**
+   * Track URIs the guest has already voted to skip. Optimistically updated
+   * on click + cleared whenever now-playing transitions to a new URI.
+   */
+  readonly votedNowPlayingUris: WritableSignal<ReadonlySet<string>> = signal(new Set());
+  readonly nowPlayingVoteBusy = signal(false);
+
+  /**
+   * Live skip-vote tally for the currently-playing track, mirrored from
+   * the realtime snapshot + `now_playing_skip_vote.updated` events.
+   */
+  readonly nowPlayingSkipVoteState: WritableSignal<{
+    trackUri: string;
+    count: number;
+    threshold: number;
+  } | null> = signal(null);
+
+  readonly nowPlayingVoteCount = computed<number>(() => this.nowPlayingSkipVoteState()?.count ?? 0);
+
+  readonly nowPlayingVoteThreshold = computed<number>(
+    () => this.nowPlayingSkipVoteState()?.threshold ?? this.session()?.voteSkipThreshold ?? 5,
+  );
+
+  readonly hasVotedNowPlaying = computed<boolean>(() => {
+    const uri = this.nowPlaying()?.uri;
+    return uri ? this.votedNowPlayingUris().has(uri) : false;
+  });
 
   readonly visibleQueue = computed(() =>
     this.queue().filter((i) => i.status !== 'rejected' && i.status !== 'pending'),
@@ -483,6 +519,29 @@ export class GuestRequestPage {
 
   // ─── Skip-vote ─────────────────────────────────────────────────────────
 
+  async onVoteSkipNowPlaying(): Promise<void> {
+    const session = this.session();
+    const slot = this.slot();
+    const np = this.nowPlaying();
+    if (!session || !slot || slot.status !== 'active' || !np) return;
+    if (this.hasVotedNowPlaying()) return;
+    this.nowPlayingVoteBusy.set(true);
+    try {
+      await this.clientService.client.playback.voteSkip(session.id, slot.slotToken);
+      this.votedNowPlayingUris.update((s) => new Set(s).add(np.uri));
+    } catch (err) {
+      const code = err instanceof ApiError ? err.code : 'error';
+      if (code === 'already_voted') {
+        // Server already counted us — match the client state.
+        this.votedNowPlayingUris.update((s) => new Set(s).add(np.uri));
+      } else {
+        this.snackbar.error("Couldn't record your vote.", 4000);
+      }
+    } finally {
+      this.nowPlayingVoteBusy.set(false);
+    }
+  }
+
   async onVoteSkip(itemId: string): Promise<void> {
     const session = this.session();
     const slot = this.slot();
@@ -544,10 +603,29 @@ export class GuestRequestPage {
       this.recentlyPlayed.set(snapshot.recentlyPlayed);
       this.providerQueue.set(snapshot.providerQueue);
       this.queue.set(snapshot.queue);
+      this.nowPlayingSkipVoteState.set(snapshot.nowPlayingSkipVote);
     });
     this.realtime.on('now_playing.updated', (event) => {
+      const prevUri = this.nowPlaying()?.uri ?? null;
+      const nextUri = event.track?.uri ?? null;
       this.nowPlaying.set(event.track);
       this.nowPlayingAt.set(Date.now());
+      if (prevUri !== nextUri) {
+        // Track changed → reset client-side "I voted" memory + tally.
+        this.votedNowPlayingUris.set(new Set());
+        this.nowPlayingSkipVoteState.set(null);
+      }
+    });
+    this.realtime.on('now_playing_skip_vote.updated', (event) => {
+      this.nowPlayingSkipVoteState.set({
+        trackUri: event.trackUri,
+        count: event.count,
+        threshold: event.threshold,
+      });
+      // If the threshold landed via someone else's vote, surface it.
+      if (event.count >= event.threshold) {
+        this.snackbar.info('Track skipped by votes.', 4000);
+      }
     });
     this.realtime.on('provider_queue.updated', (event) => {
       this.providerQueue.set(event.tracks);

@@ -52,6 +52,8 @@ function mapErrorToStatus(code: string): { status: number; payload: { error: str
     case 'item_playing':
     case 'already_voted':
     case 'duplicate_request':
+    case 'no_room':
+    case 'no_track_playing':
       return { status: 400, payload: { error: code } };
     case 'not_owner':
       return { status: 403, payload: { error: code } };

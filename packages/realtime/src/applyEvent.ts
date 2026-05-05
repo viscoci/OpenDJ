@@ -71,8 +71,21 @@ export function applyEvent(snapshot: SessionSnapshot, event: SessionEvent): Sess
           recentlyPlayed = [prev, ...recentlyPlayed].slice(0, RECENTLY_PLAYED_MAX);
         }
       }
-      return { ...snapshot, nowPlaying: next, recentlyPlayed };
+      // Skip-vote tally is bound to a single track URI — drop it on any
+      // track transition so the count restarts at 0 for the new song.
+      const nowPlayingSkipVote = trackChanged ? null : snapshot.nowPlayingSkipVote;
+      return { ...snapshot, nowPlaying: next, recentlyPlayed, nowPlayingSkipVote };
     }
+
+    case 'now_playing_skip_vote.updated':
+      return {
+        ...snapshot,
+        nowPlayingSkipVote: {
+          trackUri: event.trackUri,
+          count: event.count,
+          threshold: event.threshold,
+        },
+      };
 
     case 'skip_vote.updated': {
       const queueIdx = snapshot.queue.findIndex((i) => i.id === event.itemId);

@@ -22,6 +22,14 @@ export type SessionEvent =
   // Now playing + skip
   | { type: 'now_playing.updated'; track: NowPlayingTrack | null }
   | { type: 'skip_vote.updated'; itemId: string; votes: number; threshold: number }
+  // Live skip-vote tally against the currently-playing track. `count: 0`
+  // is the reset signal when the track transitions.
+  | {
+      type: 'now_playing_skip_vote.updated';
+      trackUri: string;
+      count: number;
+      threshold: number;
+    }
   // Provider's own playback queue (Spotify queue, etc.) — fires when the
   // poller sees a change. Separate from queue.item_* which only describes
   // the OpenDJ moderation list.

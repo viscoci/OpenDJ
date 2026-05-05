@@ -14,6 +14,7 @@ describe('createEmptySnapshot', () => {
       queue: [],
       pending: [],
       providerQueue: [],
+      nowPlayingSkipVote: null,
       activeGuestCount: 0,
       queuedGuestCount: 0,
       snapshotAtEpochMs: 1_700_000_000_000,

@@ -15,6 +15,7 @@ import {
   applyModerationDecision,
   canEnqueue,
   supportsQueueTrack,
+  supportsSkipTrack,
   type CanEnqueueResult,
   type Guest,
   type QueueItem,
@@ -305,6 +306,111 @@ export class QueueService {
 
   async listForSession(sessionId: string): Promise<QueueItemRecord[]> {
     return this.deps.queueItems.findAllForSession(sessionId);
+  }
+
+  /**
+   * Per-process in-memory skip-vote tally for the currently-playing
+   * track. Keyed by sessionId; voters are guest ids. Reset whenever the
+   * trackUri changes since the cached value.
+   *
+   * Lives on QueueService because it's tied to QueueService's lifecycle
+   * + ergonomic re-use of slot/guest resolution. Hosted deploys
+   * eventually persist this for cross-instance dedup; OSS demo trades
+   * that for simplicity since vote-to-skip is per-session-instant only.
+   */
+  private readonly nowPlayingVotes = new Map<string, { trackUri: string; voters: Set<string> }>();
+
+  /**
+   * Guest action: cast a skip-vote against whatever's currently playing.
+   * Returns the new aggregate count + threshold + a flag the caller can
+   * use for "skipped by votes" UX. When `thresholdReached` flips true the
+   * server has already (best-effort) called `provider.skipTrack()` and
+   * fired a `now_playing_skip_vote.updated` event with count >= threshold.
+   */
+  async castNowPlayingSkipVote(input: { sessionId: string; slotToken: string }): Promise<{
+    count: number;
+    threshold: number;
+    thresholdReached: boolean;
+    trackUri: string;
+  }> {
+    const slot = await this.deps.guestSlots.findBySlotToken(input.slotToken);
+    if (!slot) throw new QueueServiceError('unknown_slot_token', 'Unknown slot token.');
+    if (slot.sessionId !== input.sessionId) {
+      throw new QueueServiceError('slot_session_mismatch', 'Slot does not belong to this session.');
+    }
+
+    const session = await this.deps.sessions.findById(input.sessionId);
+    if (!session) throw new QueueServiceError('session_not_found', 'Unknown session.');
+
+    const room = this.deps.rooms?.forSession(input.sessionId);
+    if (!room) {
+      throw new QueueServiceError('no_room', 'Realtime room not materialized.');
+    }
+    const snapshot = await room.getSnapshot();
+    const nowPlaying = snapshot.nowPlaying;
+    if (!nowPlaying) {
+      throw new QueueServiceError('no_track_playing', 'Nothing is playing right now.');
+    }
+
+    const guest = await this.deps.guests.findBySessionAndFingerprint(
+      input.sessionId,
+      slot.fingerprintHash,
+    );
+    if (!guest) throw new QueueServiceError('guest_not_found', 'No guest row for this slot.');
+
+    // Bucket per-track. A new track URI invalidates prior votes.
+    let bucket = this.nowPlayingVotes.get(input.sessionId);
+    if (!bucket || bucket.trackUri !== nowPlaying.uri) {
+      bucket = { trackUri: nowPlaying.uri, voters: new Set() };
+      this.nowPlayingVotes.set(input.sessionId, bucket);
+    }
+    if (bucket.voters.has(guest.id)) {
+      throw new QueueServiceError(
+        'already_voted',
+        'This guest has already voted to skip the current track.',
+      );
+    }
+    bucket.voters.add(guest.id);
+
+    const count = bucket.voters.size;
+    const threshold = session.voteSkipThreshold;
+    const thresholdReached = count >= threshold;
+
+    await this.publishToRoom(input.sessionId, {
+      type: 'now_playing_skip_vote.updated',
+      trackUri: nowPlaying.uri,
+      count,
+      threshold,
+    });
+
+    if (thresholdReached) {
+      // Best-effort: call provider.skipTrack. The next now-playing tick
+      // will broadcast the new track + the snapshot's
+      // nowPlayingSkipVote will reset to null via applyEvent.
+      try {
+        if (this.deps.streamingRouter && this.deps.providerConnections) {
+          const conns = await this.deps.providerConnections.findAllForAccount(session.accountId);
+          const conn = conns[0];
+          if (conn) {
+            const provider = await this.deps.streamingRouter.getProvider(
+              session.accountId,
+              conn.providerId,
+            );
+            if (supportsSkipTrack(provider)) {
+              await provider.skipTrack();
+            }
+          }
+        }
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn(`[QueueService] skip-on-threshold failed: ${(err as Error).message}`);
+      }
+      // Clear the bucket so the next track starts at zero — the new
+      // now_playing.updated will reset the snapshot field via applyEvent.
+      this.nowPlayingVotes.delete(input.sessionId);
+    }
+
+    return { count, threshold, thresholdReached, trackUri: nowPlaying.uri };
   }
 
   private async publishToRoom(sessionId: string, event: SessionEvent): Promise<void> {

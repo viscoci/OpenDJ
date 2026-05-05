@@ -114,6 +114,7 @@ export function createApp(options: AppOptions): Hono<{ Variables: AuthVariables 
       sessions: deps.repositories.sessions,
       providerConnections: deps.repositories.providerConnections,
       streamingRouter: deps.streamingRouter,
+      queueService: deps.queueService,
     }),
   );
   v1.route(
