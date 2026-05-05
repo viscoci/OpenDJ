@@ -46,3 +46,6 @@ Thumbs.db
 # Cloudflare
 .wrangler/
 .dev.vars
+
+# Local agent state
+.claude/
