@@ -23,7 +23,7 @@ import { isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { serve } from '@hono/node-server';
 import { createNodeWebSocket } from '@hono/node-ws';
-import { ConfigError, createApp, createDeps, loadConfig } from '@opendj/backend';
+import { ConfigError, createApp, createDeps, loadConfig, realtimeRoutes } from '@opendj/backend';
 import { createDb } from '@opendj/db';
 import { runMigrations } from '@opendj/db/migrate';
 
@@ -58,15 +58,27 @@ async function main(): Promise<void> {
   const db = createDb(config.databaseUrl);
   const deps = createDeps({ config, db, realtime: 'in-process' });
 
-  // We need an app instance to feed createNodeWebSocket — but createApp also
-  // needs the upgradeWebSocket helper. Construct a placeholder app for the
-  // WS factory, then build the real app passing its upgradeWebSocket back.
-  // The factory is bound to the Hono instance it's first attached to, so
-  // we build the real app with the helper and inject WS into the served HTTP
-  // server afterwards.
-  const tempApp = createApp({ deps });
-  const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app: tempApp });
-  const app = createApp({ deps, upgradeWebSocket });
+  // The WS adapter binds to a specific Hono instance — `upgradeWebSocket`
+  // returned by `createNodeWebSocket` only wires up routes registered on
+  // that exact app. We therefore:
+  //   1. Build the app WITHOUT the realtime route (createApp omits it when
+  //      `upgradeWebSocket` isn't passed).
+  //   2. Wrap the same app with the WS adapter.
+  //   3. Mount the realtime route on the same app via the helper.
+  // A previous version constructed two app instances and silently 404'd on
+  // /api/v1/sessions/:id/realtime because the route was registered on app A
+  // but `injectWebSocket` was bound to app B.
+  const app = createApp({ deps });
+  const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
+  if (deps.roomManager) {
+    app.route(
+      '/api/v1/sessions/:id/realtime',
+      realtimeRoutes(
+        { rooms: deps.roomManager, nowPlayingPoller: deps.nowPlayingPoller },
+        upgradeWebSocket,
+      ),
+    );
+  }
 
   // ─── Serve the built Angular frontend ───────────────────────────────────
   // FRONTEND_DIST may be absolute or relative to the repo root (NOT cwd —

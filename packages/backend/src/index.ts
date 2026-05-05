@@ -18,4 +18,5 @@ export * from './providers/index.js';
 export * from './queue/index.js';
 export * from './realtime/index.js';
 export * from './repositories/index.js';
+export * from './routes/index.js';
 export * from './session/index.js';
