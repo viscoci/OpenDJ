@@ -791,8 +791,11 @@ export class HostSessionPage {
       this.nowPlayingAt.set(Date.now());
       this.recentlyPlayed.set(snapshot.recentlyPlayed);
       this.providerQueue.set(snapshot.providerQueue);
-      // Hosts see pending items too, so use the merged view from the snapshot.
-      this.queue.set([...snapshot.pending, ...snapshot.queue]);
+      // Don't override the queue from the snapshot. The room is in-memory
+      // and only reflects events fired since it materialized — anything
+      // requested before this server boot (or before the first WS subscriber)
+      // is in the DB but missing from snapshot.pending/queue. The /queue
+      // endpoint is authoritative; refreshQueue() ran during bootstrap.
     });
     this.realtime.on('now_playing.updated', (event) => {
       const prevZone = this.nowPlaying()?.zoneId;

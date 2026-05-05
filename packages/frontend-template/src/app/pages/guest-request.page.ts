@@ -943,7 +943,11 @@ export class GuestRequestPage {
       this.nowPlayingAt.set(Date.now());
       this.recentlyPlayed.set(snapshot.recentlyPlayed);
       this.providerQueue.set(snapshot.providerQueue);
-      this.queue.set(snapshot.queue);
+      // Don't override the queue from the snapshot — the room is in-memory
+      // and only reflects events fired since it materialized, so anything
+      // submitted before this server boot is missing from snapshot.queue.
+      // /queue (already fetched during bootstrap) is authoritative; live
+      // events keep it in sync.
       this.nowPlayingSkipVoteState.set(snapshot.nowPlayingSkipVote);
       this.providerSkipVotes.set(new Map(Object.entries(snapshot.providerQueueSkipVotes)));
     });

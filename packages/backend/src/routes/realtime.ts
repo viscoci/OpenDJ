@@ -18,9 +18,10 @@
  */
 
 import { Hono } from 'hono';
-import type { SessionEvent } from '@opendj/realtime';
+import { toQueueItemSummary, type SessionEvent } from '@opendj/realtime';
 import type { NowPlayingPoller } from '../realtime/NowPlayingPoller.js';
 import type { RealtimeRoomManager } from '../realtime/RoomRegistryImpl.js';
+import type { QueueItemRepository } from '../repositories/types.js';
 
 export interface RealtimeRouteDeps {
   rooms: RealtimeRoomManager;
@@ -30,6 +31,14 @@ export interface RealtimeRouteDeps {
    * deploys can omit it.
    */
   nowPlayingPoller?: NowPlayingPoller | null;
+  /**
+   * Optional. When supplied, the WS route hydrates a freshly-materialized
+   * room's snapshot from the persistent queue store on first subscriber
+   * — without this, items submitted before the room (or before this
+   * server's boot) are missing from the initial `_snapshot` frame even
+   * though they're still in the DB.
+   */
+  queueItems?: QueueItemRepository;
 }
 
 /**
@@ -61,6 +70,10 @@ export type UpgradeWebSocket = (
 
 export function realtimeRoutes(deps: RealtimeRouteDeps, upgradeWebSocket: UpgradeWebSocket): Hono {
   const app = new Hono();
+  // One-time hydration per room — once we've folded DB items into the
+  // snapshot we don't want to do it again on every reconnect (live events
+  // keep the snapshot in sync from there).
+  const hydratedSessions = new Set<string>();
 
   app.get(
     '/',
@@ -87,6 +100,53 @@ export function realtimeRoutes(deps: RealtimeRouteDeps, upgradeWebSocket: Upgrad
           // within the idle grace.
           if (deps.nowPlayingPoller) {
             deps.nowPlayingPoller.start(sessionId);
+          }
+          // Hydrate the room's snapshot from persistent storage on the
+          // first subscriber. The room is in-memory and otherwise only
+          // tracks events fired since it was instantiated, so anything
+          // submitted before this server's boot wouldn't appear in
+          // pending/queue arrays. Idempotent per session.
+          if (!hydratedSessions.has(sessionId) && deps.queueItems) {
+            try {
+              const items = await deps.queueItems.findAllForSession(sessionId);
+              const current = await room.getSnapshot();
+              const pending = [...current.pending];
+              const queue = [...current.queue];
+              const seenIds = new Set<string>([
+                ...pending.map((p) => p.id),
+                ...queue.map((q) => q.id),
+              ]);
+              for (const item of items) {
+                if (seenIds.has(item.id)) continue;
+                const summary = toQueueItemSummary({
+                  id: item.id,
+                  sessionId: item.sessionId,
+                  guestId: item.guestId,
+                  trackUri: item.trackUri,
+                  trackName: item.trackName,
+                  artistName: item.artistName,
+                  albumArtUrl: item.albumArtUrl,
+                  durationMs: item.durationMs,
+                  status: item.status,
+                  skipVotes: item.skipVotes,
+                  createdAt: item.createdAt,
+                  decidedAt: item.decidedAt,
+                });
+                if (item.status === 'pending') pending.push(summary);
+                else if (
+                  item.status === 'approved' ||
+                  item.status === 'queued' ||
+                  item.status === 'playing'
+                ) {
+                  queue.push(summary);
+                }
+              }
+              room.setSnapshot({ ...current, pending, queue });
+              hydratedSessions.add(sessionId);
+            } catch {
+              // Non-fatal — guests will see the snapshot fill in via
+              // subsequent live events. Avoid blocking the WS open path.
+            }
           }
           // Initial snapshot so the client doesn't render blank until the next event.
           const snapshot = await room.getSnapshot();

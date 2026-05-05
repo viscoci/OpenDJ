@@ -159,7 +159,11 @@ export function createApp(options: AppOptions): Hono<{ Variables: AuthVariables 
     v1.route(
       '/sessions/:id/realtime',
       realtimeRoutes(
-        { rooms: deps.roomManager, nowPlayingPoller: deps.nowPlayingPoller },
+        {
+          rooms: deps.roomManager,
+          nowPlayingPoller: deps.nowPlayingPoller,
+          queueItems: deps.repositories.queueItems,
+        },
         options.upgradeWebSocket,
       ),
     );
