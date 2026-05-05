@@ -26,7 +26,7 @@ import {
   effect,
   EventEmitter,
   inject,
-  Input,
+  input,
   Output,
   signal,
 } from '@angular/core';
@@ -38,49 +38,45 @@ import type { NowPlayingTrack } from '@opendj/core';
   imports: [CommonModule],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    @if (track) {
-      <article
-        class="card"
-        [class.paused]="!track.isPlaying"
-        [attr.data-testid]="'now-playing-card'"
-      >
+    @if (track(); as t) {
+      <article class="card" [class.paused]="!t.isPlaying" [attr.data-testid]="'now-playing-card'">
         <div class="art">
-          @if (track.albumArt) {
-            <img [src]="track.albumArt" [alt]="track.name" />
+          @if (t.albumArt) {
+            <img [src]="t.albumArt" [alt]="t.name" />
           } @else {
             <div class="art-placeholder" aria-hidden="true">♪</div>
           }
         </div>
         <div class="meta">
-          <p class="eyebrow">{{ track.isPlaying ? 'Now playing' : 'Paused' }}</p>
-          <h3 class="title">{{ track.name }}</h3>
-          <p class="artist">{{ track.artist }}</p>
+          <p class="eyebrow">{{ t.isPlaying ? 'Now playing' : 'Paused' }}</p>
+          <h3 class="title">{{ t.name }}</h3>
+          <p class="artist">{{ t.artist }}</p>
           <div class="progress">
             <div class="progress-bar">
               <div class="progress-fill" [style.width.%]="progressPercent()"></div>
             </div>
             <span class="time">
               {{ fmt(displayProgressMs()) }} <span class="time-sep">/</span>
-              {{ fmt(track.durationMs) }}
+              {{ fmt(t.durationMs) }}
             </span>
           </div>
         </div>
-        @if (showControls) {
+        @if (showControls()) {
           <div class="controls">
             <button
               type="button"
               class="ghost"
               (click)="togglePlay.emit()"
-              [disabled]="controlsBusy"
-              [attr.aria-label]="track.isPlaying ? 'Pause playback' : 'Resume playback'"
+              [disabled]="controlsBusy()"
+              [attr.aria-label]="t.isPlaying ? 'Pause playback' : 'Resume playback'"
             >
-              {{ track.isPlaying ? 'Pause' : 'Play' }}
+              {{ t.isPlaying ? 'Pause' : 'Play' }}
             </button>
             <button
               type="button"
               class="ghost"
               (click)="skip.emit()"
-              [disabled]="controlsBusy"
+              [disabled]="controlsBusy()"
               aria-label="Skip to next"
             >
               Skip
@@ -232,11 +228,18 @@ import type { NowPlayingTrack } from '@opendj/core';
 export class NowPlayingCardComponent {
   private readonly destroyRef = inject(DestroyRef);
 
-  @Input() track: NowPlayingTrack | null = null;
+  /**
+   * Signal-based inputs (Angular 21). Plain `@Input()` is a class property
+   * — Angular's `effect()` can't track its mutations, so swapping the
+   * track from null → playing wouldn't re-run the local-clock ticker.
+   * `input()` returns an `InputSignal<T>` that effect/computed track
+   * naturally.
+   */
+  readonly track = input<NowPlayingTrack | null>(null);
   /** Wall clock when the parent received `track`. Used for local interpolation. */
-  @Input() lastUpdatedAtMs = 0;
-  @Input() showControls = false;
-  @Input() controlsBusy = false;
+  readonly lastUpdatedAtMs = input(0);
+  readonly showControls = input(false);
+  readonly controlsBusy = input(false);
 
   @Output() readonly skip = new EventEmitter<void>();
   @Output() readonly togglePlay = new EventEmitter<void>();
@@ -248,24 +251,26 @@ export class NowPlayingCardComponent {
   readonly displayProgressMs = computed<number>(() => {
     // Subscribe to tick so the computed re-evaluates every frame.
     void this.tick();
-    const t = this.track;
+    const t = this.track();
     if (!t) return 0;
-    if (!t.isPlaying || this.lastUpdatedAtMs === 0) return t.progressMs;
-    const elapsed = Date.now() - this.lastUpdatedAtMs;
+    const lastAt = this.lastUpdatedAtMs();
+    if (!t.isPlaying || lastAt === 0) return t.progressMs;
+    const elapsed = Date.now() - lastAt;
     return Math.min(t.durationMs, t.progressMs + Math.max(0, elapsed));
   });
 
   readonly progressPercent = computed<number>(() => {
-    const t = this.track;
+    const t = this.track();
     if (!t || !t.durationMs) return 0;
     return Math.min(100, Math.max(0, (this.displayProgressMs() / t.durationMs) * 100));
   });
 
   constructor() {
     // Start/stop the local 250ms ticker based on whether a playing track is
-    // bound. Effect re-runs whenever the inputs change.
+    // bound. The signal-input is reactive — effect re-runs on every input
+    // change.
     effect(() => {
-      const t = this.track;
+      const t = this.track();
       const shouldTick = !!t && t.isPlaying;
       if (shouldTick && !this.intervalId) {
         this.intervalId = setInterval(() => this.tick.set(this.tick() + 1), 250);
