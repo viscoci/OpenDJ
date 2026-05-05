@@ -42,6 +42,7 @@ import {
   supportsNowPlayingRead,
   supportsQueueRead,
   supportsQueueTrack,
+  supportsSkipTrack,
   type IStreamingProvider,
   type NowPlayingTrack,
   type Track,
@@ -405,6 +406,40 @@ export class NowPlayingPoller {
           );
         } catch {
           // already logged in tick(); skip retry this round.
+        }
+      }
+    }
+
+    // First pass: if the currently-playing URI matches a queue item that
+    // was voted-rejected (or moderated-rejected), skip it best-effort so
+    // guests don't have to listen to it play out. Only triggers on sessions
+    // where someone took action — most ticks short-circuit on the no-match.
+    if (nowPlaying) {
+      const rejectedHit = items.find(
+        (i) => i.status === 'rejected' && i.trackUri === nowPlaying.uri,
+      );
+      if (rejectedHit) {
+        const cached = this.state.get(sessionId);
+        if (cached?.cachedAccountId && cached.cachedProviderId) {
+          try {
+            const provider = await this.deps.streamingRouter.getProvider(
+              cached.cachedAccountId,
+              cached.cachedProviderId,
+            );
+            if (supportsSkipTrack(provider)) {
+              await provider.skipTrack();
+              this.logger.warn('[NowPlayingPoller] auto-skipped rejected track', {
+                sessionId,
+                itemId: rejectedHit.id,
+                trackUri: rejectedHit.trackUri,
+              });
+            }
+          } catch (err) {
+            this.logger.warn('[NowPlayingPoller] auto-skip-on-rejected failed', {
+              sessionId,
+              error: (err as Error).message,
+            });
+          }
         }
       }
     }

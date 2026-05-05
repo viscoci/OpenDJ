@@ -147,6 +147,24 @@ import { buildQueueEtaMs, formatEta } from '../utils/queue-eta.js';
                     </span>
                     <span class="artist">{{ entry.track.artist }}</span>
                   </span>
+                  @if (entry.openDjItem && slot()?.status === 'active') {
+                    <button
+                      type="button"
+                      class="vote-pill"
+                      [class.voted]="hasVotedItem(entry.openDjItem.id)"
+                      [disabled]="hasVotedItem(entry.openDjItem.id)"
+                      (click)="onVoteSkip(entry.openDjItem.id)"
+                      [attr.title]="
+                        hasVotedItem(entry.openDjItem.id)
+                          ? 'You voted to skip this'
+                          : 'Vote to skip this track'
+                      "
+                    >
+                      ▶|
+                      {{ entry.openDjItem.skipVotes }}<span class="sep">/</span
+                      >{{ session()!.voteSkipThreshold }}
+                    </button>
+                  }
                 </li>
               }
             </ul>
@@ -245,13 +263,40 @@ import { buildQueueEtaMs, formatEta } from '../utils/queue-eta.js';
       }
       .merged-row {
         display: grid;
-        grid-template-columns: 40px 1fr;
+        grid-template-columns: 40px 1fr auto;
         gap: 10px;
         align-items: center;
         padding: 8px 12px;
         background: #0c0a14;
         border: 1px solid #2c2440;
         border-radius: 8px;
+      }
+      .merged-row .vote-pill {
+        appearance: none;
+        background: rgba(236, 72, 153, 0.12);
+        border: 1px solid rgba(236, 72, 153, 0.35);
+        color: #fda4af;
+        border-radius: 999px;
+        padding: 4px 10px;
+        font-size: 11px;
+        font-family: 'JetBrains Mono', ui-monospace, monospace;
+        letter-spacing: 0.04em;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .merged-row .vote-pill:hover:not(:disabled) {
+        background: rgba(236, 72, 153, 0.2);
+        border-color: rgba(236, 72, 153, 0.55);
+      }
+      .merged-row .vote-pill:disabled,
+      .merged-row .vote-pill.voted {
+        background: rgba(236, 72, 153, 0.25);
+        color: #fff;
+        cursor: default;
+      }
+      .merged-row .vote-pill .sep {
+        opacity: 0.5;
+        margin: 0 1px;
       }
       .merged-row.requested {
         border-color: rgba(168, 85, 247, 0.3);
@@ -518,6 +563,10 @@ export class GuestRequestPage {
   }
 
   // ─── Skip-vote ─────────────────────────────────────────────────────────
+
+  hasVotedItem(itemId: string): boolean {
+    return this.votedItemIds().has(itemId);
+  }
 
   async onVoteSkipNowPlaying(): Promise<void> {
     const session = this.session();

@@ -296,6 +296,53 @@ export class QueueService {
       threshold: session.voteSkipThreshold,
     });
 
+    // Auto-reject when the threshold is crossed (fixed/percentage modes).
+    // host_approval defers — host has to approve the skip via moderation.
+    if (
+      thresholdReached &&
+      (session.voteSkipMode === 'fixed' || session.voteSkipMode === 'percentage')
+    ) {
+      const updated = await this.deps.queueItems.setStatus({
+        id: input.itemId,
+        status: 'rejected',
+        decidedAt: new Date(Date.now()),
+      });
+      if (updated) {
+        await this.publishToRoom(input.sessionId, {
+          type: 'queue.item_rejected',
+          itemId: input.itemId,
+        });
+      }
+      // Best-effort: if the rejected track is the one currently playing,
+      // call provider.skipTrack() so guests don't have to listen to it
+      // play out.
+      const room = this.deps.rooms?.forSession(input.sessionId);
+      const nowPlaying = room ? (await room.getSnapshot()).nowPlaying : null;
+      if (
+        nowPlaying &&
+        item.trackUri === nowPlaying.uri &&
+        this.deps.streamingRouter &&
+        this.deps.providerConnections
+      ) {
+        try {
+          const conns = await this.deps.providerConnections.findAllForAccount(session.accountId);
+          const conn = conns[0];
+          if (conn) {
+            const provider = await this.deps.streamingRouter.getProvider(
+              session.accountId,
+              conn.providerId,
+            );
+            if (supportsSkipTrack(provider)) {
+              await provider.skipTrack();
+            }
+          }
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.warn(`[QueueService] skip-on-vote-threshold failed: ${(err as Error).message}`);
+        }
+      }
+    }
+
     return {
       votes,
       threshold: session.voteSkipThreshold,
