@@ -83,6 +83,7 @@ export interface SessionRecord {
   qrSlug: string;
   guestCapOverride: number | null;
   songsPerGuestCap: number;
+  allowDuplicates: boolean;
   moderationEnabled: boolean;
   voteSkipMode: 'fixed' | 'percentage' | 'host_approval';
   voteSkipThreshold: number;
@@ -100,6 +101,7 @@ export interface SessionRepository {
     qrSlug: string;
     guestCapOverride?: number | null;
     songsPerGuestCap?: number;
+    allowDuplicates?: boolean;
     moderationEnabled?: boolean;
     voteSkipMode?: 'fixed' | 'percentage' | 'host_approval';
     voteSkipThreshold?: number;
@@ -108,6 +110,7 @@ export interface SessionRepository {
     id: string;
     guestCapOverride?: number | null;
     songsPerGuestCap?: number;
+    allowDuplicates?: boolean;
     moderationEnabled?: boolean;
     voteSkipMode?: 'fixed' | 'percentage' | 'host_approval';
     voteSkipThreshold?: number;

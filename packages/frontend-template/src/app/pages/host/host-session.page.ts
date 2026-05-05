@@ -81,6 +81,27 @@ import { OpenDjClientService } from '../../services/opendj-client.service.js';
           </button>
         </header>
 
+        <section class="card settings">
+          <h2>Session settings</h2>
+          <label class="toggle">
+            <input
+              type="checkbox"
+              [checked]="!!session()!.allowDuplicates"
+              [disabled]="settingsBusy()"
+              (change)="toggleAllowDuplicates($any($event.target).checked)"
+            />
+            <span class="toggle-label">
+              Allow the same track to be requested more than once
+              <span class="toggle-hint"
+                >Default: off. Turn on for sing-along nights where a hit can hit twice.</span
+              >
+            </span>
+          </label>
+          @if (settingsError(); as err) {
+            <p class="form-error">{{ err }}</p>
+          }
+        </section>
+
         <section class="now-playing card">
           <h2>Now playing</h2>
           <app-now-playing-card
@@ -358,6 +379,28 @@ import { OpenDjClientService } from '../../services/opendj-client.service.js';
         padding: 16px 0;
         text-align: center;
       }
+      .toggle {
+        display: flex;
+        gap: 12px;
+        align-items: flex-start;
+        cursor: pointer;
+        font-size: 13px;
+      }
+      .toggle input[type='checkbox'] {
+        margin-top: 2px;
+        accent-color: #a855f7;
+        width: 16px;
+        height: 16px;
+      }
+      .toggle-label {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .toggle-hint {
+        font-size: 12px;
+        color: #a294c5;
+      }
     `,
   ],
 })
@@ -380,6 +423,8 @@ export class HostSessionPage {
   readonly loadError = signal<string | null>(null);
   readonly ending = signal(false);
   readonly urlCopied = signal(false);
+  readonly settingsBusy = signal(false);
+  readonly settingsError = signal<string | null>(null);
 
   readonly guestUrl = computed(() => {
     const s = this.session();
@@ -450,6 +495,29 @@ export class HostSessionPage {
       if (id) void this.bootstrap(id);
     });
     this.destroyRef.onDestroy(() => this.realtime?.close());
+  }
+
+  // ─── Session settings ──────────────────────────────────────────────────
+
+  async toggleAllowDuplicates(checked: boolean): Promise<void> {
+    const session = this.session();
+    if (!session) return;
+    this.settingsBusy.set(true);
+    this.settingsError.set(null);
+    try {
+      const updated = await this.client.client.sessions.update(session.id, {
+        allowDuplicates: checked,
+      });
+      this.session.set(updated);
+    } catch (err) {
+      this.settingsError.set(
+        err instanceof ApiError ? `Couldn't save (${err.code}).` : "Couldn't save the setting.",
+      );
+      // Revert the snapshot so the checkbox stops looking flipped.
+      this.session.update((s) => (s ? { ...s, allowDuplicates: !checked } : s));
+    } finally {
+      this.settingsBusy.set(false);
+    }
   }
 
   // ─── Moderation ────────────────────────────────────────────────────────

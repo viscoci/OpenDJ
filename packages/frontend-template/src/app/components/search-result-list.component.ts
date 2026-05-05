@@ -65,8 +65,9 @@ export type SearchStatus = 'idle' | 'searching' | 'empty' | 'error';
       @if (status === 'idle' || status === 'searching') {
         <ul class="results" [attr.aria-busy]="status === 'searching'">
           @for (r of results; track r.trackUri) {
+            @let queueInfo = queueLookup ? queueLookup(r.trackUri) : null;
             <li>
-              <button type="button" class="row" (click)="pick.emit(r)" [disabled]="busy">
+              <div class="row" [class.queued]="queueInfo">
                 @if (r.albumArtUrl) {
                   <img class="art" [src]="r.albumArtUrl" alt="" />
                 } @else {
@@ -76,10 +77,22 @@ export type SearchStatus = 'idle' | 'searching' | 'empty' | 'error';
                   <span class="name">{{ r.trackName }}</span>
                   <span class="artist">{{ r.artistName }}</span>
                 </span>
-                @if (r.durationMs !== null) {
-                  <span class="duration">{{ fmt(r.durationMs) }}</span>
+                @if (queueInfo) {
+                  <span class="queued-pill" [title]="queueInfo.tooltip">
+                    {{ queueInfo.label }}
+                  </span>
+                } @else {
+                  <button
+                    type="button"
+                    class="add-btn"
+                    (click)="pick.emit(r)"
+                    [disabled]="busy"
+                    [attr.aria-label]="'Add ' + r.trackName + ' to queue'"
+                  >
+                    + Add
+                  </button>
                 }
-              </button>
+              </div>
             </li>
           }
         </ul>
@@ -141,7 +154,6 @@ export type SearchStatus = 'idle' | 'searching' | 'empty' | 'error';
         gap: 4px;
       }
       .row {
-        width: 100%;
         background: #1a1525;
         border: 1px solid #2c2440;
         border-radius: 12px;
@@ -150,17 +162,40 @@ export type SearchStatus = 'idle' | 'searching' | 'empty' | 'error';
         grid-template-columns: 40px 1fr auto;
         gap: 12px;
         align-items: center;
-        cursor: pointer;
         font: inherit;
         color: inherit;
         text-align: left;
       }
-      .row:hover:not(:disabled) {
-        border-color: #a855f7;
+      .row.queued {
+        border-color: rgba(168, 85, 247, 0.4);
       }
-      .row:disabled {
+      .add-btn {
+        background: linear-gradient(135deg, #a855f7, #ec4899);
+        color: white;
+        font-weight: 600;
+        font-size: 12px;
+        border: 0;
+        border-radius: 999px;
+        padding: 6px 14px;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .add-btn:hover:not(:disabled) {
+        opacity: 0.9;
+      }
+      .add-btn:disabled {
         opacity: 0.5;
         cursor: not-allowed;
+      }
+      .queued-pill {
+        background: rgba(168, 85, 247, 0.15);
+        border: 1px solid rgba(168, 85, 247, 0.4);
+        color: #d8b4fe;
+        font-size: 11px;
+        font-family: 'JetBrains Mono', ui-monospace, monospace;
+        padding: 4px 10px;
+        border-radius: 999px;
+        white-space: nowrap;
       }
       .art {
         width: 40px;
@@ -215,6 +250,15 @@ export class SearchResultListComponent {
   @Input() debounceMs = 250;
   @Input() minQueryLength = 2;
   @Input() busy = false;
+  /**
+   * Optional lookup the parent provides — given a trackUri, returns the
+   * row's queue state (label like "In queue · ~5 min" + tooltip), or
+   * null if the track isn't queued. Used to swap the "+ Add" button for
+   * a queue-status pill so the guest can tell which results are already
+   * lined up.
+   */
+  @Input() queueLookup: ((trackUri: string) => { label: string; tooltip: string } | null) | null =
+    null;
 
   @Output() readonly query = new EventEmitter<string>();
   @Output() readonly pick = new EventEmitter<SearchResultWire>();

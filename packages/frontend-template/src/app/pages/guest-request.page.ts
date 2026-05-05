@@ -48,6 +48,7 @@ import {
 } from '../components/search-result-list.component.js';
 import { getOrCreateGuestFingerprintHash } from '../services/guest-fingerprint.js';
 import { OpenDjClientService } from '../services/opendj-client.service.js';
+import { buildQueueEtaMs, formatEta } from '../utils/queue-eta.js';
 
 @Component({
   selector: 'app-guest-request',
@@ -100,6 +101,7 @@ import { OpenDjClientService } from '../services/opendj-client.service.js';
             [errorMessage]="searchError()"
             [disabledReason]="searchDisabledReason()"
             [busy]="submitting()"
+            [queueLookup]="searchQueueLookup"
             placeholder="Song, artist, or album…"
             idleHint="Search the host's library — pick a track to add it to the queue."
             (query)="onQueryChange($event)"
@@ -340,6 +342,39 @@ export class GuestRequestPage {
   );
 
   /**
+   * Map of trackUri → ms until that track plays. Indexed against the
+   * provider queue + now-playing remaining time. Backs the search-result
+   * "in queue · ~5 min" pill and the future host ETA badges.
+   */
+  readonly etaMap = computed(() =>
+    buildQueueEtaMs(this.nowPlaying(), this.providerQueue(), this.nowPlayingAt()),
+  );
+
+  /**
+   * Closure for SearchResultListComponent — returns null when the track
+   * isn't in the active queue, otherwise a `{label, tooltip}` for the
+   * pill.
+   */
+  readonly searchQueueLookup = (trackUri: string): { label: string; tooltip: string } | null => {
+    const eta = this.etaMap().get(trackUri);
+    if (eta !== undefined) {
+      return {
+        label: formatEta(eta),
+        tooltip: 'Already in the queue.',
+      };
+    }
+    // Match against OpenDJ items that haven't pushed to Spotify yet.
+    const pendingMatch = this.visibleQueue().find((i) => i.trackUri === trackUri);
+    if (pendingMatch) {
+      return {
+        label: 'queued',
+        tooltip: 'Already requested — waiting for the host to make space.',
+      };
+    }
+    return null;
+  };
+
+  /**
    * Unified Up-Next list: provider queue is the source of truth, with
    * OpenDJ-mediated rows annotated. Items the guest themselves added get
    * the "Yours" pill; other guest-requested items get the "Requested"
@@ -571,6 +606,8 @@ export class GuestRequestPage {
     switch (code) {
       case 'cap_reached':
         return "You've hit the limit — wait for one to play before requesting another.";
+      case 'duplicate_request':
+        return "That track's already in the queue. Pick something else.";
       case 'session_ended':
         return 'This session has ended.';
       case 'unknown_slot_token':

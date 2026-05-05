@@ -15,6 +15,13 @@
       "when": 1777989391455,
       "tag": "0001_majestic_kinsey_walden",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1778004079988,
+      "tag": "0002_daffy_clea",
+      "breakpoints": true
     }
   ]
 }

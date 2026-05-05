@@ -128,6 +128,7 @@ export class QueueService {
       guestToDomain(guest),
       existing,
       new Date(now),
+      input.track.uri,
     );
     if (!decision.ok) {
       throw new QueueServiceError(decision.reason, `canEnqueue rejected: ${decision.reason}`);
@@ -368,6 +369,7 @@ function sessionToDomain(record: {
   qrSlug: string;
   guestCapOverride: number | null;
   songsPerGuestCap: number;
+  allowDuplicates?: boolean;
   moderationEnabled: boolean;
   voteSkipMode: 'fixed' | 'percentage' | 'host_approval';
   voteSkipThreshold: number;
@@ -381,6 +383,7 @@ function sessionToDomain(record: {
     qrSlug: record.qrSlug,
     guestCapOverride: record.guestCapOverride,
     songsPerGuestCap: record.songsPerGuestCap,
+    allowDuplicates: record.allowDuplicates ?? false,
     moderationEnabled: record.moderationEnabled,
     voteSkipMode: record.voteSkipMode,
     voteSkipThreshold: record.voteSkipThreshold,

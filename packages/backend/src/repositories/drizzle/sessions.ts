@@ -11,6 +11,7 @@ function mapSession(row: typeof schema.sessions.$inferSelect): SessionRecord {
     qrSlug: row.qrSlug,
     guestCapOverride: row.guestCapOverride,
     songsPerGuestCap: row.songsPerGuestCap,
+    allowDuplicates: row.allowDuplicates,
     moderationEnabled: row.moderationEnabled,
     voteSkipMode: row.voteSkipMode as SessionRecord['voteSkipMode'],
     voteSkipThreshold: row.voteSkipThreshold,
@@ -54,6 +55,7 @@ export class DrizzleSessionRepository implements SessionRepository {
     qrSlug: string;
     guestCapOverride?: number | null;
     songsPerGuestCap?: number;
+    allowDuplicates?: boolean;
     moderationEnabled?: boolean;
     voteSkipMode?: 'fixed' | 'percentage' | 'host_approval';
     voteSkipThreshold?: number;
@@ -66,6 +68,7 @@ export class DrizzleSessionRepository implements SessionRepository {
         qrSlug: input.qrSlug,
         guestCapOverride: input.guestCapOverride ?? null,
         songsPerGuestCap: input.songsPerGuestCap ?? 3,
+        allowDuplicates: input.allowDuplicates ?? false,
         moderationEnabled: input.moderationEnabled ?? false,
         voteSkipMode: input.voteSkipMode ?? 'fixed',
         voteSkipThreshold: input.voteSkipThreshold ?? 5,
@@ -80,6 +83,7 @@ export class DrizzleSessionRepository implements SessionRepository {
     id: string;
     guestCapOverride?: number | null;
     songsPerGuestCap?: number;
+    allowDuplicates?: boolean;
     moderationEnabled?: boolean;
     voteSkipMode?: 'fixed' | 'percentage' | 'host_approval';
     voteSkipThreshold?: number;
@@ -88,6 +92,7 @@ export class DrizzleSessionRepository implements SessionRepository {
     const set: Record<string, unknown> = {};
     if (input.guestCapOverride !== undefined) set['guestCapOverride'] = input.guestCapOverride;
     if (input.songsPerGuestCap !== undefined) set['songsPerGuestCap'] = input.songsPerGuestCap;
+    if (input.allowDuplicates !== undefined) set['allowDuplicates'] = input.allowDuplicates;
     if (input.moderationEnabled !== undefined) set['moderationEnabled'] = input.moderationEnabled;
     if (input.voteSkipMode !== undefined) set['voteSkipMode'] = input.voteSkipMode;
     if (input.voteSkipThreshold !== undefined) set['voteSkipThreshold'] = input.voteSkipThreshold;

@@ -29,6 +29,7 @@ export const sessions = pgTable('sessions', {
   qrSlug: text('qr_slug').notNull().unique(),
   guestCapOverride: integer('guest_cap_override'),
   songsPerGuestCap: integer('songs_per_guest_cap').notNull().default(3),
+  allowDuplicates: boolean('allow_duplicates').notNull().default(false),
   moderationEnabled: boolean('moderation_enabled').notNull().default(false),
   voteSkipMode: text('vote_skip_mode').notNull().default('fixed'),
   voteSkipThreshold: integer('vote_skip_threshold').notNull().default(5),

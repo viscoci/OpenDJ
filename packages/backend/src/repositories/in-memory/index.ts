@@ -616,6 +616,7 @@ export class InMemorySessionRepository implements SessionRepository {
     qrSlug: string;
     guestCapOverride?: number | null;
     songsPerGuestCap?: number;
+    allowDuplicates?: boolean;
     moderationEnabled?: boolean;
     voteSkipMode?: 'fixed' | 'percentage' | 'host_approval';
     voteSkipThreshold?: number;
@@ -628,6 +629,7 @@ export class InMemorySessionRepository implements SessionRepository {
       qrSlug: input.qrSlug,
       guestCapOverride: input.guestCapOverride ?? null,
       songsPerGuestCap: input.songsPerGuestCap ?? 3,
+      allowDuplicates: input.allowDuplicates ?? false,
       moderationEnabled: input.moderationEnabled ?? false,
       voteSkipMode: input.voteSkipMode ?? 'fixed',
       voteSkipThreshold: input.voteSkipThreshold ?? 5,
@@ -642,6 +644,7 @@ export class InMemorySessionRepository implements SessionRepository {
     id: string;
     guestCapOverride?: number | null;
     songsPerGuestCap?: number;
+    allowDuplicates?: boolean;
     moderationEnabled?: boolean;
     voteSkipMode?: 'fixed' | 'percentage' | 'host_approval';
     voteSkipThreshold?: number;
@@ -651,6 +654,7 @@ export class InMemorySessionRepository implements SessionRepository {
     if (!row) return null;
     if (input.guestCapOverride !== undefined) row.guestCapOverride = input.guestCapOverride;
     if (input.songsPerGuestCap !== undefined) row.songsPerGuestCap = input.songsPerGuestCap;
+    if (input.allowDuplicates !== undefined) row.allowDuplicates = input.allowDuplicates;
     if (input.moderationEnabled !== undefined) row.moderationEnabled = input.moderationEnabled;
     if (input.voteSkipMode !== undefined) row.voteSkipMode = input.voteSkipMode;
     if (input.voteSkipThreshold !== undefined) row.voteSkipThreshold = input.voteSkipThreshold;

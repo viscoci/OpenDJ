@@ -1,0 +1,1 @@
+ALTER TABLE "sessions" ADD COLUMN "allow_duplicates" boolean DEFAULT false NOT NULL;

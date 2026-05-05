@@ -16,6 +16,8 @@ export interface SessionWire {
   qrSlug: string;
   guestCapOverride: number | null;
   songsPerGuestCap: number;
+  /** When false (default), duplicate trackUris are rejected on enqueue. */
+  allowDuplicates?: boolean;
   moderationEnabled: boolean;
   voteSkipMode: VoteSkipMode;
   voteSkipThreshold: number;
@@ -90,6 +92,7 @@ export interface CreateSessionRequest {
   qrSlug?: string;
   guestCapOverride?: number | null;
   songsPerGuestCap?: number;
+  allowDuplicates?: boolean;
   moderationEnabled?: boolean;
   voteSkipMode?: VoteSkipMode;
   voteSkipThreshold?: number;

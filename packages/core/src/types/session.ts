@@ -17,6 +17,13 @@ export interface Session {
   /** Per-session override for the account's effective guest cap. `null` means "use plan default". */
   guestCapOverride: number | null;
   songsPerGuestCap: number;
+  /**
+   * When false (default), guests can't request a track that's already in
+   * the active queue or currently playing. When true, the same song can
+   * appear multiple times — useful for sing-along nights / requested
+   * favorites. Enforced server-side; UI annotates queued tracks.
+   */
+  allowDuplicates: boolean;
   moderationEnabled: boolean;
   voteSkipMode: VoteSkipMode;
   /**
