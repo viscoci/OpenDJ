@@ -95,12 +95,18 @@ export interface CreateSessionRequest {
   voteSkipThreshold?: number;
 }
 
+/**
+ * Body of POST /api/v1/sessions/:id/queue. Matches `@opendj/core` Track —
+ * NOT QueueItemSummaryWire, which uses `trackName/artistName/...` style
+ * field names. Search results are returned in the SearchResultWire shape;
+ * callers translate to this body shape on submit.
+ */
 export interface RequestTrackBody {
-  trackUri: string;
-  trackName: string;
-  artistName: string;
-  albumArtUrl?: string | null;
-  durationMs?: number | null;
+  uri: string;
+  name: string;
+  artist: string;
+  albumArt: string | null;
+  durationMs: number;
 }
 
 export interface ModerateQueueItemBody {

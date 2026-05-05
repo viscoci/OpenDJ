@@ -97,9 +97,11 @@ describe('QueueApi', () => {
   it('request sends body + Bearer slot token and unwraps {item}', async () => {
     const { client, captures } = makeClient({ body: { item: { id: 'q-new' } } });
     await client.queue.request('sess-1', 'slt_abc', {
-      trackUri: 'spotify:track:1',
-      trackName: 'X',
-      artistName: 'Y',
+      uri: 'spotify:track:1',
+      name: 'X',
+      artist: 'Y',
+      albumArt: null,
+      durationMs: 200_000,
     });
     const headers = captures[0]?.init?.headers as Record<string, string>;
     expect(headers['authorization']).toBe('Bearer slt_abc');

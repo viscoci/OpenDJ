@@ -365,10 +365,10 @@ export class GuestRequestPage {
     this.submitToast.set(null);
     try {
       await this.clientService.client.queue.request(session.id, slot.slotToken, {
-        trackUri: result.trackUri,
-        trackName: result.trackName,
-        artistName: result.artistName,
-        albumArtUrl: result.albumArtUrl,
+        uri: result.trackUri,
+        name: result.trackName,
+        artist: result.artistName,
+        albumArt: result.albumArtUrl,
         durationMs: result.durationMs ?? 0,
       });
       this.submitToast.set({
