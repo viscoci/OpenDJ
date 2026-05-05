@@ -490,6 +490,10 @@ export class HostSessionPage {
       this.session.set(session);
       await this.refreshQueue();
       this.openRealtime(session.id);
+      // Eager-load devices so the picker label reads "Playing on …" the
+      // first frame instead of "No active device" until the user clicks.
+      // Failure is non-fatal — the picker re-fetches on expand anyway.
+      void this.loadDevices();
     } catch (err) {
       if (err instanceof ApiError && err.is('session_not_found')) {
         this.loadError.set('Session not found.');
@@ -527,8 +531,15 @@ export class HostSessionPage {
       this.queue.set([...snapshot.pending, ...snapshot.queue]);
     });
     this.realtime.on('now_playing.updated', (event) => {
+      const prevZone = this.nowPlaying()?.zoneId;
       this.nowPlaying.set(event.track);
       this.nowPlayingAt.set(Date.now());
+      // The host may have switched devices (e.g. AirPods → Sonos) outside
+      // OpenDJ. zoneId carries the Spotify device id — when it changes,
+      // re-load the device list so the picker reflects reality.
+      if (event.track && event.track.zoneId !== prevZone) {
+        void this.loadDevices();
+      }
     });
     this.realtime.on('provider_queue.updated', (event) => {
       this.providerQueue.set(event.tracks);
