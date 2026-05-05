@@ -40,8 +40,10 @@
 import {
   InvalidProviderCredentialsError,
   supportsNowPlayingRead,
+  supportsQueueRead,
   type IStreamingProvider,
   type NowPlayingTrack,
+  type Track,
 } from '@opendj/core';
 import {
   ProviderConnectionNotFoundError,
@@ -240,6 +242,27 @@ export class NowPlayingPoller {
         await room.publish({ type: 'now_playing.updated', track: next });
       }
 
+      // Provider queue (e.g. Spotify queue) — fetch + diff alongside
+      // now-playing. Costs one extra Spotify API call per tick when the
+      // provider supports it; same auth as getNowPlaying so it shares
+      // the 401/429 paths below.
+      if (supportsQueueRead(provider)) {
+        try {
+          const queue = await provider.getQueue();
+          if (this.providerQueueChanged(snapshot.providerQueue, queue)) {
+            await room.publish({ type: 'provider_queue.updated', tracks: queue });
+          }
+        } catch (qErr) {
+          // Queue read can fail independently (e.g. 403 on accounts without
+          // playback). Log + continue — don't tear down the now-playing
+          // poller for a queue-read hiccup.
+          this.logger.warn('[NowPlayingPoller] provider queue read failed, continuing', {
+            sessionId,
+            error: (qErr as Error).message,
+          });
+        }
+      }
+
       // Successful tick clears any backoff.
       entry.backoffMs = null;
     } catch (err: unknown) {
@@ -296,6 +319,19 @@ export class NowPlayingPoller {
     if (prev.uri !== next.uri) return true;
     if (prev.isPlaying !== next.isPlaying) return true;
     if (Math.abs(prev.progressMs - next.progressMs) > this.driftThresholdMs) return true;
+    return false;
+  }
+
+  /**
+   * True iff the provider's queue ordering changed. Compares URIs in order
+   * — anything else (length, content, position) reduces to a URI-list diff.
+   * Exposed for tests.
+   */
+  providerQueueChanged(prev: ReadonlyArray<Track>, next: ReadonlyArray<Track>): boolean {
+    if (prev.length !== next.length) return true;
+    for (let i = 0; i < prev.length; i += 1) {
+      if (prev[i]!.uri !== next[i]!.uri) return true;
+    }
     return false;
   }
 }

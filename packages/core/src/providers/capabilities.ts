@@ -14,6 +14,7 @@ export const PROVIDER_FEATURES = {
   NowPlayingRead: 'now_playing.read',
   PlaybackProgressRead: 'playback.progress.read',
   QueueTrack: 'queue.track',
+  QueueRead: 'queue.read',
   PlaylistSwitch: 'playlist.switch',
   SkipTrack: 'playback.skip',
   Pause: 'playback.pause',

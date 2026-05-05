@@ -13,6 +13,7 @@ describe('createEmptySnapshot', () => {
       activeLyricsWindow: [],
       queue: [],
       pending: [],
+      providerQueue: [],
       activeGuestCount: 0,
       queuedGuestCount: 0,
       snapshotAtEpochMs: 1_700_000_000_000,

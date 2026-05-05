@@ -82,6 +82,9 @@ export function applyEvent(snapshot: SessionSnapshot, event: SessionEvent): Sess
       return { ...snapshot, queue };
     }
 
+    case 'provider_queue.updated':
+      return { ...snapshot, providerQueue: event.tracks };
+
     case 'guest_slots.updated':
       return {
         ...snapshot,

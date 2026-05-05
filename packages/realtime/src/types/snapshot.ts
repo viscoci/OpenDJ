@@ -1,4 +1,4 @@
-import type { NowPlayingTrack } from '@opendj/core';
+import type { NowPlayingTrack, Track } from '@opendj/core';
 import type { LyricsDocument, LyricsLine } from '@opendj/lyrics';
 import type { PlaybackClockSample } from '@opendj/sync';
 import type { QueueItemSummary } from './queue-summary.js';
@@ -31,6 +31,13 @@ export interface SessionSnapshot {
   queue: QueueItemSummary[];
   /** Items still awaiting host moderation. */
   pending: QueueItemSummary[];
+  /**
+   * Tracks the streaming provider says will play next, in order. This is
+   * the host's actual playback queue (Spotify queue, etc.) — separate
+   * from the OpenDJ-mediated `queue` above. Empty when the provider
+   * doesn't expose a queue read or no provider is connected.
+   */
+  providerQueue: Track[];
   /** Number of guest slots currently in the `active` state. */
   activeGuestCount: number;
   /** Number of guest slots currently waiting for a free slot. */
@@ -53,6 +60,7 @@ export function createEmptySnapshot(sessionId: string, nowEpochMs: number): Sess
     activeLyricsWindow: [],
     queue: [],
     pending: [],
+    providerQueue: [],
     activeGuestCount: 0,
     queuedGuestCount: 0,
     snapshotAtEpochMs: nowEpochMs,

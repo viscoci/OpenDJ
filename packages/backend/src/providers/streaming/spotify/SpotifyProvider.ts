@@ -27,6 +27,7 @@ import {
   type ISupportsDevices,
   type ISupportsNowPlayingRead,
   type ISupportsPause,
+  type ISupportsQueueRead,
   type ISupportsQueueTrack,
   type ISupportsResume,
   type ISupportsSearch,
@@ -55,6 +56,12 @@ const capabilities: ProviderCapabilities = defineCapabilities('spotify', {
     id: PROVIDER_FEATURES.QueueTrack,
     supported: true,
     access: 'guest',
+    reliability: 'native',
+  },
+  [PROVIDER_FEATURES.QueueRead]: {
+    id: PROVIDER_FEATURES.QueueRead,
+    supported: true,
+    access: 'host',
     reliability: 'native',
   },
   [PROVIDER_FEATURES.NowPlayingRead]: {
@@ -227,6 +234,7 @@ export class SpotifyProvider
     IStreamingProvider,
     ISupportsSearch,
     ISupportsQueueTrack,
+    ISupportsQueueRead,
     ISupportsNowPlayingRead,
     ISupportsSkipTrack,
     ISupportsPause,
@@ -290,6 +298,15 @@ export class SpotifyProvider
     const client = this.requireClient();
     await client.request('POST', `/v1/me/player/queue?uri=${encodeURIComponent(track.uri)}`);
     return { success: true, status: 'queued' };
+  }
+
+  // ─── ISupportsQueueRead ───────────────────────────────────────────────
+
+  async getQueue(_zoneId?: string): Promise<Track[]> {
+    const response = await this.requireClient().request('GET', '/v1/me/player/queue');
+    if (response.status === 204) return [];
+    const body = (await response.json()) as { queue?: SpotifyTrack[] };
+    return (body.queue ?? []).map(toTrack);
   }
 
   // ─── ISupportsNowPlayingRead ─────────────────────────────────────────

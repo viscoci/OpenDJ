@@ -37,7 +37,7 @@ import {
   type SearchResultWire,
   type SessionWire,
 } from '@opendj/frontend';
-import type { NowPlayingTrack } from '@opendj/core';
+import type { NowPlayingTrack, Track } from '@opendj/core';
 import type { SessionEvent, SessionSnapshot } from '@opendj/realtime';
 import { NowPlayingCardComponent } from '../components/now-playing-card.component.js';
 import { QueueListComponent, type QueueListItem } from '../components/queue-list.component.js';
@@ -110,17 +110,40 @@ import { OpenDjClientService } from '../services/opendj-client.service.js';
           }
         </section>
 
-        <section class="card queue-section">
-          <h2>The queue</h2>
-          <app-queue-list
-            [items]="visibleQueue()"
-            mode="guest"
-            [voteThreshold]="session()!.voteSkipThreshold ?? 5"
-            [votedItemIds]="votedItemIds()"
-            (voteSkip)="onVoteSkip($event)"
-            emptyText="Nothing queued yet — be the first."
-          />
-        </section>
+        @if (providerQueue().length > 0) {
+          <section class="card queue-section">
+            <h2>Up next</h2>
+            <ul class="provider-queue">
+              @for (track of providerQueue().slice(0, 6); track track.uri) {
+                <li class="provider-queue-row">
+                  @if (track.albumArt) {
+                    <img class="art" [src]="track.albumArt" alt="" />
+                  } @else {
+                    <span class="art empty" aria-hidden="true">♪</span>
+                  }
+                  <span class="meta">
+                    <span class="name">{{ track.name }}</span>
+                    <span class="artist">{{ track.artist }}</span>
+                  </span>
+                </li>
+              }
+            </ul>
+          </section>
+        }
+
+        @if (visibleQueue().length > 0) {
+          <section class="card queue-section">
+            <h2>Guest requests</h2>
+            <app-queue-list
+              [items]="visibleQueue()"
+              mode="guest"
+              [voteThreshold]="session()!.voteSkipThreshold ?? 5"
+              [votedItemIds]="votedItemIds()"
+              (voteSkip)="onVoteSkip($event)"
+              emptyText="Nothing queued yet — be the first."
+            />
+          </section>
+        }
 
         @if (recentlyPlayed().length > 0) {
           <section class="card recently-played-section">
@@ -204,6 +227,51 @@ import { OpenDjClientService } from '../services/opendj-client.service.js';
       .toast.error {
         color: #fda4af;
       }
+      .provider-queue {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .provider-queue-row {
+        display: grid;
+        grid-template-columns: 36px 1fr;
+        gap: 10px;
+        align-items: center;
+      }
+      .provider-queue-row .art {
+        width: 36px;
+        height: 36px;
+        border-radius: 4px;
+        object-fit: cover;
+        background: #0c0a14;
+      }
+      .provider-queue-row .art.empty {
+        display: grid;
+        place-items: center;
+        color: #6e5e8a;
+      }
+      .provider-queue-row .meta {
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+      }
+      .provider-queue-row .name {
+        font-size: 13px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .provider-queue-row .artist {
+        font-size: 11px;
+        color: #a294c5;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
     `,
   ],
 })
@@ -218,6 +286,7 @@ export class GuestRequestPage {
   readonly nowPlaying: WritableSignal<NowPlayingTrack | null> = signal(null);
   readonly nowPlayingAt = signal(0);
   readonly recentlyPlayed: WritableSignal<ReadonlyArray<NowPlayingTrack>> = signal([]);
+  readonly providerQueue: WritableSignal<ReadonlyArray<Track>> = signal([]);
   readonly loadError = signal<string | null>(null);
   readonly searchResults: WritableSignal<ReadonlyArray<SearchResultWire>> = signal([]);
   readonly searchStatus: WritableSignal<SearchStatus> = signal('idle');
@@ -382,16 +451,15 @@ export class GuestRequestPage {
       this.nowPlaying.set(snapshot.nowPlaying);
       this.nowPlayingAt.set(Date.now());
       this.recentlyPlayed.set(snapshot.recentlyPlayed);
+      this.providerQueue.set(snapshot.providerQueue);
       this.queue.set(snapshot.queue);
     });
     this.realtime.on('now_playing.updated', (event) => {
       this.nowPlaying.set(event.track);
       this.nowPlayingAt.set(Date.now());
-      // recentlyPlayed gets rolled by the room's applyEvent; the UI doesn't
-      // mutate it locally — it'll arrive on the next snapshot/queue refresh
-      // if we reconnect, or stay in sync with the room's view via the
-      // upcoming event stream. Keep optimistic frontend update simple:
-      // when the URI changes, push the previous track onto recentlyPlayed.
+    });
+    this.realtime.on('provider_queue.updated', (event) => {
+      this.providerQueue.set(event.tracks);
     });
     this.realtime.onEvent((event: SessionEvent) => {
       if (event.type === 'session.ended') {

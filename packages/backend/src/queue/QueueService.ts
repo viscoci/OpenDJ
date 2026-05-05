@@ -14,6 +14,7 @@
 import {
   applyModerationDecision,
   canEnqueue,
+  supportsQueueTrack,
   type CanEnqueueResult,
   type Guest,
   type QueueItem,
@@ -22,6 +23,7 @@ import {
 } from '@opendj/core';
 import { toQueueItemSummary, type RealtimeRoom, type SessionEvent } from '@opendj/realtime';
 import type {
+  ProviderConnectionRepository,
   GuestRepository,
   GuestSlotRepository,
   QueueItemRecord,
@@ -29,6 +31,7 @@ import type {
   QueueSkipVoteRepository,
   SessionRepository,
 } from '../repositories/types.js';
+import type { StreamingRouter } from '../providers/streaming/StreamingRouter.js';
 
 export class QueueServiceError extends Error {
   readonly code: string;
@@ -48,6 +51,14 @@ export interface QueueServiceDeps {
   queueSkipVotes: QueueSkipVoteRepository;
   /** Optional room — when provided, mutations broadcast events. */
   rooms?: RealtimeRoomRegistry;
+  /**
+   * Optional streaming-provider integration. When supplied, approved queue
+   * items get pushed into the host's actual playback queue (Spotify queue,
+   * etc.) via `provider.queueTrack`. Without it the OpenDJ queue is just
+   * a request log — Spotify doesn't see what guests asked for.
+   */
+  streamingRouter?: StreamingRouter;
+  providerConnections?: ProviderConnectionRepository;
 }
 
 export interface RealtimeRoomRegistry {
@@ -143,6 +154,7 @@ export class QueueService {
         type: 'queue.item_approved',
         itemId: created.id,
       });
+      await this.pushToProviderQueue(session.accountId, input.track);
     }
 
     return created;
@@ -175,6 +187,23 @@ export class QueueService {
       type: input.decision === 'approved' ? 'queue.item_approved' : 'queue.item_rejected',
       itemId: input.itemId,
     });
+
+    if (input.decision === 'approved') {
+      // Mirror the approval onto the streaming provider's queue so Spotify
+      // (or whatever else is connected) actually plays the track. Without
+      // this the OpenDJ queue is just a request log — the host's player
+      // never learns about the requests.
+      const session = await this.deps.sessions.findById(input.sessionId);
+      if (session) {
+        await this.pushToProviderQueue(session.accountId, {
+          uri: updated.trackUri,
+          name: updated.trackName,
+          artist: updated.artistName,
+          albumArt: updated.albumArtUrl,
+          durationMs: updated.durationMs ?? 0,
+        });
+      }
+    }
     return updated;
   }
 
@@ -280,6 +309,30 @@ export class QueueService {
   private async publishToRoom(sessionId: string, event: SessionEvent): Promise<void> {
     const room = this.deps.rooms?.forSession(sessionId);
     if (room) await room.publish(event);
+  }
+
+  /**
+   * Push a track into the host's connected streaming-provider queue (e.g.
+   * Spotify queue) when the integration is wired. Failure is non-fatal —
+   * the OpenDJ queue item already exists, the host can still see it, and
+   * the next NowPlayingPoller tick will reconcile.
+   */
+  private async pushToProviderQueue(accountId: string, track: Track): Promise<void> {
+    if (!this.deps.streamingRouter || !this.deps.providerConnections) return;
+    const conns = await this.deps.providerConnections.findAllForAccount(accountId);
+    const conn = conns[0];
+    if (!conn) return;
+    try {
+      const provider = await this.deps.streamingRouter.getProvider(accountId, conn.providerId);
+      if (!supportsQueueTrack(provider)) return;
+      await provider.queueTrack(track);
+    } catch (err) {
+      // Swallow — host UI will still show the OpenDJ row, and the next
+      // poller tick will reflect the truth on the provider side. The
+      // common case here is "host playback paused" or "no active device".
+      // eslint-disable-next-line no-console
+      console.warn('[QueueService] pushToProviderQueue failed:', (err as Error).message);
+    }
   }
 }
 

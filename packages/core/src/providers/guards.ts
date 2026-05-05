@@ -18,6 +18,7 @@ import type {
   ISupportsPlaylistSwitch,
   ISupportsPlaylistTracksAdd,
   ISupportsPlaylistTracksRead,
+  ISupportsQueueRead,
   ISupportsQueueTrack,
   ISupportsResume,
   ISupportsSearch,
@@ -66,6 +67,12 @@ export function supportsQueueTrack(
   provider: IStreamingProvider,
 ): provider is IStreamingProvider & ISupportsQueueTrack {
   return declaresAndImplements(provider, PROVIDER_FEATURES.QueueTrack, 'queueTrack');
+}
+
+export function supportsQueueRead(
+  provider: IStreamingProvider,
+): provider is IStreamingProvider & ISupportsQueueRead {
+  return declaresAndImplements(provider, PROVIDER_FEATURES.QueueRead, 'getQueue');
 }
 
 export function supportsPlaylistSwitch(

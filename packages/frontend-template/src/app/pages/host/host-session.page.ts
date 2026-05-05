@@ -28,7 +28,7 @@ import {
   type PlaybackDeviceWire,
   type SessionWire,
 } from '@opendj/frontend';
-import type { NowPlayingTrack } from '@opendj/core';
+import type { NowPlayingTrack, Track } from '@opendj/core';
 import type { SessionEvent, SessionSnapshot } from '@opendj/realtime';
 import { DevicePickerComponent } from '../../components/device-picker.component.js';
 import { NowPlayingCardComponent } from '../../components/now-playing-card.component.js';
@@ -112,9 +112,33 @@ import { OpenDjClientService } from '../../services/opendj-client.service.js';
             (approve)="moderate($event, 'approved')"
             (reject)="moderate($event, 'rejected')"
             (remove)="onRemove($event)"
-            emptyText="Queue is empty. Send guests to the URL above."
+            emptyText="No guest requests yet. Send guests to the URL above."
           />
         </section>
+
+        @if (providerQueue().length > 0) {
+          <section class="card provider-queue">
+            <h2>Up next on Spotify</h2>
+            <p class="hint">
+              The host's actual playback queue. Approved guest requests slot in here automatically.
+            </p>
+            <ul class="provider-queue-list">
+              @for (track of providerQueue().slice(0, 10); track track.uri) {
+                <li class="provider-queue-row">
+                  @if (track.albumArt) {
+                    <img class="art" [src]="track.albumArt" alt="" />
+                  } @else {
+                    <span class="art empty" aria-hidden="true">♪</span>
+                  }
+                  <span class="meta">
+                    <span class="name">{{ track.name }}</span>
+                    <span class="artist">{{ track.artist }}</span>
+                  </span>
+                </li>
+              }
+            </ul>
+          </section>
+        }
 
         @if (recentlyPlayed().length > 0) {
           <section class="card recently">
@@ -252,6 +276,57 @@ import { OpenDjClientService } from '../../services/opendj-client.service.js';
       .loading {
         color: #a294c5;
       }
+      .provider-queue .hint {
+        margin: 0 0 12px;
+        font-size: 12px;
+        color: #a294c5;
+      }
+      .provider-queue-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .provider-queue-row {
+        display: grid;
+        grid-template-columns: 32px 1fr;
+        gap: 10px;
+        align-items: center;
+        padding: 6px 0;
+      }
+      .provider-queue-row .art {
+        width: 32px;
+        height: 32px;
+        border-radius: 4px;
+        object-fit: cover;
+        background: #0c0a14;
+      }
+      .provider-queue-row .art.empty {
+        display: grid;
+        place-items: center;
+        color: #6e5e8a;
+      }
+      .provider-queue-row .meta {
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+      }
+      .provider-queue-row .name {
+        font-size: 13px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .provider-queue-row .artist {
+        font-size: 11px;
+        color: #a294c5;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
     `,
   ],
 })
@@ -266,6 +341,7 @@ export class HostSessionPage {
   readonly nowPlaying: WritableSignal<NowPlayingTrack | null> = signal(null);
   readonly nowPlayingAt = signal(0);
   readonly recentlyPlayed: WritableSignal<ReadonlyArray<NowPlayingTrack>> = signal([]);
+  readonly providerQueue: WritableSignal<ReadonlyArray<Track>> = signal([]);
   readonly devices: WritableSignal<ReadonlyArray<PlaybackDeviceWire>> = signal([]);
   readonly devicesBusy = signal(false);
   readonly playbackBusy = signal(false);
@@ -446,12 +522,16 @@ export class HostSessionPage {
       this.nowPlaying.set(snapshot.nowPlaying);
       this.nowPlayingAt.set(Date.now());
       this.recentlyPlayed.set(snapshot.recentlyPlayed);
+      this.providerQueue.set(snapshot.providerQueue);
       // Hosts see pending items too, so use the merged view from the snapshot.
       this.queue.set([...snapshot.pending, ...snapshot.queue]);
     });
     this.realtime.on('now_playing.updated', (event) => {
       this.nowPlaying.set(event.track);
       this.nowPlayingAt.set(Date.now());
+    });
+    this.realtime.on('provider_queue.updated', (event) => {
+      this.providerQueue.set(event.tracks);
     });
     this.realtime.onEvent((event: SessionEvent) => {
       if (

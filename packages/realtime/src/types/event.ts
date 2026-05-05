@@ -1,4 +1,4 @@
-import type { NowPlayingTrack } from '@opendj/core';
+import type { NowPlayingTrack, Track } from '@opendj/core';
 import type { LyricsDocument, LyricsFeedbackKind } from '@opendj/lyrics';
 import type { PlaybackClockSample, PredictedPlaybackPosition, SyncCue } from '@opendj/sync';
 import type { QueueItemSummary } from './queue-summary.js';
@@ -22,6 +22,10 @@ export type SessionEvent =
   // Now playing + skip
   | { type: 'now_playing.updated'; track: NowPlayingTrack | null }
   | { type: 'skip_vote.updated'; itemId: string; votes: number; threshold: number }
+  // Provider's own playback queue (Spotify queue, etc.) — fires when the
+  // poller sees a change. Separate from queue.item_* which only describes
+  // the OpenDJ moderation list.
+  | { type: 'provider_queue.updated'; tracks: Track[] }
   // Guest slots
   | { type: 'guest_slots.updated'; activeCount: number; queuedCount: number }
   // Playback clock + correction (sync layer)

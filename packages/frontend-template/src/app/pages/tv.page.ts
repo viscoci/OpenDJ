@@ -24,7 +24,7 @@ import {
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { ActivatedRoute } from '@angular/router';
 import { RealtimeClient, type SessionWire } from '@opendj/frontend';
-import type { NowPlayingTrack } from '@opendj/core';
+import type { NowPlayingTrack, Track } from '@opendj/core';
 import type { SessionEvent, SessionSnapshot } from '@opendj/realtime';
 import { NowPlayingCardComponent } from '../components/now-playing-card.component.js';
 import { QrCodeComponent } from '../components/qr-code.component.js';
@@ -63,12 +63,30 @@ import { OpenDjClientService } from '../services/opendj-client.service.js';
             </div>
             <div class="queue">
               <p class="queue-eyebrow">Up next</p>
-              <app-queue-list
-                [items]="upcoming()"
-                mode="guest"
-                [showSkipVote]="false"
-                emptyText="No tracks queued yet."
-              />
+              @if (providerQueue().length > 0) {
+                <ul class="up-next-list">
+                  @for (track of providerQueue().slice(0, 8); track track.uri) {
+                    <li class="up-next-row">
+                      @if (track.albumArt) {
+                        <img class="art" [src]="track.albumArt" alt="" />
+                      } @else {
+                        <span class="art empty" aria-hidden="true">♪</span>
+                      }
+                      <span class="meta">
+                        <span class="name">{{ track.name }}</span>
+                        <span class="artist">{{ track.artist }}</span>
+                      </span>
+                    </li>
+                  }
+                </ul>
+              } @else {
+                <app-queue-list
+                  [items]="upcoming()"
+                  mode="guest"
+                  [showSkipVote]="false"
+                  emptyText="No tracks queued yet."
+                />
+              }
             </div>
           </aside>
         </section>
@@ -227,6 +245,51 @@ import { OpenDjClientService } from '../services/opendj-client.service.js';
         background-clip: text;
         color: transparent;
       }
+      .up-next-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .up-next-row {
+        display: grid;
+        grid-template-columns: 36px 1fr;
+        gap: 10px;
+        align-items: center;
+      }
+      .up-next-row .art {
+        width: 36px;
+        height: 36px;
+        border-radius: 4px;
+        object-fit: cover;
+        background: #0c0a14;
+      }
+      .up-next-row .art.empty {
+        display: grid;
+        place-items: center;
+        color: #6e5e8a;
+      }
+      .up-next-row .meta {
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+      }
+      .up-next-row .name {
+        font-size: 14px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .up-next-row .artist {
+        font-size: 12px;
+        color: #c8b8e9;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
     `,
   ],
 })
@@ -239,6 +302,7 @@ export class TvPage {
   readonly nowPlaying: WritableSignal<NowPlayingTrack | null> = signal(null);
   readonly nowPlayingAt = signal(0);
   readonly upcoming: WritableSignal<ReadonlyArray<QueueListItem>> = signal([]);
+  readonly providerQueue: WritableSignal<ReadonlyArray<Track>> = signal([]);
   readonly activeGuestCount = signal(0);
   readonly loadError = signal<string | null>(null);
   readonly clockText = signal(formatClock(new Date()));
@@ -295,11 +359,15 @@ export class TvPage {
       this.nowPlaying.set(snapshot.nowPlaying);
       this.nowPlayingAt.set(Date.now());
       this.upcoming.set(snapshot.queue);
+      this.providerQueue.set(snapshot.providerQueue);
       this.activeGuestCount.set(snapshot.activeGuestCount);
     });
     this.realtime.on('now_playing.updated', (event) => {
       this.nowPlaying.set(event.track);
       this.nowPlayingAt.set(Date.now());
+    });
+    this.realtime.on('provider_queue.updated', (event) => {
+      this.providerQueue.set(event.tracks);
     });
     this.realtime.on('guest_slots.updated', (event) => {
       this.activeGuestCount.set(event.activeCount);

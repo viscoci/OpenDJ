@@ -48,6 +48,16 @@ export interface ISupportsQueueTrack {
   queueTrack(track: Track, zoneId?: string): Promise<QueueResult>;
 }
 
+/**
+ * Read what's queued up to play on the provider AFTER the current track.
+ * Spotify exposes this via `GET /v1/me/player/queue`. Used by the realtime
+ * snapshot so the host UI + TV can show the actual playback queue, not
+ * just OpenDJ-mediated guest requests.
+ */
+export interface ISupportsQueueRead {
+  getQueue(zoneId?: string): Promise<Track[]>;
+}
+
 export interface ISupportsPlaylistSwitch {
   switchPlaylist(playlistUri: string, zoneId?: string): Promise<QueueResult>;
 }
