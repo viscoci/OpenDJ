@@ -38,6 +38,7 @@ import { QueueListComponent, type QueueListItem } from '../../components/queue-l
 import { RecentlyPlayedListComponent } from '../../components/recently-played-list.component.js';
 import { OpenDjClientService } from '../../services/opendj-client.service.js';
 import { buildQueueEtaMs, formatEta } from '../../utils/queue-eta.js';
+import QRCode from 'qrcode';
 
 @Component({
   selector: 'app-host-session',
@@ -63,13 +64,28 @@ import { buildQueueEtaMs, formatEta } from '../../utils/queue-eta.js';
             <p class="eyebrow">Session</p>
             <h1>{{ session()!.name }}</h1>
             <div class="qr-row">
-              <app-qr-code [value]="guestUrl()" [size]="120" />
+              <button
+                type="button"
+                class="qr-button"
+                (click)="openQrFullscreen()"
+                aria-label="Open QR code fullscreen"
+                title="Tap to enlarge"
+              >
+                <app-qr-code [value]="guestUrl()" [size]="120" />
+              </button>
               <div class="qr-meta">
                 <p class="qr-eyebrow">Scan to join</p>
                 <code class="qr-url">{{ guestUrl() }}</code>
-                <button type="button" class="copy" (click)="copyUrl()">
-                  {{ urlCopied() ? 'Copied ✓' : 'Copy URL' }}
-                </button>
+                <div class="qr-actions">
+                  @if (canShare()) {
+                    <button type="button" class="action" (click)="shareUrl()">Share</button>
+                  }
+                  <button type="button" class="action" (click)="copyUrl()">
+                    {{ urlCopied() ? 'Copied ✓' : 'Copy' }}
+                  </button>
+                  <button type="button" class="action" (click)="downloadQr()">Download</button>
+                  <button type="button" class="action" (click)="openPrintView()">Print</button>
+                </div>
               </div>
             </div>
           </div>
@@ -244,6 +260,31 @@ import { buildQueueEtaMs, formatEta } from '../../utils/queue-eta.js';
           }
         </section>
       }
+
+      @if (qrFullscreen()) {
+        <div
+          class="qr-fullscreen"
+          role="dialog"
+          aria-label="QR code"
+          (click)="closeQrFullscreen()"
+          (keydown.escape)="closeQrFullscreen()"
+          tabindex="0"
+        >
+          <div class="qr-fullscreen-inner" (click)="$event.stopPropagation()">
+            <button
+              type="button"
+              class="qr-fullscreen-close"
+              (click)="closeQrFullscreen()"
+              aria-label="Close"
+            >
+              ×
+            </button>
+            <h2 class="qr-fullscreen-name">{{ session()?.name }}</h2>
+            <app-qr-code [value]="guestUrl()" [size]="480" />
+            <code class="qr-fullscreen-url">{{ guestUrl() }}</code>
+          </div>
+        </div>
+      }
     </main>
   `,
   styles: [
@@ -322,19 +363,91 @@ import { buildQueueEtaMs, formatEta } from '../../utils/queue-eta.js';
         font-size: 12px;
         word-break: break-all;
       }
-      .copy {
-        align-self: flex-start;
+      .qr-button {
+        all: unset;
+        cursor: pointer;
+        border-radius: 8px;
+      }
+      .qr-button:focus-visible {
+        outline: 2px solid #a855f7;
+        outline-offset: 2px;
+      }
+      .qr-actions {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+      .qr-actions .action {
         background: transparent;
         border: 1px solid #2c2440;
         color: #c8b8e9;
-        padding: 4px 12px;
+        padding: 4px 10px;
         border-radius: 999px;
         font: inherit;
         font-size: 11px;
         cursor: pointer;
       }
-      .copy:hover {
+      .qr-actions .action:hover {
         border-color: #a855f7;
+      }
+      .qr-fullscreen {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.85);
+        backdrop-filter: blur(8px);
+        display: grid;
+        place-items: center;
+        z-index: 1000;
+        padding: 24px;
+      }
+      .qr-fullscreen-inner {
+        background: #1a1525;
+        border: 1px solid #2c2440;
+        border-radius: 14px;
+        padding: 32px 24px 24px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 16px;
+        position: relative;
+        max-width: min(560px, calc(100vw - 48px));
+      }
+      .qr-fullscreen-close {
+        position: absolute;
+        top: 12px;
+        right: 12px;
+        background: transparent;
+        border: 1px solid #2c2440;
+        color: #c8b8e9;
+        width: 32px;
+        height: 32px;
+        border-radius: 999px;
+        font: inherit;
+        font-size: 18px;
+        line-height: 1;
+        cursor: pointer;
+        display: grid;
+        place-items: center;
+      }
+      .qr-fullscreen-close:hover {
+        border-color: #a855f7;
+      }
+      .qr-fullscreen-name {
+        font-family: 'Syne', 'Inter', sans-serif;
+        margin: 0;
+        font-size: 22px;
+        background: linear-gradient(135deg, #a855f7 0%, #ec4899 100%);
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+        text-align: center;
+      }
+      .qr-fullscreen-url {
+        font-family: 'JetBrains Mono', ui-monospace, monospace;
+        font-size: 13px;
+        color: #c8b8e9;
+        word-break: break-all;
+        text-align: center;
       }
       h2 {
         font-family: 'Syne', 'Inter', sans-serif;
@@ -616,6 +729,7 @@ export class HostSessionPage {
   readonly urlCopied = signal(false);
   readonly settingsBusy = signal(false);
   readonly settingsError = signal<string | null>(null);
+  readonly qrFullscreen = signal(false);
   /** URIs currently being removed — used to disable the row's button. */
   readonly removingUris: WritableSignal<ReadonlySet<string>> = signal(new Set());
   readonly auditLog: WritableSignal<ReadonlyArray<AuditEventWire>> = signal([]);
@@ -1003,6 +1117,189 @@ export class HostSessionPage {
       this.urlCopied.set(true);
       setTimeout(() => this.urlCopied.set(false), 2000);
     });
+  }
+
+  /** Web Share API availability — `false` on desktop browsers without it. */
+  canShare(): boolean {
+    return typeof navigator !== 'undefined' && typeof navigator.share === 'function';
+  }
+
+  async shareUrl(): Promise<void> {
+    const session = this.session();
+    const url = this.guestUrl();
+    if (!session || !url) return;
+    if (!this.canShare()) {
+      this.copyUrl();
+      return;
+    }
+    try {
+      await navigator.share({
+        title: `Join ${session.name} on OpenDJ`,
+        text: `Add songs to the queue at ${session.name}.`,
+        url,
+      });
+    } catch {
+      // User canceled or share failed — silent.
+    }
+  }
+
+  openQrFullscreen(): void {
+    this.qrFullscreen.set(true);
+  }
+
+  closeQrFullscreen(): void {
+    this.qrFullscreen.set(false);
+  }
+
+  /**
+   * Save the QR code as an SVG file. SVG so it stays sharp at any
+   * print size — the host can drop it into a printer-ready flyer
+   * without re-rasterizing.
+   */
+  async downloadQr(): Promise<void> {
+    const session = this.session();
+    const url = this.guestUrl();
+    if (!session || !url) return;
+    try {
+      const svg = await QRCode.toString(url, {
+        type: 'svg',
+        margin: 2,
+        width: 1024,
+        color: { dark: '#0a0a12', light: '#ffffff' },
+      });
+      const blob = new Blob([svg], { type: 'image/svg+xml' });
+      const objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = objectUrl;
+      a.download = `opendj-${session.qrSlug}.svg`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(objectUrl);
+    } catch {
+      // best-effort — silent on failure.
+    }
+  }
+
+  /**
+   * Open a printable poster in a new window: session name, OpenDJ
+   * branding, the join URL, the QR code, and a short hint. Auto-
+   * triggers print() once the document loads so the host can hit
+   * "Save as PDF" or send straight to a printer.
+   */
+  async openPrintView(): Promise<void> {
+    const session = this.session();
+    const url = this.guestUrl();
+    if (!session || !url) return;
+    let qrSvg = '';
+    try {
+      qrSvg = await QRCode.toString(url, {
+        type: 'svg',
+        margin: 2,
+        width: 600,
+        color: { dark: '#0a0a12', light: '#ffffff' },
+      });
+    } catch {
+      return;
+    }
+    const win = globalThis.open('', '_blank', 'noopener,noreferrer,width=900,height=1100');
+    if (!win) return;
+    const escape = (s: string): string => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+    const html = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>${escape(session.name)} — OpenDJ join code</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    @page { size: auto; margin: 12mm; }
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+      margin: 0;
+      padding: 24px;
+      color: #1a0a14;
+      background: #fff;
+      display: flex;
+      justify-content: center;
+    }
+    .poster {
+      max-width: 720px;
+      width: 100%;
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+      align-items: center;
+    }
+    .brand {
+      font-size: 13px;
+      letter-spacing: 0.4em;
+      text-transform: uppercase;
+      color: #6e5e8a;
+      margin: 0;
+    }
+    h1 {
+      font-size: clamp(32px, 6vw, 56px);
+      font-family: 'Syne', 'Helvetica Neue', sans-serif;
+      margin: 0;
+      line-height: 1.1;
+    }
+    .lead {
+      font-size: 18px;
+      color: #4a3d5e;
+      margin: 0;
+    }
+    .qr-wrap {
+      padding: 24px;
+      background: #fff;
+      border: 2px solid #0a0a12;
+      border-radius: 16px;
+      width: clamp(260px, 60vw, 480px);
+      aspect-ratio: 1 / 1;
+      display: grid;
+      place-items: center;
+    }
+    .qr-wrap svg { width: 100%; height: 100%; display: block; }
+    .url {
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 16px;
+      word-break: break-all;
+      padding: 12px 16px;
+      background: #f4ecff;
+      border: 1px dashed #a855f7;
+      border-radius: 8px;
+      max-width: 100%;
+    }
+    .footer {
+      margin-top: 8px;
+      color: #6e5e8a;
+      font-size: 13px;
+    }
+    .footer strong { color: #1a0a14; }
+    @media print {
+      body { padding: 0; }
+      .no-print { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="poster">
+    <p class="brand">OpenDJ • Live request queue</p>
+    <h1>${escape(session.name)}</h1>
+    <p class="lead">Scan the code or visit the link to add songs to the queue.</p>
+    <div class="qr-wrap">${qrSvg}</div>
+    <div class="url">${escape(url)}</div>
+    <p class="footer">
+      Powered by <strong>OpenDJ</strong> — open-source crowd-sourced jukebox for live events.
+    </p>
+  </div>
+  <script>window.addEventListener('load', () => setTimeout(() => window.print(), 300));<\/script>
+</body>
+</html>`;
+    win.document.open();
+    win.document.write(html);
+    win.document.close();
   }
 
   // ─── Bootstrap + realtime ─────────────────────────────────────────────
