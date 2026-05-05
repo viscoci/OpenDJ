@@ -1,9 +1,13 @@
 /**
- * /host/sessions/:id — host queue moderation + end-session control.
+ * /host/sessions/:id — host session control surface.
  *
- * Pulls the queue from `/api/v1/sessions/:id/queue`, subscribes to realtime
- * updates, and exposes approve/reject buttons that call PATCH /:itemId
- * with `{ decision }`. End-session calls DELETE /:id.
+ * Now-playing card with skip / pause / resume controls, the QR code +
+ * copyable join URL, a Spotify Connect device picker (so the host can
+ * pick which speaker plays audio), the moderation queue, recently
+ * played, and end-session.
+ *
+ * Pulls initial state from `/api/v1/sessions/:id` + WS `_snapshot` frame
+ * and keeps in sync via realtime events.
  */
 
 import { CommonModule } from '@angular/common';
@@ -21,15 +25,29 @@ import { ActivatedRoute, Router } from '@angular/router';
 import {
   ApiError,
   RealtimeClient,
-  type QueueItemSummaryWire,
+  type PlaybackDeviceWire,
   type SessionWire,
 } from '@opendj/frontend';
+import type { NowPlayingTrack } from '@opendj/core';
+import type { SessionEvent, SessionSnapshot } from '@opendj/realtime';
+import { DevicePickerComponent } from '../../components/device-picker.component.js';
+import { NowPlayingCardComponent } from '../../components/now-playing-card.component.js';
+import { QrCodeComponent } from '../../components/qr-code.component.js';
+import { QueueListComponent, type QueueListItem } from '../../components/queue-list.component.js';
+import { RecentlyPlayedListComponent } from '../../components/recently-played-list.component.js';
 import { OpenDjClientService } from '../../services/opendj-client.service.js';
 
 @Component({
   selector: 'app-host-session',
   standalone: true,
-  imports: [CommonModule],
+  imports: [
+    CommonModule,
+    DevicePickerComponent,
+    NowPlayingCardComponent,
+    QrCodeComponent,
+    QueueListComponent,
+    RecentlyPlayedListComponent,
+  ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <main>
@@ -38,58 +56,72 @@ import { OpenDjClientService } from '../../services/opendj-client.service.js';
       } @else if (!session()) {
         <p class="loading">Loading…</p>
       } @else {
-        <header class="card">
-          <div>
+        <header class="header card">
+          <div class="header-left">
             <p class="eyebrow">Session</p>
             <h1>{{ session()!.name }}</h1>
-            <p class="slug">
-              Guest URL:
-              <code>{{ guestUrl() }}</code>
-            </p>
+            <div class="qr-row">
+              <app-qr-code [value]="guestUrl()" [size]="120" />
+              <div class="qr-meta">
+                <p class="qr-eyebrow">Scan to join</p>
+                <code class="qr-url">{{ guestUrl() }}</code>
+                <button type="button" class="copy" (click)="copyUrl()">
+                  {{ urlCopied() ? 'Copied ✓' : 'Copy URL' }}
+                </button>
+              </div>
+            </div>
           </div>
           <button
             type="button"
             class="end"
-            [disabled]="ending() || session()!.endedAt"
+            [disabled]="ending() || !!session()!.endedAt"
             (click)="endSession()"
           >
             {{ session()!.endedAt ? 'Ended' : ending() ? 'Ending…' : 'End session' }}
           </button>
         </header>
 
+        <section class="now-playing card">
+          <h2>Now playing</h2>
+          <app-now-playing-card
+            [track]="nowPlaying()"
+            [lastUpdatedAtMs]="nowPlayingAt()"
+            [showControls]="true"
+            [controlsBusy]="playbackBusy()"
+            (skip)="onSkip()"
+            (togglePlay)="onTogglePlay()"
+          />
+          @if (playbackError(); as err) {
+            <p class="form-error">{{ err }}</p>
+          }
+          <div class="device-picker">
+            <app-device-picker
+              [devices]="devices()"
+              [busy]="devicesBusy()"
+              (refresh)="loadDevices()"
+              (activate)="onActivateDevice($event)"
+            />
+          </div>
+        </section>
+
         <section class="queue card">
           <h2>Queue</h2>
-          @if (visibleQueue().length === 0) {
-            <p class="empty">Queue is empty. Send guests to the URL above.</p>
-          } @else {
-            <ul>
-              @for (item of visibleQueue(); track item.id) {
-                <li class="queue-item" [attr.data-status]="item.status">
-                  @if (item.albumArtUrl) {
-                    <img class="art" [src]="item.albumArtUrl" alt="" />
-                  } @else {
-                    <div class="art placeholder" aria-hidden="true"></div>
-                  }
-                  <div class="meta">
-                    <span class="title">{{ item.trackName }}</span>
-                    <span class="artist">{{ item.artistName }}</span>
-                  </div>
-                  <div class="actions">
-                    <span class="status-pill">{{ statusLabel(item.status) }}</span>
-                    @if (item.status === 'pending') {
-                      <button type="button" class="approve" (click)="moderate(item.id, 'approved')">
-                        Approve
-                      </button>
-                      <button type="button" class="reject" (click)="moderate(item.id, 'rejected')">
-                        Reject
-                      </button>
-                    }
-                  </div>
-                </li>
-              }
-            </ul>
-          }
+          <app-queue-list
+            [items]="queue()"
+            mode="host"
+            (approve)="moderate($event, 'approved')"
+            (reject)="moderate($event, 'rejected')"
+            (remove)="onRemove($event)"
+            emptyText="Queue is empty. Send guests to the URL above."
+          />
         </section>
+
+        @if (recentlyPlayed().length > 0) {
+          <section class="card recently">
+            <h2>Recently played</h2>
+            <app-recently-played-list [tracks]="recentlyPlayed()" [max]="6" />
+          </section>
+        }
       }
     </main>
   `,
@@ -103,7 +135,7 @@ import { OpenDjClientService } from '../../services/opendj-client.service.js';
         font-family: 'Inter', sans-serif;
       }
       main {
-        max-width: 720px;
+        max-width: 760px;
         margin: 0 auto;
         padding: 24px 16px 96px;
         display: flex;
@@ -116,11 +148,15 @@ import { OpenDjClientService } from '../../services/opendj-client.service.js';
         border-radius: 14px;
         padding: 20px;
       }
-      header.card {
+      .header {
         display: flex;
         justify-content: space-between;
         align-items: flex-start;
         gap: 16px;
+      }
+      .header-left {
+        flex: 1;
+        min-width: 0;
       }
       .eyebrow {
         text-transform: uppercase;
@@ -131,44 +167,73 @@ import { OpenDjClientService } from '../../services/opendj-client.service.js';
       }
       h1 {
         font-family: 'Syne', 'Inter', sans-serif;
-        margin: 0 0 8px;
+        margin: 0 0 16px;
         font-size: 24px;
         background: linear-gradient(135deg, #a855f7 0%, #ec4899 100%);
         -webkit-background-clip: text;
         background-clip: text;
         color: transparent;
       }
-      .slug {
-        margin: 0;
-        font-size: 13px;
-        color: #a294c5;
+      .qr-row {
+        display: flex;
+        gap: 16px;
+        align-items: center;
       }
-      code {
+      .qr-meta {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        min-width: 0;
+      }
+      .qr-eyebrow {
+        font-size: 10px;
+        font-family: 'JetBrains Mono', ui-monospace, monospace;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        color: #a294c5;
+        margin: 0;
+      }
+      .qr-url {
         font-family: 'JetBrains Mono', ui-monospace, monospace;
         background: #0c0a14;
-        padding: 2px 6px;
+        padding: 4px 8px;
         border-radius: 4px;
         font-size: 12px;
+        word-break: break-all;
+      }
+      .copy {
+        align-self: flex-start;
+        background: transparent;
+        border: 1px solid #2c2440;
+        color: #c8b8e9;
+        padding: 4px 12px;
+        border-radius: 999px;
+        font: inherit;
+        font-size: 11px;
+        cursor: pointer;
+      }
+      .copy:hover {
+        border-color: #a855f7;
       }
       h2 {
         font-family: 'Syne', 'Inter', sans-serif;
-        font-size: 18px;
+        font-size: 16px;
         margin: 0 0 12px;
       }
-      button {
+      .device-picker {
+        margin-top: 12px;
+      }
+      .form-error {
+        color: #fda4af;
+        font-size: 13px;
+        margin: 8px 0 0;
+      }
+      .end {
         font: inherit;
         cursor: pointer;
         border-radius: 8px;
-        padding: 6px 12px;
-        border: 0;
-        font-size: 13px;
-      }
-      button[disabled] {
-        opacity: 0.5;
-        cursor: not-allowed;
-      }
-      .end {
         padding: 10px 16px;
+        font-size: 13px;
         background: #2c2440;
         color: #fda4af;
         border: 1px solid #fda4af;
@@ -177,74 +242,9 @@ import { OpenDjClientService } from '../../services/opendj-client.service.js';
         background: #fda4af;
         color: #1a0a14;
       }
-      .approve {
-        background: linear-gradient(135deg, #34d399, #10b981);
-        color: #042f2e;
-        font-weight: 600;
-      }
-      .reject {
-        background: #2c2440;
-        color: #fda4af;
-        border: 1px solid #fda4af;
-      }
-      .queue ul {
-        list-style: none;
-        margin: 0;
-        padding: 0;
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
-      }
-      .queue-item {
-        display: grid;
-        grid-template-columns: 48px 1fr auto;
-        gap: 12px;
-        align-items: center;
-      }
-      .art {
-        width: 48px;
-        height: 48px;
-        border-radius: 6px;
-        background: #2c2440;
-        object-fit: cover;
-      }
-      .meta {
-        display: flex;
-        flex-direction: column;
-        min-width: 0;
-      }
-      .title {
-        font-weight: 600;
-        white-space: nowrap;
-        text-overflow: ellipsis;
-        overflow: hidden;
-      }
-      .artist {
-        color: #a294c5;
-        font-size: 13px;
-      }
-      .actions {
-        display: flex;
-        gap: 6px;
-        align-items: center;
-      }
-      .status-pill {
-        font-size: 11px;
-        padding: 4px 8px;
-        border-radius: 999px;
-        background: #2c2440;
-        color: #c8b8e9;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-      }
-      .queue-item[data-status='playing'] .status-pill {
-        background: linear-gradient(135deg, #a855f7, #ec4899);
-        color: white;
-      }
-      .empty {
-        margin: 0;
-        color: #a294c5;
-        font-style: italic;
+      .end:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
       }
       .error {
         color: #fda4af;
@@ -262,11 +262,18 @@ export class HostSessionPage {
   private readonly destroyRef = inject(DestroyRef);
 
   readonly session: WritableSignal<SessionWire | null> = signal(null);
-  readonly queue: WritableSignal<ReadonlyArray<QueueItemSummaryWire>> = signal([]);
+  readonly queue: WritableSignal<ReadonlyArray<QueueListItem>> = signal([]);
+  readonly nowPlaying: WritableSignal<NowPlayingTrack | null> = signal(null);
+  readonly nowPlayingAt = signal(0);
+  readonly recentlyPlayed: WritableSignal<ReadonlyArray<NowPlayingTrack>> = signal([]);
+  readonly devices: WritableSignal<ReadonlyArray<PlaybackDeviceWire>> = signal([]);
+  readonly devicesBusy = signal(false);
+  readonly playbackBusy = signal(false);
+  readonly playbackError = signal<string | null>(null);
   readonly loadError = signal<string | null>(null);
   readonly ending = signal(false);
+  readonly urlCopied = signal(false);
 
-  readonly visibleQueue = computed(() => this.queue().filter((i) => i.status !== 'rejected'));
   readonly guestUrl = computed(() => {
     const s = this.session();
     if (!s) return '';
@@ -284,19 +291,7 @@ export class HostSessionPage {
     this.destroyRef.onDestroy(() => this.realtime?.close());
   }
 
-  statusLabel(status: QueueItemSummaryWire['status']): string {
-    switch (status) {
-      case 'pending':
-        return 'pending';
-      case 'approved':
-      case 'queued':
-        return 'queued';
-      case 'playing':
-        return 'now playing';
-      default:
-        return status;
-    }
-  }
+  // ─── Moderation ────────────────────────────────────────────────────────
 
   async moderate(itemId: string, decision: 'approved' | 'rejected'): Promise<void> {
     const session = this.session();
@@ -305,9 +300,82 @@ export class HostSessionPage {
       await this.client.client.queue.moderate(session.id, itemId, { decision });
       await this.refreshQueue();
     } catch {
-      // Surface as a banner later — for now just no-op so a stale UI doesn't lie.
+      // realtime will catch us up; surfacing a banner is hosted-only polish
     }
   }
+
+  async onRemove(itemId: string): Promise<void> {
+    // Host has no separate "remove" route in this slice — moderate as
+    // rejected which removes from the visible queue.
+    await this.moderate(itemId, 'rejected');
+  }
+
+  // ─── Playback control ─────────────────────────────────────────────────
+
+  async onSkip(): Promise<void> {
+    const session = this.session();
+    if (!session || this.playbackBusy()) return;
+    this.playbackBusy.set(true);
+    this.playbackError.set(null);
+    try {
+      await this.client.client.playback.skip(session.id);
+    } catch (err) {
+      this.playbackError.set(this.playbackErrorFor(err));
+    } finally {
+      this.playbackBusy.set(false);
+    }
+  }
+
+  async onTogglePlay(): Promise<void> {
+    const session = this.session();
+    const np = this.nowPlaying();
+    if (!session || this.playbackBusy()) return;
+    this.playbackBusy.set(true);
+    this.playbackError.set(null);
+    try {
+      if (np?.isPlaying) {
+        await this.client.client.playback.pause(session.id);
+      } else {
+        await this.client.client.playback.resume(session.id);
+      }
+    } catch (err) {
+      this.playbackError.set(this.playbackErrorFor(err));
+    } finally {
+      this.playbackBusy.set(false);
+    }
+  }
+
+  // ─── Devices ──────────────────────────────────────────────────────────
+
+  async loadDevices(): Promise<void> {
+    const session = this.session();
+    if (!session) return;
+    this.devicesBusy.set(true);
+    try {
+      const res = await this.client.client.devices.list(session.id);
+      this.devices.set(res.devices);
+    } catch {
+      this.devices.set([]);
+    } finally {
+      this.devicesBusy.set(false);
+    }
+  }
+
+  async onActivateDevice(deviceId: string): Promise<void> {
+    const session = this.session();
+    if (!session) return;
+    this.devicesBusy.set(true);
+    try {
+      await this.client.client.devices.activate(session.id, deviceId);
+      await this.loadDevices();
+    } catch {
+      // realtime will resync
+    } finally {
+      this.devicesBusy.set(false);
+    }
+  }
+
+  // ─── End session ──────────────────────────────────────────────────────
 
   async endSession(): Promise<void> {
     const session = this.session();
@@ -326,6 +394,19 @@ export class HostSessionPage {
       this.ending.set(false);
     }
   }
+
+  // ─── Misc UI ──────────────────────────────────────────────────────────
+
+  copyUrl(): void {
+    const url = this.guestUrl();
+    if (!url) return;
+    void navigator.clipboard?.writeText(url).then(() => {
+      this.urlCopied.set(true);
+      setTimeout(() => this.urlCopied.set(false), 2000);
+    });
+  }
+
+  // ─── Bootstrap + realtime ─────────────────────────────────────────────
 
   private async bootstrap(sessionId: string): Promise<void> {
     try {
@@ -349,7 +430,7 @@ export class HostSessionPage {
       const items = await this.client.client.queue.list(session.id);
       this.queue.set(items);
     } catch {
-      // non-fatal — realtime stream will catch us up
+      // non-fatal
     }
   }
 
@@ -361,8 +442,42 @@ export class HostSessionPage {
     this.realtime = new RealtimeClient({
       url: `${protocol}//${host}/api/v1/sessions/${encodeURIComponent(sessionId)}/realtime`,
     });
-    const off = this.realtime.onEvent(() => void this.refreshQueue());
-    this.destroyRef.onDestroy(off);
+    this.realtime.onSnapshot((snapshot: SessionSnapshot) => {
+      this.nowPlaying.set(snapshot.nowPlaying);
+      this.nowPlayingAt.set(Date.now());
+      this.recentlyPlayed.set(snapshot.recentlyPlayed);
+      // Hosts see pending items too, so use the merged view from the snapshot.
+      this.queue.set([...snapshot.pending, ...snapshot.queue]);
+    });
+    this.realtime.on('now_playing.updated', (event) => {
+      this.nowPlaying.set(event.track);
+      this.nowPlayingAt.set(Date.now());
+    });
+    this.realtime.onEvent((event: SessionEvent) => {
+      if (
+        event.type === 'queue.item_requested' ||
+        event.type === 'queue.item_approved' ||
+        event.type === 'queue.item_rejected' ||
+        event.type === 'queue.item_removed' ||
+        event.type === 'skip_vote.updated'
+      ) {
+        void this.refreshQueue();
+      }
+    });
     this.realtime.connect();
+  }
+
+  private playbackErrorFor(err: unknown): string {
+    if (!(err instanceof ApiError)) return 'Playback control failed.';
+    switch (err.code) {
+      case 'no_provider_connected':
+        return 'Connect Spotify on the dashboard first.';
+      case 'playback_skip_not_supported':
+      case 'playback_pause_not_supported':
+      case 'playback_resume_not_supported':
+        return "Your provider doesn't support that action.";
+      default:
+        return `Playback control failed (${err.code}).`;
+    }
   }
 }

@@ -15,7 +15,7 @@
  * unparseable is surfaced via the 'error' channel; the connection stays open.
  */
 
-import type { SessionEvent, SessionEventType } from '@opendj/realtime';
+import type { SessionEvent, SessionEventType, SessionSnapshot } from '@opendj/realtime';
 
 export type RealtimeStatus = 'idle' | 'connecting' | 'open' | 'reconnecting' | 'closed';
 
@@ -48,6 +48,18 @@ interface InternalListeners {
   error: Set<RealtimeListener<unknown>>;
   status: Set<RealtimeListener<RealtimeStatus>>;
   event: Set<RealtimeListener<SessionEvent>>;
+  /**
+   * The room sends a `{ type: '_snapshot', snapshot, sessionId }` frame on
+   * connect so subscribers can render initial state without an extra REST
+   * call. It is NOT a `SessionEvent` — this channel keeps it separate.
+   */
+  snapshot: Set<RealtimeListener<SessionSnapshot>>;
+}
+
+interface SnapshotFrame {
+  type: '_snapshot';
+  snapshot: SessionSnapshot;
+  sessionId: string;
 }
 
 export class RealtimeClient {
@@ -66,6 +78,7 @@ export class RealtimeClient {
     error: new Set(),
     status: new Set(),
     event: new Set(),
+    snapshot: new Set(),
   };
   private readonly options: Required<Omit<RealtimeClientOptions, 'url' | 'webSocketImpl'>> & {
     url: string;
@@ -129,6 +142,16 @@ export class RealtimeClient {
   onEvent(listener: RealtimeListener<SessionEvent>): () => void {
     this.listeners.event.add(listener);
     return () => this.listeners.event.delete(listener);
+  }
+
+  /**
+   * Subscribe to the initial-state snapshot the room sends on connect.
+   * Fires exactly once per WS open (and again on reconnect). Use it to seed
+   * page state so the UI doesn't render blank until the first delta event.
+   */
+  onSnapshot(listener: RealtimeListener<SessionSnapshot>): () => void {
+    this.listeners.snapshot.add(listener);
+    return () => this.listeners.snapshot.delete(listener);
   }
 
   onOpen(listener: RealtimeListener<void>): () => void {
@@ -207,6 +230,20 @@ export class RealtimeClient {
       this.emit('error', err);
       return;
     }
+    // The realtime route sends an initial `{type: '_snapshot', snapshot, sessionId}`
+    // frame on every WS open. It's structurally similar to a SessionEvent
+    // (has `.type`) but it is NOT one — fan out separately so onEvent
+    // listeners don't receive it as if it were a delta.
+    if (isSnapshotFrame(payload)) {
+      for (const listener of this.listeners.snapshot) {
+        try {
+          listener(payload.snapshot);
+        } catch (err) {
+          this.emit('error', err);
+        }
+      }
+      return;
+    }
     if (!isSessionEvent(payload)) {
       this.emit('error', new Error('RealtimeClient: dropped non-SessionEvent payload'));
       return;
@@ -272,6 +309,17 @@ function isSessionEvent(value: unknown): value is SessionEvent {
   return (
     typeof value === 'object' &&
     value !== null &&
-    typeof (value as { type?: unknown }).type === 'string'
+    typeof (value as { type?: unknown }).type === 'string' &&
+    (value as { type: string }).type !== '_snapshot'
+  );
+}
+
+function isSnapshotFrame(value: unknown): value is SnapshotFrame {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    (value as { type?: unknown }).type === '_snapshot' &&
+    typeof (value as { snapshot?: unknown }).snapshot === 'object' &&
+    (value as { snapshot?: unknown }).snapshot !== null
   );
 }

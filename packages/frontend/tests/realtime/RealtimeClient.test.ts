@@ -195,4 +195,37 @@ describe('RealtimeClient — event dispatch', () => {
     MockWebSocket.instances[0]!.emitMessage({ type: 'session.ended' });
     expect(events).toHaveLength(1);
   });
+
+  it('routes a `_snapshot` frame to onSnapshot — NOT through onEvent', () => {
+    const events: SessionEvent[] = [];
+    const snapshots: unknown[] = [];
+    const client = new RealtimeClient({
+      url: 'wss://x/realtime',
+      webSocketImpl: MockWebSocket as unknown as typeof WebSocket,
+    });
+    client.onEvent((e) => events.push(e));
+    client.onSnapshot((s) => snapshots.push(s));
+    client.connect();
+    MockWebSocket.instances[0]!.emitOpen();
+    MockWebSocket.instances[0]!.emitMessage({
+      type: '_snapshot',
+      sessionId: 'sess-1',
+      snapshot: {
+        sessionId: 'sess-1',
+        nowPlaying: null,
+        recentlyPlayed: [],
+        playbackClock: null,
+        lyrics: null,
+        activeLyricsWindow: [],
+        queue: [],
+        pending: [],
+        activeGuestCount: 0,
+        queuedGuestCount: 0,
+        snapshotAtEpochMs: 0,
+      },
+    });
+    expect(events).toEqual([]);
+    expect(snapshots).toHaveLength(1);
+    expect((snapshots[0] as { sessionId: string }).sessionId).toBe('sess-1');
+  });
 });

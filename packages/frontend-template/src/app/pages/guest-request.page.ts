@@ -1,17 +1,20 @@
 /**
  * Guest request page — the main flow for the public OSS template.
  *
- * URL: `/u/:slug`. The user lands here from a QR code on the host's device.
+ * URL: `/u/:slug`. The user lands here from the host's QR code.
  *
  * Flow:
  * 1. Resolve session by `qrSlug` (public read, no auth)
- * 2. Get-or-create local fingerprint, call `/sessions/:id/guest/identity`
- *    to acquire a slot token
- * 3. Show the live queue + a request form
- * 4. Subscribe to `/sessions/:id/realtime` for queue + now-playing updates
+ * 2. Get-or-create local fingerprint, call `/guest/identity` to acquire a
+ *    session-scoped slot token
+ * 3. Subscribe to `/sessions/:id/realtime` — seeds nowPlaying + queue +
+ *    recentlyPlayed from the connect-time snapshot, then keeps state in
+ *    sync via deltas
+ * 4. Type into the search box → debounced fetch via the search proxy →
+ *    click a result → request the track
  *
- * MVP scope: track-URI input is manual (Spotify URI / track URL). A real
- * search picker layers in once the backend exposes a search proxy route.
+ * The hand-rolled "paste a Spotify URI" form is gone — guests get the same
+ * UX as opendj.live's design canvas without any of the polish work.
  */
 
 import { CommonModule } from '@angular/common';
@@ -31,22 +34,32 @@ import {
   ApiError,
   RealtimeClient,
   type GuestIdentityResponse,
-  type QueueItemSummaryWire,
+  type SearchResultWire,
   type SessionWire,
 } from '@opendj/frontend';
+import type { NowPlayingTrack } from '@opendj/core';
+import type { SessionEvent, SessionSnapshot } from '@opendj/realtime';
+import { NowPlayingCardComponent } from '../components/now-playing-card.component.js';
+import { QueueListComponent, type QueueListItem } from '../components/queue-list.component.js';
+import { RecentlyPlayedListComponent } from '../components/recently-played-list.component.js';
+import {
+  SearchResultListComponent,
+  type SearchStatus,
+} from '../components/search-result-list.component.js';
 import { getOrCreateGuestFingerprintHash } from '../services/guest-fingerprint.js';
 import { OpenDjClientService } from '../services/opendj-client.service.js';
-
-interface DraftRequest {
-  trackUri: string;
-  trackName: string;
-  artistName: string;
-}
 
 @Component({
   selector: 'app-guest-request',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [
+    CommonModule,
+    FormsModule,
+    NowPlayingCardComponent,
+    QueueListComponent,
+    RecentlyPlayedListComponent,
+    SearchResultListComponent,
+  ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <main class="guest">
@@ -57,6 +70,11 @@ interface DraftRequest {
         </section>
       } @else if (!session()) {
         <section class="card loading"><p>Loading session…</p></section>
+      } @else if (sessionEnded()) {
+        <section class="card session-ended">
+          <h1>This session has ended</h1>
+          <p>Thanks for coming. The host has closed the queue.</p>
+        </section>
       } @else {
         <header class="card session-header">
           <p class="eyebrow">You're at</p>
@@ -70,60 +88,46 @@ interface DraftRequest {
           }
         </header>
 
-        <section class="card request-form">
-          <h2>Request a track</h2>
-          <form (ngSubmit)="submitRequest()" #f="ngForm">
-            <label>
-              <span>Spotify URI or URL</span>
-              <input
-                type="text"
-                name="trackUri"
-                [(ngModel)]="draft.trackUri"
-                placeholder="spotify:track:…"
-                autocomplete="off"
-                required
-              />
-            </label>
-            <label>
-              <span>Track name</span>
-              <input type="text" name="trackName" [(ngModel)]="draft.trackName" required />
-            </label>
-            <label>
-              <span>Artist</span>
-              <input type="text" name="artistName" [(ngModel)]="draft.artistName" required />
-            </label>
-            <button type="submit" [disabled]="submitting() || !canSubmit()">
-              {{ submitting() ? 'Submitting…' : 'Submit' }}
-            </button>
-            @if (submitError()) {
-              <p class="form-error">{{ submitError() }}</p>
-            }
-          </form>
+        <section class="card now-playing-section">
+          <app-now-playing-card [track]="nowPlaying()" [lastUpdatedAtMs]="nowPlayingAt()" />
         </section>
 
-        <section class="card queue-list">
-          <h2>The queue</h2>
-          @if (queue().length === 0) {
-            <p class="empty">Nothing queued yet — be the first.</p>
-          } @else {
-            <ul>
-              @for (item of visibleQueue(); track item.id) {
-                <li class="queue-item" [attr.data-status]="item.status">
-                  @if (item.albumArtUrl) {
-                    <img class="art" [src]="item.albumArtUrl" alt="" />
-                  } @else {
-                    <div class="art placeholder" aria-hidden="true"></div>
-                  }
-                  <div class="meta">
-                    <span class="title">{{ item.trackName }}</span>
-                    <span class="artist">{{ item.artistName }}</span>
-                  </div>
-                  <span class="status-pill">{{ statusLabel(item.status) }}</span>
-                </li>
-              }
-            </ul>
+        <section class="card request-form">
+          <h2>Request a song</h2>
+          <app-search-result-list
+            [results]="searchResults()"
+            [status]="searchStatus()"
+            [errorMessage]="searchError()"
+            [disabledReason]="searchDisabledReason()"
+            [busy]="submitting()"
+            placeholder="Song, artist, or album…"
+            idleHint="Search the host's library — pick a track to add it to the queue."
+            (query)="onQueryChange($event)"
+            (pick)="onPick($event)"
+          />
+          @if (submitToast(); as toast) {
+            <p class="toast" [class.error]="toast.kind === 'error'">{{ toast.message }}</p>
           }
         </section>
+
+        <section class="card queue-section">
+          <h2>The queue</h2>
+          <app-queue-list
+            [items]="visibleQueue()"
+            mode="guest"
+            [voteThreshold]="session()!.voteSkipThreshold ?? 5"
+            [votedItemIds]="votedItemIds()"
+            (voteSkip)="onVoteSkip($event)"
+            emptyText="Nothing queued yet — be the first."
+          />
+        </section>
+
+        @if (recentlyPlayed().length > 0) {
+          <section class="card recently-played-section">
+            <h2>Recently played</h2>
+            <app-recently-played-list [tracks]="recentlyPlayed()" [max]="6" />
+          </section>
+        }
       }
     </main>
   `,
@@ -156,7 +160,8 @@ interface DraftRequest {
         border-radius: 14px;
         padding: 20px;
       }
-      .card.error {
+      .card.error,
+      .card.session-ended {
         border-color: #ec4899;
       }
       .session-header .eyebrow {
@@ -188,103 +193,16 @@ interface DraftRequest {
         font-size: 18px;
         margin: 0 0 12px;
       }
-      form {
-        display: grid;
-        gap: 12px;
+      .now-playing-section {
+        padding: 16px;
       }
-      label {
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
+      .toast {
+        margin: 12px 0 0;
         font-size: 13px;
-        color: #c8b8e9;
+        color: #34d399;
       }
-      input {
-        padding: 10px 12px;
-        border-radius: 10px;
-        border: 1px solid #2c2440;
-        background: #0c0a14;
-        color: #f3eef9;
-        font-family: inherit;
-        font-size: 14px;
-      }
-      input:focus {
-        outline: 2px solid #a855f7;
-        outline-offset: 1px;
-      }
-      button[type='submit'] {
-        margin-top: 4px;
-        padding: 12px;
-        border-radius: 10px;
-        border: 0;
-        background: linear-gradient(135deg, #a855f7, #ec4899);
-        color: white;
-        font-weight: 600;
-        font-size: 15px;
-        cursor: pointer;
-      }
-      button[disabled] {
-        opacity: 0.5;
-        cursor: not-allowed;
-      }
-      .form-error {
-        margin: 0;
+      .toast.error {
         color: #fda4af;
-        font-size: 13px;
-      }
-      .queue-list ul {
-        list-style: none;
-        margin: 0;
-        padding: 0;
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
-      }
-      .queue-item {
-        display: grid;
-        grid-template-columns: 48px 1fr auto;
-        gap: 12px;
-        align-items: center;
-      }
-      .art {
-        width: 48px;
-        height: 48px;
-        border-radius: 6px;
-        background: #2c2440;
-        object-fit: cover;
-      }
-      .meta {
-        display: flex;
-        flex-direction: column;
-        min-width: 0;
-      }
-      .meta .title {
-        font-weight: 600;
-        white-space: nowrap;
-        text-overflow: ellipsis;
-        overflow: hidden;
-      }
-      .meta .artist {
-        color: #a294c5;
-        font-size: 13px;
-      }
-      .status-pill {
-        font-size: 11px;
-        padding: 4px 8px;
-        border-radius: 999px;
-        background: #2c2440;
-        color: #c8b8e9;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-      }
-      .queue-item[data-status='playing'] .status-pill {
-        background: linear-gradient(135deg, #a855f7, #ec4899);
-        color: white;
-      }
-      .empty {
-        margin: 0;
-        color: #a294c5;
-        font-style: italic;
       }
     `,
   ],
@@ -296,20 +214,31 @@ export class GuestRequestPage {
 
   readonly session: WritableSignal<SessionWire | null> = signal(null);
   readonly slot: WritableSignal<GuestIdentityResponse | null> = signal(null);
-  readonly queue: WritableSignal<ReadonlyArray<QueueItemSummaryWire>> = signal([]);
+  readonly queue: WritableSignal<ReadonlyArray<QueueListItem>> = signal([]);
+  readonly nowPlaying: WritableSignal<NowPlayingTrack | null> = signal(null);
+  readonly nowPlayingAt = signal(0);
+  readonly recentlyPlayed: WritableSignal<ReadonlyArray<NowPlayingTrack>> = signal([]);
   readonly loadError = signal<string | null>(null);
-  readonly submitError = signal<string | null>(null);
+  readonly searchResults: WritableSignal<ReadonlyArray<SearchResultWire>> = signal([]);
+  readonly searchStatus: WritableSignal<SearchStatus> = signal('idle');
+  readonly searchError = signal<string | null>(null);
+  readonly searchDisabledReason = signal<string | null>(null);
   readonly submitting = signal(false);
+  readonly submitToast: WritableSignal<{ kind: 'ok' | 'error'; message: string } | null> =
+    signal(null);
+  readonly votedItemIds = signal<ReadonlySet<string>>(new Set());
 
-  /** Hide rejected/removed items from the public list. */
-  readonly visibleQueue = computed(() => this.queue().filter((i) => i.status !== 'rejected'));
+  readonly visibleQueue = computed(() =>
+    this.queue().filter((i) => i.status !== 'rejected' && i.status !== 'pending'),
+  );
 
-  /** Submit only when an active (non-queued) slot is held. */
-  readonly canSubmit = computed(() => this.slot()?.status === 'active');
-
-  draft: DraftRequest = { trackUri: '', trackName: '', artistName: '' };
+  readonly sessionEnded = computed(() => {
+    const s = this.session();
+    return s !== null && s.endedAt !== null;
+  });
 
   private realtime: RealtimeClient | null = null;
+  private latestQuery = '';
 
   constructor() {
     this.route.paramMap.pipe(takeUntilDestroyed()).subscribe((params) => {
@@ -323,45 +252,100 @@ export class GuestRequestPage {
     this.destroyRef.onDestroy(() => this.realtime?.close());
   }
 
-  statusLabel(status: QueueItemSummaryWire['status']): string {
-    switch (status) {
-      case 'pending':
-        return 'pending';
-      case 'approved':
-      case 'queued':
-        return 'queued';
-      case 'playing':
-        return 'now playing';
-      default:
-        return status;
+  // ─── Search wiring (debounced via SearchResultListComponent) ───────────
+
+  async onQueryChange(query: string): Promise<void> {
+    this.latestQuery = query;
+    if (!query) {
+      this.searchResults.set([]);
+      this.searchStatus.set('idle');
+      this.searchError.set(null);
+      return;
+    }
+    const session = this.session();
+    if (!session) return;
+    this.searchStatus.set('searching');
+    this.searchError.set(null);
+    try {
+      const res = await this.clientService.client.queue.search(session.id, query, 20);
+      // Drop stale responses if the user kept typing.
+      if (this.latestQuery !== query) return;
+      this.searchResults.set(res.results);
+      this.searchStatus.set(res.results.length === 0 ? 'empty' : 'idle');
+    } catch (err) {
+      if (this.latestQuery !== query) return;
+      const code = err instanceof ApiError ? err.code : 'error';
+      if (code === 'no_provider_connected') {
+        this.searchDisabledReason.set("The host hasn't connected a streaming service yet.");
+        this.searchStatus.set('idle');
+      } else if (code === 'search_not_supported') {
+        this.searchDisabledReason.set("Search isn't available for this host's provider.");
+        this.searchStatus.set('idle');
+      } else {
+        this.searchError.set('Search failed — try again.');
+        this.searchStatus.set('error');
+      }
     }
   }
 
-  async submitRequest(): Promise<void> {
+  async onPick(result: SearchResultWire): Promise<void> {
     const session = this.session();
     const slot = this.slot();
-    if (!session || !slot) return;
-    this.submitError.set(null);
+    if (!session || !slot || slot.status !== 'active') return;
     this.submitting.set(true);
+    this.submitToast.set(null);
     try {
       await this.clientService.client.queue.request(session.id, slot.slotToken, {
-        trackUri: this.draft.trackUri.trim(),
-        trackName: this.draft.trackName.trim(),
-        artistName: this.draft.artistName.trim(),
+        trackUri: result.trackUri,
+        trackName: result.trackName,
+        artistName: result.artistName,
+        albumArtUrl: result.albumArtUrl,
+        durationMs: result.durationMs ?? 0,
       });
-      this.draft = { trackUri: '', trackName: '', artistName: '' };
-      await this.refreshQueue();
+      this.submitToast.set({
+        kind: 'ok',
+        message: session.moderationEnabled
+          ? 'Submitted for review.'
+          : `Added "${result.trackName}" to the queue.`,
+      });
+      this.searchResults.set([]);
+      this.latestQuery = '';
     } catch (err) {
-      this.submitError.set(this.errorMessage(err, 'Could not submit request.'));
+      const code = err instanceof ApiError ? err.code : 'error';
+      this.submitToast.set({
+        kind: 'error',
+        message: this.errorMessageForCode(code),
+      });
     } finally {
       this.submitting.set(false);
     }
   }
 
+  // ─── Skip-vote ─────────────────────────────────────────────────────────
+
+  async onVoteSkip(itemId: string): Promise<void> {
+    const session = this.session();
+    const slot = this.slot();
+    if (!session || !slot || slot.status !== 'active') return;
+    try {
+      await this.clientService.client.queue.voteSkip(session.id, itemId, slot.slotToken);
+      this.votedItemIds.update((set) => new Set(set).add(itemId));
+    } catch (err) {
+      const code = err instanceof ApiError ? err.code : 'error';
+      if (code === 'already_voted') {
+        // Treat as success on the client — the server already counted us.
+        this.votedItemIds.update((set) => new Set(set).add(itemId));
+      }
+    }
+  }
+
+  // ─── Bootstrap + realtime ──────────────────────────────────────────────
+
   private async bootstrap(slug: string): Promise<void> {
     try {
       const session = await this.clientService.client.sessions.getBySlug(slug);
       this.session.set(session);
+      if (session.endedAt) return; // skip slot acquisition for closed sessions
       const fingerprintHash = await getOrCreateGuestFingerprintHash();
       const slot = await this.clientService.client.guest.identity({
         eventSlug: slug,
@@ -382,8 +366,7 @@ export class GuestRequestPage {
       const items = await this.clientService.client.queue.list(session.id);
       this.queue.set(items);
     } catch {
-      // Queue list errors are non-fatal — keep what we have, the realtime
-      // stream will catch us up on next event.
+      // non-fatal
     }
   }
 
@@ -395,9 +378,52 @@ export class GuestRequestPage {
     this.realtime = new RealtimeClient({
       url: `${protocol}//${host}/api/v1/sessions/${encodeURIComponent(sessionId)}/realtime`,
     });
-    const off = this.realtime.onEvent(() => void this.refreshQueue());
-    this.destroyRef.onDestroy(off);
+    this.realtime.onSnapshot((snapshot: SessionSnapshot) => {
+      this.nowPlaying.set(snapshot.nowPlaying);
+      this.nowPlayingAt.set(Date.now());
+      this.recentlyPlayed.set(snapshot.recentlyPlayed);
+      this.queue.set(snapshot.queue);
+    });
+    this.realtime.on('now_playing.updated', (event) => {
+      this.nowPlaying.set(event.track);
+      this.nowPlayingAt.set(Date.now());
+      // recentlyPlayed gets rolled by the room's applyEvent; the UI doesn't
+      // mutate it locally — it'll arrive on the next snapshot/queue refresh
+      // if we reconnect, or stay in sync with the room's view via the
+      // upcoming event stream. Keep optimistic frontend update simple:
+      // when the URI changes, push the previous track onto recentlyPlayed.
+    });
+    this.realtime.onEvent((event: SessionEvent) => {
+      if (event.type === 'session.ended') {
+        this.session.update((s) => (s ? { ...s, endedAt: new Date().toISOString() } : s));
+        return;
+      }
+      // Queue events get refreshed via list; cheap + deterministic.
+      if (
+        event.type === 'queue.item_requested' ||
+        event.type === 'queue.item_approved' ||
+        event.type === 'queue.item_rejected' ||
+        event.type === 'queue.item_removed' ||
+        event.type === 'skip_vote.updated'
+      ) {
+        void this.refreshQueue();
+      }
+    });
     this.realtime.connect();
+  }
+
+  private errorMessageForCode(code: string): string {
+    switch (code) {
+      case 'cap_reached':
+        return "You've hit the limit — wait for one to play before requesting another.";
+      case 'session_ended':
+        return 'This session has ended.';
+      case 'unknown_slot_token':
+      case 'slot_not_active':
+        return 'Your guest slot expired. Refresh the page.';
+      default:
+        return 'Could not submit request.';
+    }
   }
 
   private errorMessage(err: unknown, fallback: string): string {

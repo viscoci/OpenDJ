@@ -14,9 +14,11 @@
  */
 
 import { AuthApi } from './auth.js';
+import { DevicesApi } from './devices.js';
 import { GuestApi } from './guest.js';
 import { HttpClient, type HttpClientOptions } from './http.js';
 import { LyricsApi } from './lyrics.js';
+import { PlaybackApi } from './playback.js';
 import { ProviderConnectionsApi } from './providerConnections.js';
 import { PublicConfigApi } from './publicConfig.js';
 import { QueueApi } from './queue.js';
@@ -31,6 +33,8 @@ export class OpenDjClient {
   readonly lyrics: LyricsApi;
   readonly providerConnections: ProviderConnectionsApi;
   readonly publicConfig: PublicConfigApi;
+  readonly playback: PlaybackApi;
+  readonly devices: DevicesApi;
 
   constructor(options: HttpClientOptions) {
     this.http = new HttpClient(options);
@@ -41,5 +45,7 @@ export class OpenDjClient {
     this.lyrics = new LyricsApi(this.http);
     this.providerConnections = new ProviderConnectionsApi(this.http);
     this.publicConfig = new PublicConfigApi(this.http);
+    this.playback = new PlaybackApi(this.http);
+    this.devices = new DevicesApi(this.http);
   }
 }
