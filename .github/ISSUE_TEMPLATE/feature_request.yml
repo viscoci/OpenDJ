@@ -1,5 +1,5 @@
 name: Feature request
-description: Suggest an enhancement to OpenDJ OSS
+description: Suggest an enhancement to OpenDJ
 labels: [enhancement]
 body:
   - type: markdown
@@ -7,7 +7,7 @@ body:
       value: |
         Thanks for suggesting a feature! Before filing, please check [Discussions](https://github.com/viscoci/opendj/discussions) — open-ended ideas often start there.
 
-        **Hosted-only features** (Branding Studio, billing, hosted analytics, native mobile app) belong in the private `opendj-live` repo, not here.
+        **Commercial-only features** (Branding Studio, billing, product analytics dashboards, native mobile shells) are out of scope for this repo — see [`docs/REPO_BOUNDARY.md`](../../docs/REPO_BOUNDARY.md).
   - type: textarea
     id: problem
     attributes:

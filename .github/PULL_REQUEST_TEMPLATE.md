@@ -18,7 +18,7 @@
 - [ ] `pnpm turbo run lint typecheck test` passes locally
 - [ ] Changeset added (`pnpm changeset`) if `packages/*` changed — or `[skip-changeset]` in PR title for docs/CI/chore-only
 - [ ] Docs updated (README, package README, `docs/`) if behavior or API changed
-- [ ] No hosted-only content (billing, Branding Studio, hosted analytics, native mobile) — that lives in `opendj-live`
+- [ ] No commercial-only content (billing, Branding Studio, product analytics dashboards, native mobile shells) — see `docs/REPO_BOUNDARY.md`
 
 ## Linked issues
 

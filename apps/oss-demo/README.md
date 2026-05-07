@@ -14,7 +14,7 @@ docker compose up
 # → postgres on :5432
 ```
 
-Visit `http://localhost:8888/api/v1/health` to confirm the server is up. Open `app.opendj.live`-style routing comes from the frontend template (P0 still in flight) — the API is independently usable today via curl/Postman.
+Visit `http://localhost:8888/api/v1/health` to confirm the server is up. The bundled Angular frontend serves the host + guest + TV pages alongside the API; you can also drive the API directly via curl/Postman.
 
 ## Local development without Docker
 

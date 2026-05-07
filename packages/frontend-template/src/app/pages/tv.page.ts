@@ -5,10 +5,10 @@
  * page paints immediately without a WS handshake, then opens the realtime
  * stream for delta events. Read-only — no controls, no auth.
  *
- * Intentionally minimal vs. the polished opendj.live TV experience
- * (overlay/centered/split lyrics layouts, custom backdrops, branding).
- * Self-hosters get a working "cast to TV" page; hosted differentiates on
- * UX polish.
+ * Intentionally minimal — a working "cast to TV" page covering the
+ * essentials (now-playing, QR to join, Up Next). Polished layouts
+ * (overlay/centered/split lyrics, custom backdrops, branding) are out of
+ * scope here and left to downstream consumers.
  */
 
 import { CommonModule } from '@angular/common';

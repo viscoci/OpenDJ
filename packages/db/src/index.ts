@@ -1,8 +1,9 @@
 /**
  * @opendj/db — Drizzle schema + Postgres-js client factory for OpenDJ.
  *
- * Includes all OSS tables (everything except hosted-only `subscriptions` and
- * private analytics, which live in `opendj-live`).
+ * Includes the foundation tables. Commercial extensions like `subscriptions`
+ * or product/funnel analytics belong in downstream consumer migrations, not
+ * here.
  *
  * See docs/agent-brief.md §"Database schema".
  */

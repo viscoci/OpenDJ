@@ -1,6 +1,6 @@
 # @opendj/realtime
 
-Runtime-neutral realtime contracts. The same interface drives the OSS in-process `NodeSessionRoom` and the hosted Cloudflare Durable Object `SessionRoom` (in `opendj-live`).
+Runtime-neutral realtime contracts. The same interface drives the in-process `NodeSessionRoom` (Node deploys) and can back a Cloudflare Durable Object `SessionRoom` actor on Workers deploys.
 
 Contents (planned — see [`docs/agent-brief.md`](../../docs/agent-brief.md) §"Realtime and caching architecture"):
 

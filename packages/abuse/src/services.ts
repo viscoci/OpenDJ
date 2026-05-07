@@ -2,8 +2,8 @@
  * Service interfaces for abuse prevention. Concrete implementations live in
  * @opendj/backend (where they have access to Postgres and the realtime room).
  *
- * Hosted may layer additional analytics/dashboards in `opendj-live`'s
- * `packages/analytics`, but the OSS contracts must stay extension-friendly.
+ * Downstream consumers may layer additional analytics or dashboards on top;
+ * these contracts must stay extension-friendly.
  */
 
 import type { AbuseDecision } from './types/decision.js';

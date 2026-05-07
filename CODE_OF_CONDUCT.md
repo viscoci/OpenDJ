@@ -12,7 +12,7 @@ By participating in this project — opening issues, submitting PRs, joining Dis
 
 If you witness or experience behavior that violates this Code of Conduct, please report it privately by emailing the project maintainers:
 
-📬 `conduct@opendj.live` _(placeholder — will be activated when the project's email infrastructure is set up; until then, use [GitHub's report content feature](https://docs.github.com/en/communities/maintaining-your-safety-on-github/reporting-abuse-or-spam) or open a private discussion with a maintainer)_
+📬 _A dedicated reporting address has not been set up yet. Until then, use [GitHub's report-content feature](https://docs.github.com/en/communities/maintaining-your-safety-on-github/reporting-abuse-or-spam) or open a private discussion with a maintainer._
 
 All reports are handled confidentially. Maintainers are obligated to respect the reporter's privacy.
 

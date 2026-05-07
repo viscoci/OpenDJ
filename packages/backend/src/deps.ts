@@ -4,10 +4,10 @@
  * Brief §"Provider registry pattern" — no decorator DI. A small typed record
  * is easier for Workers, tests, and agents to reason about than InversifyJS.
  *
- * `createDeps(options)` is the canonical wiring used by `apps/oss-demo` and
- * `opendj-live/apps/api`. Tests construct individual services with in-memory
- * repositories; production passes a Drizzle `Database` and the OAuth client
- * credentials.
+ * `createDeps(options)` is the canonical wiring used by `apps/oss-demo`; a
+ * Workers entry point can call it the same way. Tests construct individual
+ * services with in-memory repositories; production passes a Drizzle
+ * `Database` and the OAuth client credentials.
  */
 
 import type { Database } from '@opendj/db';

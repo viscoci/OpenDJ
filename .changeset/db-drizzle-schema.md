@@ -25,6 +25,6 @@ Land the full Drizzle schema for OpenDJ OSS — 19 tables across 7 domain files.
 
 **drizzle-kit config** at `drizzle.config.ts` ready to generate migrations once schema stabilizes (`pnpm --filter @opendj/db db:generate`).
 
-**What's NOT in this package** (per the OSS/hosted boundary in `docs/REPO_BOUNDARY.md`): `subscriptions` and private hosted analytics dashboards — those live in the private `opendj-live` repo. `action_events` and `abuse_subjects` ARE included here because abuse prevention is core product safety, not business analytics.
+**What's NOT in this package** (per `docs/REPO_BOUNDARY.md`): `subscriptions` and product/funnel analytics dashboards — those belong in downstream consumer migrations, not the foundation. `action_events` and `abuse_subjects` ARE included here because abuse prevention is core product safety, not business analytics.
 
 9 tests covering schema-shape inference and client/schema export surface.

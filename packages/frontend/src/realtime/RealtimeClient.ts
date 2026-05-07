@@ -21,7 +21,7 @@ export type RealtimeStatus = 'idle' | 'connecting' | 'open' | 'reconnecting' | '
 
 export interface RealtimeClientOptions {
   /**
-   * Full WebSocket URL — typically `wss://app.opendj.live/api/v1/sessions/<id>/realtime`.
+   * Full WebSocket URL — typically `wss://your-app.example/api/v1/sessions/<id>/realtime`.
    * The caller composes it (the client knows nothing about your base URL).
    */
   url: string;

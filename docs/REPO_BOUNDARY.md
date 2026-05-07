@@ -1,15 +1,8 @@
-# Repo boundary: OSS vs hosted
+# Repository scope
 
-OpenDJ ships as **two repositories**, on purpose:
+OpenDJ aims to be a portfolio-grade, reusable foundation for collaborative music-queue products. Contributors land changes that fit that scope; product-polish or commercial concerns are intentionally out of scope so the foundation stays small and reusable.
 
-|               | Public OSS                                                                                        | Private hosted                                                       |
-| ------------- | ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| Repo          | [`viscoci/opendj`](https://github.com/viscoci/opendj) (this one)                                  | [`viscoci/opendj-live`](https://github.com/viscoci/opendj-live)      |
-| License       | MIT                                                                                               | Proprietary                                                          |
-| Purpose       | Reusable foundation: domain logic, contracts, primitives, basic frontend template, self-host demo | Commercial implementation deployed to `opendj.live`                  |
-| Deploy target | Docker Compose on a single Node host                                                              | Cloudflare Pages + Workers + Durable Objects + Hyperdrive (Postgres) |
-
-## Belongs in this OSS repo
+## In scope
 
 - `@opendj/core` — domain logic, provider contracts, queue rules, plan gates
 - `@opendj/db` — Drizzle schema, migrations, query helpers
@@ -20,35 +13,30 @@ OpenDJ ships as **two repositories**, on purpose:
 - `@opendj/sync` — song timing/synchronization primitives
 - `@opendj/lyrics` — lyrics lookup, LRC parsing, cache contracts, feedback hooks
 - `@opendj/frontend` — reusable Angular components/services
-- `@opendj/frontend-template` — basic Angular 21 OSS frontend (Capacitor-ready, web-first)
+- `@opendj/frontend-template` — Angular 21 frontend (Capacitor-ready, web-first)
 - `@opendj/app-shell` — runtime/platform adapter interfaces
 - `@opendj/agent-tools` — dev-only MCP server (P2)
 - `apps/oss-demo` — Docker Compose self-host reference
 - `examples/` — minimal usage examples
 - `docs/` — public architecture + onboarding
 
-## Belongs ONLY in `opendj-live`
+## Out of scope
 
-- Cloudflare deployment configuration for `opendj.live`, `app.opendj.live`, `api.opendj.live`
-- Durable Object `SessionRoom` implementation
-- Billing webhook handlers, Stripe (or other) subscription provider secrets
-- `subscriptions` table migrations and any private hosted funnel/product analytics
-- Branding Studio, white-label, paid zone management UI, ad suppression
-- Hosted product analytics dashboards
-- Capacitor iOS/Android wrapper (`apps/mobile`)
-- Desktop shell experiment
-- Production dashboards, incident docs, internal board documents
-- Any `.env` or secrets (only `.env.example` is allowed in OSS)
+These either belong in the consumer of the libraries (a deploy, a fork, a commercial product) or are deployment-environment specifics that don't generalize:
+
+- Branding Studio, white-label, ad suppression, "Pro hides ads" upsells
+- Billing / subscription provider integrations (Stripe webhooks, plan gates beyond the abstract claims model)
+- Production analytics dashboards and any private funnel/product analytics tables
+- Specific cloud-deploy configuration tied to a particular vendor account
+- Polished TV layouts (overlay / centered / split lyrics, custom backdrops, sponsor strips)
+- Polished onboarding wizards and multi-variant OAuth error screens
+- Capacitor iOS/Android wrappers — the foundation is Capacitor-ready; the actual native shells live in your fork
+- Internal incident docs, board documents, deployment runbooks
+- Any `.env` or secrets — only `.env.example` files belong here
 - MCP config files referencing local absolute paths or private tokens
 
-## Why two repos?
+## Why this split
 
-The OSS repo is a **portfolio-grade reusable foundation**. The private repo is the **commercial business implementation**.
+A reusable foundation has two failure modes: (a) growing too narrow to be useful end-to-end, or (b) growing so wide it stops being a foundation and starts being a single product. The list above is the line — anything in scope must be either a generic primitive, a contract, or the minimum needed to demonstrate the primitives end-to-end.
 
-Open-sourcing the entire hosted product would either (a) leak business logic that pays for further development, or (b) require constant scrubbing of "private files removed" diffs. Splitting at the package boundary keeps both repos honest:
-
-- OSS contributors can extend the libraries without seeing or maintaining hosted secrets.
-- The hosted product can iterate on commercial features (Branding Studio, billing, analytics) without polluting the public repo's history.
-- `opendj.live` is presented as **a working hosted example built on these libraries**, not "the same code with private files removed."
-
-If you find yourself wanting to add hosted-only content to a PR here, that work belongs in `opendj-live` instead.
+If a PR adds product-polish, branded UX, or vendor-specific deploy config, that work belongs in the deployment / fork that consumes this repo, not here.

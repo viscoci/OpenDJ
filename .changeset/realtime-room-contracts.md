@@ -9,7 +9,7 @@ Land `@opendj/realtime` room contracts.
 
 **Interface:**
 
-- `RealtimeRoom` — runtime-neutral interface implemented by both `NodeSessionRoom` (OSS) and the Cloudflare Durable Object `SessionRoom` (in `opendj-live`)
+- `RealtimeRoom` — runtime-neutral interface implemented by `NodeSessionRoom` (Node deploys) and implementable by a Cloudflare Durable Object `SessionRoom` actor on Workers deploys
 - Methods: `connect(client)` / `disconnect(clientId)` / `getSnapshot()` / `publish(event)` / `mutate<T>(command)`
 
 **Types:**

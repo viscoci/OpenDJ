@@ -11,7 +11,7 @@ Add domain types, constants, queue logic, and plan feature gates.
 - `Guest`
 - `QueueItem` + `QueueItemStatus` + `ACTIVE_QUEUE_STATUSES` + `isActiveQueueItem`
 
-**Constants** (single source of truth shared with backend, frontend, and `opendj-live`):
+**Constants** (single source of truth shared across backend, frontend, and downstream consumers):
 
 - `HOSTED_FREE_TIER_GUEST_CAP = 12`
 - `DEFAULT_SONGS_PER_GUEST_CAP = 3`

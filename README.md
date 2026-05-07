@@ -11,9 +11,7 @@
 > Collaborative, multi-provider music queue management for live events.
 > Guests scan a QR code to request songs; hosts moderate the queue from a dashboard.
 
-OpenDJ is the **public OSS foundation** for a collaborative music queue product. It provides reusable packages — provider abstractions, realtime room contracts, queue logic, lyrics/karaoke primitives, an Angular template — that you can self-host or build on top of.
-
-A working hosted implementation lives at [opendj.live](https://opendj.live), built on these libraries. **The hosted product is a separate, private repository** ([`opendj-live`](https://github.com/viscoci/opendj-live)) — not the same source code with private files removed.
+OpenDJ is a **fully self-hostable OSS implementation** of a collaborative music queue product. It ships reusable packages — provider abstractions, realtime room contracts, queue logic, lyrics/karaoke primitives, an Angular template — and a reference deploy in `apps/oss-demo` that you can boot end-to-end with a single Docker Compose command.
 
 ## What's working
 
@@ -23,7 +21,7 @@ End-to-end demo via `docker compose up`:
 - 🎛️ **Host journey** — register / log in (email + password or Google OAuth) → personal account auto-bootstrapped → create session → moderate the queue → **skip / pause / resume playback** → swap which Spotify Connect device plays audio → end session.
 - 📺 **TV view** — public read-only `/tv/:slug` for casting to a room screen. Fullscreen now-playing, QR to join, up-next queue, listener count.
 - 🎵 **Spotify provider** — search, queue track, now-playing read, skip / pause / resume, volume read+set, device list + transfer playback. Plus the now-playing poller that publishes diff-based updates to the realtime room every 5s while subscribers are connected.
-- 🔌 **Realtime** — per-session WebSocket room with snapshot-on-connect + delta events (`now_playing.updated`, `queue.item_*`, `skip_vote.updated`, `session.ended`). In-process registry on Node, swappable for Cloudflare Durable Objects on hosted.
+- 🔌 **Realtime** — per-session WebSocket room with snapshot-on-connect + delta events (`now_playing.updated`, `queue.item_*`, `skip_vote.updated`, `session.ended`). In-process registry on Node, swappable for Cloudflare Durable Objects on Workers.
 - 🛡️ **Auth model** — `__Host-` prefixed cookies for hosts, opaque bearer tokens for guest slots, capability-based claims (`session:create`, `queue:moderate`, `provider:control_playback`, etc.) checked per-request. Email verification + password reset wired (single-use, SHA-256-hashed tokens).
 
 > **Status:** every P0 package is real (no stubs), `pnpm turbo run typecheck test` is green across the workspace (~700 tests), and `apps/oss-demo` boots end-to-end behind a single port. Migrations apply on container start.
@@ -107,12 +105,12 @@ See [`docs/agent-brief.md`](./docs/agent-brief.md) for the full architectural sp
 - **Hono** server framework (Node + Cloudflare Workers compatible)
 - **Drizzle ORM + Postgres** (Postgres.js adapter; Workers + Node)
 - **Angular 21** for the OSS frontend template (standalone components, signals, zoneless change detection)
-- **Capacitor-ready** but web-first; native shells live in `opendj-live`
+- **Capacitor-ready** but web-first
 - **Argon2id** password hashing
 - **Vitest** for unit tests
 - **Turborepo + pnpm workspaces**
 - **Changesets** for versioning and changelogs
-- Realtime: in-process room registry for OSS (optional Valkey scale-out); Cloudflare Durable Objects for hosted
+- Realtime: in-process room registry for Node (optional Valkey scale-out); Cloudflare Durable Objects on Workers deploys
 
 ## Contributing
 

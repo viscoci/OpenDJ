@@ -1,27 +1,20 @@
 # OpenDJ — Agent Build Brief
 
-You are building **OpenDJ** (`opendj.live`) from scratch — a collaborative, multi-provider music queue management SaaS for live events. Guests scan a QR code to request songs; hosts moderate the queue from a dashboard. Read this document fully before writing any code.
+You are building **OpenDJ** — a collaborative, multi-provider music queue management product for live events. Guests scan a QR code to request songs; hosts moderate the queue from a dashboard. Read this document fully before writing any code.
 
 ---
 
 ## What you are building
 
-A clean, professional foundation for a collaborative, multi-provider music queue product, split into an OSS project and a private hosted implementation.
+A clean, professional foundation for a collaborative, multi-provider music queue product, shipped as a self-hostable OSS implementation.
 
-1. **OpenDJ OSS** — public repo at `github.com/viscoci/opendj`. Self-hosted, Node 22 LTS + Docker Compose, single-tenant. This is the reusable foundation: core domain logic, provider contracts, backend primitives, realtime abstractions, and a basic template frontend with free-tier functionality. It is also a portfolio asset, so README quality, commit hygiene, CI, examples, and docs must reflect senior SWE standards.
-2. **OpenDJ Live** — private repo at `github.com/viscoci/opendj-live`. Hosted commercial implementation deployed to `opendj.live`, using Cloudflare Pages + Workers + Durable Objects + Postgres via Hyperdrive. It consumes the OSS packages as dependencies and implements the full hosted product, paid features, billing, private product analytics, branding, and production operations.
+OpenDJ is a public repo at `github.com/viscoci/opendj`. Self-hosted, Node 22 LTS + Docker Compose, single-tenant by default. It is a reusable foundation: core domain logic, provider contracts, backend primitives, realtime abstractions, and a working Angular frontend template. It is also a portfolio asset, so README quality, commit hygiene, CI, examples, and docs must reflect senior SWE standards.
 
-**Architectural thesis:** The public repo should expose the foundation, not the entire business. The OSS project provides reusable packages such as `@opendj/core`, `@opendj/auth`, `@opendj/backend`, `@opendj/realtime`, `@opendj/sync`, `@opendj/lyrics`, `@opendj/frontend`, and `@opendj/frontend-template`. The private `opendj-live` repo composes those packages into the production SaaS and adds commercial-only feature modules. Multi-tenancy is still achieved by always carrying an `account_id`; OSS simply runs with exactly one account row. Realtime session state is abstracted behind a `RealtimeRoom` interface so hosted sessions use Durable Objects and OSS sessions use an in-process WebSocket room with optional Valkey pub/sub when scaling beyond one Node process. The frontend should be web-first but Capacitor-ready from the start, so the same Angular application can later ship as iOS, Android, and possibly desktop shells without changing backend contracts or fragmenting the product.
-
-**Open-source boundary:** Do not open-source the complete `opendj.live` implementation. The OSS README should present `opendj.live` as a working hosted example built on the OSS libraries, not as the same repo with private files removed.
+**Architectural thesis:** The repo exposes a reusable foundation rather than a single packaged product. The libraries (`@opendj/core`, `@opendj/auth`, `@opendj/backend`, `@opendj/realtime`, `@opendj/sync`, `@opendj/lyrics`, `@opendj/frontend`, `@opendj/frontend-template`) are runtime-neutral and individually testable; downstream consumers (your fork, a SaaS deploy, a Capacitor app) compose them. Multi-tenancy is achieved by always carrying an `account_id`; the OSS reference deploy runs with exactly one account row. Realtime session state is abstracted behind a `RealtimeRoom` interface so Node deploys use an in-process WebSocket room (with optional Valkey pub/sub when scaling beyond one process) and Workers deploys can use Cloudflare Durable Objects. The frontend is web-first but Capacitor-ready from the start, so the same Angular application can later ship as iOS, Android, or desktop shells without changing backend contracts.
 
 ---
 
 ## Repository layout
-
-Use two repositories. The public repo is a productized foundation. The private repo is the hosted business implementation.
-
-### Public repo: `github.com/viscoci/opendj`
 
 ```
 opendj/
@@ -63,32 +56,9 @@ opendj/
     └── AGENTS.md
 ```
 
-### Private repo: `github.com/viscoci/opendj-live`
-
-```
-opendj-live/
-├── apps/
-│   ├── landing/                     ← `opendj.live` marketing site
-│   ├── app/                         ← `app.opendj.live` full hosted SPA / shared web build
-│   ├── mobile/                      ← P2 Capacitor iOS/Android wrapper around the hosted app shell
-│   ├── desktop/                     ← P2/P3 desktop shell experiment, only if justified
-│   └── api/                         ← `api.opendj.live` Cloudflare Worker
-│       ├── src/worker.ts
-│       ├── src/realtime/SessionRoom.ts
-│       ├── queues/
-│       ├── cron/
-│       └── wrangler.toml
-├── packages/
-│   ├── live-features/               ← paid/commercial feature modules
-│   ├── billing/                     ← subscriptions, webhooks, plan enforcement
-│   ├── analytics/                   ← private hosted funnel/product analytics dashboards
-│   └── branding/                    ← Branding Studio, white-label, templates
-└── package.json                     ← depends on @opendj/* packages
-```
-
 ### Package publishing
 
-Publish the public packages under the `@opendj/*` npm scope when stable:
+Publish the packages under the `@opendj/*` npm scope when stable:
 
 - `@opendj/core`
 - `@opendj/db`
@@ -102,7 +72,7 @@ Publish the public packages under the `@opendj/*` npm scope when stable:
 - `@opendj/frontend-template`
 - `@opendj/app-shell`
 
-During early development, `opendj-live` may consume `github:viscoci/opendj` workspace packages directly. Move to npm releases once the package boundaries settle.
+Downstream consumers can either pin to published versions or pull the workspace directly via `github:viscoci/opendj`.
 
 ---
 
@@ -110,40 +80,40 @@ During early development, `opendj-live` may consume `github:viscoci/opendj` work
 
 The original stack is close, but the weak spot is realtime/shared session state. Hundreds of guests watching the same queue should not all poll Postgres or hit normal stateless API routes for every queue/progress update. The hosted layer should treat each live session as a small stateful actor.
 
-| Concern                | Choice                                                                                               | Reason                                                                                                                                                                                                                                                                                                                                                                                                        |
-| ---------------------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Server framework       | **Hono**                                                                                             | Keep. Runs cleanly on Node and Cloudflare Workers; good fit for one route tree across deploy targets.                                                                                                                                                                                                                                                                                                         |
-| Runtime                | **Node 22 LTS for OSS; Cloudflare Workers for hosted**                                               | Node 20 is still acceptable, but starting new work on Node 22 gives a longer support runway.                                                                                                                                                                                                                                                                                                                  |
-| Language               | **TypeScript strict**                                                                                | Everywhere, no exceptions.                                                                                                                                                                                                                                                                                                                                                                                    |
-| ORM / SQL              | **Drizzle ORM + Postgres.js adapter**                                                                | Drizzle keeps schema/type control; Postgres.js works well with Cloudflare Hyperdrive and Node. Avoid `node-postgres` in code that must run in Workers.                                                                                                                                                                                                                                                        |
-| Primary database       | **Postgres**                                                                                         | Source of truth for accounts, sessions, queue history, billing, and analytics. Hosted recommendation: Neon first for low initial cost + branching/autoscaling; any managed Postgres remains swappable through `DATABASE_URL` + Hyperdrive.                                                                                                                                                                    |
-| Hosted realtime/cache  | **Cloudflare Durable Objects per live session**                                                      | One authoritative room actor per session handles WebSockets, hot queue state, guest slots, heartbeats, skip votes, and fan-out. This avoids Redis for hosted while remaining horizontally scalable.                                                                                                                                                                                                           |
-| Hosted background work | **Cloudflare Queues + scheduled Workers**                                                            | Use Queues for analytics ingestion, provider command retries, token refresh work, billing webhooks, and non-blocking jobs. Use cron only for periodic sweeps.                                                                                                                                                                                                                                                 |
-| OSS realtime/cache     | **In-process room registry; optional Valkey**                                                        | Default self-host should stay cheap and simple. Add Valkey only when the OSS deploy runs more than one app container.                                                                                                                                                                                                                                                                                         |
-| Frontend               | **Angular 21 + Capacitor-ready app architecture**                                                    | Public repo ships reusable `@opendj/frontend` components plus a basic `@opendj/frontend-template`; private `opendj-live` ships the full hosted SPA. Keep the app web-first, but avoid assumptions that would prevent wrapping it with Capacitor later. Angular now has stronger AI tooling, MCP support, production-ready zoneless change detection, signals, standalone components, and modern control flow. |
-| Frontend state         | **Angular signals + resource/httpResource where stable**                                             | Keep state explicit and fast. Avoid heavy global state libraries until real complexity appears.                                                                                                                                                                                                                                                                                                               |
-| Native/mobile shell    | **Ionic Capacitor, P2**                                                                              | Use Capacitor as the planned native runtime for iOS/Android wrappers, but do not make native apps block the web/SaaS launch. Ionic UI components may be used where they help mobile polish, but the OpenDJ design system remains authoritative.                                                                                                                                                               |
-| DI                     | **Explicit provider registry / factory functions, not InversifyJS**                                  | Inversify adds decorators/reflection/bundling complexity. A small typed registry is easier for Workers, tests, and agents to reason about.                                                                                                                                                                                                                                                                    |
-| API contract           | **OpenAPI generated from route schemas**                                                             | Gives the Angular app, tests, docs, and MCP/dev agents a single contract.                                                                                                                                                                                                                                                                                                                                     |
-| Auth / identity        | **OSS `@opendj/auth` package with OAuth/OIDC, email/password fallback, server sessions, and claims** | Hosts and guests are both users. Authorization must check token/session claims at every protected route instead of assuming host-only auth.                                                                                                                                                                                                                                                                   |
-| Abuse prevention       | **OSS `@opendj/abuse` package + realtime room enforcement**                                          | Hosts should be able to leave a session running with minimal babysitting. Abuse detection must operate near real time using request, slot, vote, search, and device/fingerprint signals.                                                                                                                                                                                                                      |
-| Song synchronization   | **`@opendj/sync` timing contracts + adapters**                                                       | OSS provides predicted playback positions, normalized progress helpers, and adapter interfaces for lyrics, lighting, and other time-based integrations. Concrete provider/integration implementations can live in `opendj-live` or third-party packages.                                                                                                                                                      |
-| Lyrics / karaoke       | **`@opendj/lyrics` + LRCLIB adapter as day-one feature**                                             | Lyrics are a core differentiator for the live/TV view. Use LRCLIB as the initial lookup source for synced and unsynced lyrics, cache normalized results, and expose feedback/correction hooks without promising perfect karaoke timing.                                                                                                                                                                       |
-| Validation             | **Valibot or Zod at route boundaries**                                                               | Required for safe public APIs. Prefer Valibot if bundle size matters; Zod if agent familiarity and ecosystem matter more.                                                                                                                                                                                                                                                                                     |
-| Tests                  | **Vitest + Miniflare/Workers test harness + Playwright smoke**                                       | Unit tests for core, Worker integration tests for hosted, browser smoke for guest/host flows.                                                                                                                                                                                                                                                                                                                 |
-| CI                     | **GitHub Actions**                                                                                   | Lint + typecheck + test + OSS smoke on push/PR.                                                                                                                                                                                                                                                                                                                                                               |
-| AI/dev-agent support   | **Angular MCP + local OpenDJ MCP server**                                                            | Use MCP for build agents and internal admin tooling, not in the guest request hot path.                                                                                                                                                                                                                                                                                                                       |
-| License                | **MIT**                                                                                              | Good default for OSS adoption.                                                                                                                                                                                                                                                                                                                                                                                |
+| Concern                | Choice                                                                                               | Reason                                                                                                                                                                                                                                                                                                                                                |
+| ---------------------- | ---------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Server framework       | **Hono**                                                                                             | Keep. Runs cleanly on Node and Cloudflare Workers; good fit for one route tree across deploy targets.                                                                                                                                                                                                                                                 |
+| Runtime                | **Node 22 LTS for the reference deploy; Cloudflare Workers compatible**                              | Node 20 is still acceptable, but starting new work on Node 22 gives a longer support runway.                                                                                                                                                                                                                                                          |
+| Language               | **TypeScript strict**                                                                                | Everywhere, no exceptions.                                                                                                                                                                                                                                                                                                                            |
+| ORM / SQL              | **Drizzle ORM + Postgres.js adapter**                                                                | Drizzle keeps schema/type control; Postgres.js works well with Cloudflare Hyperdrive and Node. Avoid `node-postgres` in code that must run in Workers.                                                                                                                                                                                                |
+| Primary database       | **Postgres**                                                                                         | Source of truth for accounts, sessions, queue history. Any managed Postgres works through `DATABASE_URL` (use Hyperdrive when deploying behind Workers).                                                                                                                                                                                              |
+| Workers realtime/cache | **Cloudflare Durable Objects per live session**                                                      | When deploying to Workers, one authoritative room actor per session handles WebSockets, hot queue state, guest slots, heartbeats, skip votes, and fan-out — no Redis needed.                                                                                                                                                                          |
+| Workers background     | **Cloudflare Queues + scheduled Workers**                                                            | When deploying to Workers, use Queues for analytics ingestion, provider command retries, token refresh, and non-blocking jobs. Use cron for periodic sweeps.                                                                                                                                                                                          |
+| Node realtime/cache    | **In-process room registry; optional Valkey**                                                        | The Node reference deploy stays cheap and simple. Add Valkey only when running more than one app container.                                                                                                                                                                                                                                           |
+| Frontend               | **Angular 21 + Capacitor-ready app architecture**                                                    | The repo ships reusable `@opendj/frontend` components plus a working `@opendj/frontend-template`. Keep the app web-first, but avoid assumptions that would prevent wrapping it with Capacitor later. Angular has strong AI tooling, MCP support, production-ready zoneless change detection, signals, standalone components, and modern control flow. |
+| Frontend state         | **Angular signals + resource/httpResource where stable**                                             | Keep state explicit and fast. Avoid heavy global state libraries until real complexity appears.                                                                                                                                                                                                                                                       |
+| Native/mobile shell    | **Ionic Capacitor, P2**                                                                              | Use Capacitor as the planned native runtime for iOS/Android wrappers, but do not make native apps block the web/SaaS launch. Ionic UI components may be used where they help mobile polish, but the OpenDJ design system remains authoritative.                                                                                                       |
+| DI                     | **Explicit provider registry / factory functions, not InversifyJS**                                  | Inversify adds decorators/reflection/bundling complexity. A small typed registry is easier for Workers, tests, and agents to reason about.                                                                                                                                                                                                            |
+| API contract           | **OpenAPI generated from route schemas**                                                             | Gives the Angular app, tests, docs, and MCP/dev agents a single contract.                                                                                                                                                                                                                                                                             |
+| Auth / identity        | **OSS `@opendj/auth` package with OAuth/OIDC, email/password fallback, server sessions, and claims** | Hosts and guests are both users. Authorization must check token/session claims at every protected route instead of assuming host-only auth.                                                                                                                                                                                                           |
+| Abuse prevention       | **OSS `@opendj/abuse` package + realtime room enforcement**                                          | Hosts should be able to leave a session running with minimal babysitting. Abuse detection must operate near real time using request, slot, vote, search, and device/fingerprint signals.                                                                                                                                                              |
+| Song synchronization   | **`@opendj/sync` timing contracts + adapters**                                                       | The library provides predicted playback positions, normalized progress helpers, and adapter interfaces for lyrics, lighting, and other time-based integrations. Concrete provider/integration implementations live in downstream consumers.                                                                                                           |
+| Lyrics / karaoke       | **`@opendj/lyrics` + LRCLIB adapter as day-one feature**                                             | Lyrics are a core differentiator for the live/TV view. Use LRCLIB as the initial lookup source for synced and unsynced lyrics, cache normalized results, and expose feedback/correction hooks without promising perfect karaoke timing.                                                                                                               |
+| Validation             | **Valibot or Zod at route boundaries**                                                               | Required for safe public APIs. Prefer Valibot if bundle size matters; Zod if agent familiarity and ecosystem matter more.                                                                                                                                                                                                                             |
+| Tests                  | **Vitest + Miniflare/Workers test harness + Playwright smoke**                                       | Unit tests for core, Worker integration tests for hosted, browser smoke for guest/host flows.                                                                                                                                                                                                                                                         |
+| CI                     | **GitHub Actions**                                                                                   | Lint + typecheck + test + OSS smoke on push/PR.                                                                                                                                                                                                                                                                                                       |
+| AI/dev-agent support   | **Angular MCP + local OpenDJ MCP server**                                                            | Use MCP for build agents and internal admin tooling, not in the guest request hot path.                                                                                                                                                                                                                                                               |
+| License                | **MIT**                                                                                              | Good default for OSS adoption.                                                                                                                                                                                                                                                                                                                        |
 
 ### Explicit stack decision
 
-Use **Durable Objects as the hosted high-speed caching/coordination layer**, not Redis. Redis/Valkey belongs in the OSS scale-out path, not the initial hosted path. The hosted platform already has a stateful edge primitive that maps almost perfectly to “hundreds of clients connected to one live event.”
+When deploying to Cloudflare, use **Durable Objects as the high-speed caching/coordination layer**, not Redis — the platform already has a stateful edge primitive that maps almost perfectly to "hundreds of clients connected to one live event." Redis/Valkey is the Node scale-out path.
 
 ### Cross-platform app shell decision
 
 Build the Angular frontend so it can run in three shells without forking product logic:
 
-1. **Web/PWA shell** — P0. Browser-first hosted app at `app.opendj.live` and the OSS demo at `localhost:8888`.
+1. **Web/PWA shell** — P0. Browser-first; the reference deploy serves it at `localhost:8888`.
 2. **Capacitor mobile shell** — P2. Native iOS/Android wrappers around the same Angular app for App Store / Play Store distribution.
 3. **Desktop shell** — P2/P3 experiment. Consider Capacitor community Electron or a separate Tauri shell only after the web and mobile paths prove useful.
 
@@ -227,7 +197,7 @@ OpenDJ should expose a small, useful synchronization layer in OSS without promis
 
 ### Core rule
 
-The OSS layer provides normalized timing primitives, prediction helpers, and adapter interfaces. Lyrics are the first first-class use case for this layer. The OSS layer may include generic lyric lookup/cache contracts, LRC parsing, and an LRCLIB adapter, but it should not ship commercial lyric catalogs, DMX/light integrations, proprietary lyric APIs, or venue-specific automation. Those belong in `opendj-live`, third-party packages, or user code.
+The OpenDJ libraries provide normalized timing primitives, prediction helpers, and adapter interfaces. Lyrics are the first first-class use case for this layer. The libraries may include generic lyric lookup/cache contracts, LRC parsing, and an LRCLIB adapter, but they should not ship commercial lyric catalogs, DMX/light integrations, proprietary lyric APIs, or venue-specific automation. Those belong in third-party packages or downstream consumer code.
 
 ### Package
 
@@ -1201,7 +1171,7 @@ CREATE TABLE abuse_subjects (
 CREATE INDEX abuse_subjects_session_status ON abuse_subjects(session_id, status);
 ```
 
-`subscriptions` and hosted funnel/product analytics live only in the private `opendj-live` repo. The public `@opendj/db` package includes minimal `action_events`/`abuse_subjects` because abuse prevention is core product safety, not just business analytics. Public packages should expose extension hooks/migration composition, but should not include billing or private funnel dashboards.
+`subscriptions`, billing, and product/funnel analytics belong in downstream consumers, not in this repo. The `@opendj/db` package includes minimal `action_events`/`abuse_subjects` because abuse prevention is core product safety, not business analytics. The packages should expose extension hooks and migration composition, but they should not include billing, product funnel dashboards, or any commercial-feature schema.
 
 ---
 
@@ -1332,7 +1302,7 @@ Host settings should expose simple controls, not a giant rules engine:
 - Max skip votes per guest per track
 - Manual block/unblock guest action
 
-The underlying abuse package should remain extensible so `opendj-live` can add paid dashboards, richer analytics, or venue-wide reputation without changing the OSS contracts.
+The underlying abuse package should remain extensible so downstream consumers can add paid dashboards, richer analytics, or venue-wide reputation without changing these contracts.
 
 ---
 
@@ -1572,36 +1542,30 @@ GET  /api/v1/health
 
 ## Routing and domains
 
-Use subdomains for the hosted product. Do not mount the SPA and API under the marketing domain.
+The reference deploy bundles the SPA and API on the same origin. Multi-subdomain layouts (separate marketing / app / api hosts) are a deployment detail downstream consumers can choose; the foundation does not assume one or the other.
 
 ```
-# Hosted
-https://opendj.live/                 → Landing page / marketing site
-https://app.opendj.live/             → Host dashboard SPA root
-https://app.opendj.live/u/<slug>     → Guest request page
-https://app.opendj.live/tv/<slug>    → TV display view
-https://api.opendj.live/api/v1/*        → Cloudflare Worker API
-https://api.opendj.live/api/v1/sessions/:id/realtime → WebSocket upgrade; hosted routes to SessionRoom
-
-# Hosted OAuth callbacks
-https://api.opendj.live/api/v1/auth/:provider/callback                    → login providers: google/apple/facebook
-https://api.opendj.live/api/v1/provider/connections/:provider/callback    → music/service providers: spotify/soundtrack/etc.
-
-# OSS
-http://localhost:8888/               → Host dashboard from frontend template
-http://localhost:8888/queue          → Guest request page
-http://localhost:8888/api/v1/*          → Node server
+# Reference Node deploy (apps/oss-demo, single origin)
+http://localhost:8888/                            → Host dashboard SPA root
+http://localhost:8888/u/<slug>                    → Guest request page
+http://localhost:8888/tv/<slug>                   → TV display view
+http://localhost:8888/api/v1/*                    → Hono routes
 http://localhost:8888/api/v1/sessions/:id/realtime → WebSocket upgrade
+
+# OAuth callbacks
+http://localhost:8888/api/v1/auth/:provider/callback                  → login providers: google/apple/facebook
+http://localhost:8888/api/v1/provider/connections/:provider/callback  → music/service providers: spotify/soundtrack/etc.
 ```
+
+A multi-subdomain Workers deploy (e.g. marketing / app / api on three hosts) is supported by the route shape but is out of scope for this repo to wire.
 
 CORS/cookie rules:
 
-- Hosted API should allow `https://app.opendj.live` as the first-class browser origin.
-- Use secure, httpOnly cookies scoped so `app.opendj.live` can authenticate against `api.opendj.live`; set SameSite intentionally for the subdomain flow and never expose session tokens to JavaScript.
-- Keep the marketing site independent from authenticated app state.
-- The OSS app can use same-origin cookies on `localhost:8888`.
+- The reference deploy uses same-origin cookies on `localhost:8888`.
+- Multi-subdomain deploys must use secure, httpOnly cookies scoped to the parent domain so `app.<root>` can authenticate against `api.<root>`; set SameSite intentionally for the subdomain flow and never expose session tokens to JavaScript.
+- Keep any marketing site independent from authenticated app state.
 - Treat `/api/v1` as the stable public API prefix for the first release. Internal Worker/admin routes may live outside `/api/v1`, but browser/product routes must be versioned.
-- Native Capacitor apps should call `https://api.opendj.live/api/v1/*` directly and handle auth through a platform auth adapter; do not rely on browser-only cookie behavior inside WebViews for privileged native flows.
+- Native Capacitor apps should call the API origin directly and handle auth through a platform auth adapter; do not rely on browser-only cookie behavior inside WebViews for privileged native flows.
 
 ---
 
@@ -1731,8 +1695,7 @@ CORS/cookie rules:
 
 **P0 web**
 
-- Hosted SPA at `app.opendj.live`
-- OSS demo frontend at `localhost:8888`
+- Reference deploy serves the SPA at `localhost:8888` (or whatever single origin the host configures)
 - Mobile-responsive guest and host flows
 - Browser QR scan flow remains first-class; no app install required
 
@@ -1784,10 +1747,10 @@ Use one generic OAuth flow keyed by `provider_id` for music/service provider con
    → Exchange code for access_token + refresh_token using fetch (no SDK)
    → Fetch provider profile/account identity when available
    → Upsert provider_connections row using (account_id, provider_id)
-   → Redirect to https://app.opendj.live/settings/providers for hosted, or /settings/providers for OSS
+   → Redirect back to `/settings/providers` on the configured app origin
 ```
 
-Token refresh: hosted uses Queues + scheduled Workers; OSS uses a Node interval. Refresh jobs read from `provider_connections` by `provider_id` and `expires_at`.
+Token refresh: Workers deploys use Queues + scheduled Workers; the Node deploy uses a recurring interval. Refresh jobs read from `provider_connections` by `provider_id` and `expires_at`.
 
 **Critical:** If host has no active Spotify playback device, return `{ error: 'no_active_device' }` with a 400 — never silently accept a queue request that can't play. Surface this to the host immediately.
 
@@ -1820,7 +1783,7 @@ BASE_URL                      # default: http://localhost:8888
 MODERATION_ENABLED_DEFAULT    # default: false
 ```
 
-`ONBOARDING.md` must walk through the Spotify Developer Dashboard setup step by step — this is the only manual step for self-hosters. The public README should also explain that `opendj.live` is a commercial hosted implementation built on these packages, not the same application source code.
+`ONBOARDING.md` must walk through the Spotify Developer Dashboard setup step by step — this is the only manual step for self-hosters.
 
 ---
 
@@ -1846,7 +1809,7 @@ MODERATION_ENABLED_DEFAULT    # default: false
 - Ads suppressed for guests
 - Host library + playlist scheduling
 
-**Paywall enforcement:** `effectiveGuestCap()` returns 12 for free plan. At the 13th unique fingerprint: return 402 with `{ error: 'guest_cap_reached', upgradeUrl: '...' }`. Log `action_events.event_kind = 'cap_hit'` in OSS; opendj-live may mirror this into private funnel analytics. Guests cannot tell whether the host is on free or paid.
+**Paywall enforcement:** `effectiveGuestCap()` returns 12 for the free plan. At the 13th unique fingerprint: return 402 with `{ error: 'guest_cap_reached', upgradeUrl: '...' }`. Log `action_events.event_kind = 'cap_hit'`; downstream consumers can mirror this into their own product analytics. Guests cannot tell whether the host is on free or paid.
 
 ---
 
@@ -1879,19 +1842,19 @@ Create `docs/AGENTS.md` in the public repo, plus smaller package-local `AGENTS.m
 
 ---
 
-## What NOT to include in the OSS repo
+## What NOT to include in this repo
 
-The public `github.com/viscoci/opendj` repo must not include the private hosted product implementation. Keep these only in `github.com/viscoci/opendj-live`:
+These do not belong in the foundation:
 
-- Hosted Cloudflare deployment configuration for `opendj.live`, `app.opendj.live`, and `api.opendj.live`
+- Vendor-specific deployment configuration tied to a particular cloud account
 - Billing webhook handlers and subscription provider secrets
-- `subscriptions` and private hosted funnel/product analytics migrations
-- Paid feature implementations: Branding Studio, hosted product analytics dashboards, white-label, paid zone management, ad suppression, billing UI
+- `subscriptions` migrations or any commercial product/funnel analytics tables
+- Paid-feature implementations: Branding Studio, hosted analytics dashboards, white-label, paid zone management, ad suppression, billing UI
 - Production dashboards, incident docs, internal board documents, escalations, standups
-- Any `.env` files (`.env.example` only in public)
+- Any `.env` files (`.env.example` only)
 - MCP config files that expose local absolute paths, private tokens, or machine-specific commands
 
-The public repo may include extension interfaces, feature-gate contracts, placeholder docs, and examples showing how a commercial implementation can extend the foundation. Do not include the full commercial implementation.
+The repo may include extension interfaces, feature-gate contracts, placeholder docs, and examples showing how a commercial implementation can extend the foundation. It must not include the full commercial implementation.
 
 ---
 
@@ -1907,10 +1870,9 @@ The public repo may include extension interfaces, feature-gate contracts, placeh
 | P0       | Realtime room abstraction: `RealtimeRoom`, `SessionSnapshot`, `SessionEvent`, `SessionCommand`                                                                                                                                             |
 | P0       | Song synchronization primitives: `@opendj/sync`, `PlaybackClockSample`, normalized progress helpers, and `SongSyncAdapter` contracts                                                                                                       |
 | P0       | Lyrics/karaoke foundation: `@opendj/lyrics`, LRCLIB fetch adapter, LRC parser, lyrics cache, current-lyrics snapshot/event wiring, and feedback capture                                                                                    |
-| P0       | Hosted layer baseline in private `opendj-live`: Workers + Hyperdrive + Durable Objects + Queues                                                                                                                                            |
-| P0       | Hosted subdomain routing and API versioning: `opendj.live`, `app.opendj.live`, `api.opendj.live/api/v1/*`                                                                                                                                  |
-| P0       | Hosted Durable Object `SessionRoom` for per-session WebSocket fan-out, hot snapshots, guest slots, and serialized queue mutations                                                                                                          |
-| P0       | OSS `NodeSessionRoom` in-process realtime implementation                                                                                                                                                                                   |
+| P0       | Workers-compatible deploy story: Hyperdrive + Durable Objects + Queues design captured in `@opendj/realtime` contracts                                                                                                                     |
+| P0       | API versioning: `/api/v1/*` route tree                                                                                                                                                                                                     |
+| P0       | `NodeSessionRoom` in-process realtime implementation                                                                                                                                                                                       |
 | P0       | Auth and claims layer: OAuth/OIDC login providers, email/password fallback, session cookies, claim middleware, account membership, logged-in guest support                                                                                 |
 | P0       | Abuse prevention foundation: action signal capture, rolling-window rate limits, risk scoring, host block/unblock, and realtime room enforcement                                                                                            |
 | P0       | Core queue logic: `canEnqueue`, `enforcePerGuestCap`, `dedupeQueue`, `canSkip`                                                                                                                                                             |
@@ -1933,7 +1895,7 @@ The public repo may include extension interfaces, feature-gate contracts, placeh
 | P2       | Zone management                                                                                                                                                                                                                            |
 | P2       | Host library + playlist scheduling                                                                                                                                                                                                         |
 | P2       | Analytics dashboard                                                                                                                                                                                                                        |
-| P2       | Capacitor iOS/Android app shell in `opendj-live/apps/mobile`, consuming the same Angular app shell and `/api/v1` backend                                                                                                                   |
+| P2       | Capacitor iOS/Android app shell consuming the same Angular app shell and `/api/v1` backend                                                                                                                                                 |
 | P2       | Desktop shell experiment only if native mobile proves useful; prefer Capacitor community Electron or a separate Tauri wrapper after evaluating maintenance cost                                                                            |
 | P2       | `packages/agent-tools` MCP server and repo map tools; dev-only and non-blocking                                                                                                                                                            |
 

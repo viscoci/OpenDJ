@@ -1,8 +1,8 @@
 /**
  * @opendj/backend — Hono routes and services for OpenDJ.
  *
- * Run from Node (apps/oss-demo) and Cloudflare Workers (opendj-live/apps/api)
- * via the same createApp factory.
+ * Runs on both Node (e.g. `apps/oss-demo`) and Cloudflare Workers via the
+ * same createApp factory.
  *
  * See docs/agent-brief.md §"Backend package directory structure" + §"API Routes".
  */

@@ -7,8 +7,8 @@
  * sessions belonging to their `currentAccountId`).
  *
  * QR-slug generation is intentionally simple — random URL-safe ID. Full
- * vanity-slug support (custom `/u/<slug>`) is paid-tier and lives in
- * `opendj-live`.
+ * vanity-slug support (custom `/u/<slug>`) is left to downstream consumers
+ * to build on top.
  */
 
 import { generateSessionToken } from '@opendj/auth';

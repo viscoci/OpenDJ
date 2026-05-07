@@ -7,6 +7,6 @@ Contents (planned — see [`docs/agent-brief.md`](../../docs/agent-brief.md) §"
 - `AppShell` interface (`getPlatform`, `isNative`, `openExternalUrl`, `share`, `copyToClipboard`, `refreshRealtimeSnapshotOnResume`)
 - `NativeAuthAdapter` interface (system-browser OAuth flow + secure native session storage)
 - `BrowserAppShell` adapter (links, Web Share API, Clipboard API, httpOnly cookie sessions)
-- Capacitor adapters (introduced per-feature; live in `opendj-live` mobile app)
+- Capacitor adapters (introduced per-feature; live in downstream consumers' native mobile shells)
 
-Rule: Capacitor-specific code lives in adapter implementations, never in feature components. OSS remains runnable as a normal web app without Xcode or Android Studio.
+Rule: Capacitor-specific code lives in adapter implementations, never in feature components. The repo remains runnable as a normal web app without Xcode or Android Studio.

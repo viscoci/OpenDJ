@@ -2,7 +2,7 @@
 
 This roadmap mirrors the priority list from [`docs/agent-brief.md`](./docs/agent-brief.md). It tracks what's landed, what's next, and what intentionally stays out of this repo.
 
-Status legend: ✅ done · 🔄 in progress · ⏳ planned · ⛔ out of scope (lives in private `opendj-live`)
+Status legend: ✅ done · 🔄 in progress · ⏳ planned · ⛔ out of scope
 
 ## P0 — foundation (every line item shipped)
 
@@ -21,8 +21,8 @@ Status legend: ✅ done · 🔄 in progress · ⏳ planned · ⛔ out of scope (
 | ✅     | **Playback control routes** — `POST /sessions/:id/playback/{skip,pause,resume}` gated by `provider:control_playback`                                                                                                                               |
 | ✅     | **Spotify Connect device routes** — `GET /sessions/:id/devices` + `POST /sessions/:id/devices/:deviceId/activate`                                                                                                                                  |
 | ✅     | **Public TV snapshot route** — `GET /sessions/by-slug/:slug/tv-snapshot` for the casting page (no auth)                                                                                                                                            |
-| 🔄     | Sync primitives: `@opendj/sync` + `PlaybackClockSample` + normalized progress + `SongSyncAdapter` (basic types in place; cross-provider clock alignment is hosted's polish layer)                                                                  |
-| 🔄     | Lyrics/karaoke: `@opendj/lyrics` + LRCLIB adapter + LRC parser + lyrics cache + feedback capture (lookup service in place; rendering UI lives in `opendj-live`)                                                                                    |
+| 🔄     | Sync primitives: `@opendj/sync` + `PlaybackClockSample` + normalized progress + `SongSyncAdapter` (basic types in place; cross-provider clock alignment is a future polish layer)                                                                  |
+| 🔄     | Lyrics/karaoke: `@opendj/lyrics` + LRCLIB adapter + LRC parser + lyrics cache + feedback capture (lookup service in place; rendering UI not yet wired into the template)                                                                           |
 | ✅     | Auth & claims: OAuth/OIDC login (Google), email/password fallback (Argon2id), email verification, password reset, sessions, claim middleware, account membership, account bootstrap                                                                |
 | ✅     | Abuse prevention: action signal capture, rolling-window rate limits, risk scoring                                                                                                                                                                  |
 | ✅     | Core queue logic: `canEnqueue`, `enforcePerGuestCap`, `dedupeQueue`, `canSkip`, **persistent skip-vote dedupe** (`queue_skip_votes` table)                                                                                                         |
@@ -53,29 +53,26 @@ Status legend: ✅ done · 🔄 in progress · ⏳ planned · ⛔ out of scope (
 | ------ | ------------------------------------------- |
 | ⏳     | `@opendj/agent-tools` MCP server (dev-only) |
 
-## Out of scope here (lives in private `opendj-live`)
+## Out of scope
 
-The hosted product (`opendj.live`) builds on these libraries and adds the polished UX + monetized layers. The boundary is deliberate — every line below stays out of OSS so self-hosters can run a useful demo without competing with the hosted product:
+These are intentionally not part of OpenDJ — either because they're product-polish layers anyone deploying OSS can choose to add, or because they're commercial concerns (billing, support, branded services) that don't belong in a generic foundation.
 
-| Status | Item                                                                                                                                                                 |
-| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| ⛔     | **Branding Studio** — host-uploaded logo, custom fonts, accent colors, copy editing, template gallery                                                                |
-| ⛔     | **Multi-zone billing** + zone-detail UI ("Patio · Sonos Move 2 · 24 listeners" view, per-zone crossfade controls)                                                    |
-| ⛔     | **Polished TV layouts** — overlay / centered / split lyrics layouts, full-bleed album-art backdrops, sponsor strip                                                   |
-| ⛔     | **Lyrics rendering** on guest + TV (synced / unsynced / missing / paused; classic / subtle / theatrical / word-highlight active-line styles; report-bad-lyric sheet) |
-| ⛔     | **Analytics dashboard** + CSV export (volume chart, top tracks, KPI strip, safety summary mini-card)                                                                 |
-| ⛔     | **Smart sets** — auto-generated playlists from event history (just-played-clean, crowd-discovered, fresh-blood)                                                      |
-| ⛔     | **Onboarding wizard** — 4-step welcome → connect → device picker (OSS demo goes register → dashboard directly)                                                       |
-| ⛔     | **Account drawer with multi-venue history** + "venues nearby" + playlist sync + save-to-playlist                                                                     |
-| ⛔     | **Smart ad after request** ("Pro hides ads" upsell)                                                                                                                  |
-| ⛔     | **Pricing / billing / Stripe / upgrade modals**                                                                                                                      |
-| ⛔     | **DJ-for-an-Event service** — pre-event consult, live mixing, branded guest page, post-event recap                                                                   |
-| ⛔     | **Five-variant OAuth error screens** (denied / no premium / missing scopes / timeout / network)                                                                      |
-| ⛔     | **Re-auth banner with reconnect modal** (loading / success / failure variants)                                                                                       |
-| ⛔     | **Session ended recap** with stats grid + safety summary                                                                                                             |
-| ⛔     | Hosted Cloudflare deployment (`opendj.live`, `app.opendj.live`, `api.opendj.live`)                                                                                   |
-| ⛔     | Cloudflare Workers + Durable Objects + Hyperdrive hosted layer                                                                                                       |
-| ⛔     | Capacitor iOS/Android wrapper (`opendj-live/apps/mobile`)                                                                                                            |
+| Status | Item                                                                                                                           |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------ |
+| ⛔     | **Branding Studio** — host-uploaded logo, custom fonts, accent colors, copy editing, template gallery                          |
+| ⛔     | **Multi-zone billing** + zone-detail UI ("Patio · Sonos Move 2 · 24 listeners" view, per-zone crossfade controls)              |
+| ⛔     | **Polished TV layouts** — overlay / centered / split lyrics layouts, full-bleed album-art backdrops, sponsor strip             |
+| ⛔     | **Lyrics rendering** on guest + TV (synced / unsynced / missing / paused; multiple active-line styles; report-bad-lyric sheet) |
+| ⛔     | **Analytics dashboard** + CSV export (volume chart, top tracks, KPI strip, safety summary mini-card)                           |
+| ⛔     | **Smart sets** — auto-generated playlists from event history                                                                   |
+| ⛔     | **Onboarding wizard** — 4-step welcome → connect → device picker (OSS demo goes register → dashboard directly)                 |
+| ⛔     | **Account drawer with multi-venue history**, playlist sync, save-to-playlist                                                   |
+| ⛔     | **Pricing / billing / Stripe / upgrade modals**                                                                                |
+| ⛔     | **DJ-for-an-Event service** — pre-event consult, live mixing, branded guest page, post-event recap                             |
+| ⛔     | **Polished OAuth error screens** with all-variant copy (denied / no premium / missing scopes / timeout / network)              |
+| ⛔     | **Re-auth banner with reconnect modal** (loading / success / failure variants)                                                 |
+| ⛔     | **Session-ended recap** with stats grid + safety summary                                                                       |
+| ⛔     | Capacitor iOS/Android wrapper                                                                                                  |
 
 ## Want to help?
 

@@ -1,10 +1,9 @@
 /**
  * Hono app factory.
  *
- * One factory drives both the Node OSS deploy and the Cloudflare Worker hosted
- * deploy in `opendj-live`. The deps graph is constructed by the caller —
- * `apps/oss-demo/src/main.ts` for OSS, `opendj-live/apps/api/src/worker.ts`
- * for hosted.
+ * One factory drives both Node and Cloudflare Workers deploys. The deps graph
+ * is constructed by the caller — `apps/oss-demo/src/main.ts` for the Node
+ * reference deploy; a Workers-flavored caller for an edge deploy.
  *
  * Routes are mounted under `/api/v1`. Future breaking changes use `/api/v2`.
  */

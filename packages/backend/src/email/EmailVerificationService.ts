@@ -31,9 +31,9 @@ export interface EmailVerificationServiceDeps {
   users: UserRepository;
   tokens: EmailVerificationTokenRepository;
   email: EmailAdapter;
-  /** Public origin for the verify link (e.g. `https://app.opendj.live`). */
+  /** Public origin for the verify link (e.g. `https://your-app.example`). */
   baseUrl: string;
-  /** Defaults to "OpenDJ <noreply@opendj.live>". */
+  /** Defaults to "OpenDJ <noreply@example.com>". */
   fromAddress?: string;
   /** Override TTL — useful for tests. */
   ttlMs?: number;

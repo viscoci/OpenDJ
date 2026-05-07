@@ -18,7 +18,7 @@ Land the first slice of `@opendj/backend`: Hono app factory, runtime config pars
 **App factory (`createApp({ deps })`):**
 
 - Hono app with routes mounted under `/api/v1` (versioned for future breaking changes)
-- Returns the bare Hono instance — Node + Workers wire their adapter at the call site (`apps/oss-demo/src/main.ts` and `opendj-live/apps/api/src/worker.ts`)
+- Returns the bare Hono instance — Node + Workers wire their adapter at the call site (`apps/oss-demo/src/main.ts` for the Node reference deploy; a Workers entry point for an edge deploy)
 
 **Routes:**
 

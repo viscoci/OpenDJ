@@ -2,8 +2,9 @@
  * @opendj/realtime — runtime-neutral realtime room contracts and the
  * in-process NodeSessionRoom implementation.
  *
- * The same RealtimeRoom interface is implemented by NodeSessionRoom (OSS)
- * and the Cloudflare Durable Object SessionRoom (opendj-live).
+ * The same RealtimeRoom interface is implemented by NodeSessionRoom (Node
+ * deploys) and can be implemented by a Cloudflare Durable Object on Workers
+ * deploys.
  *
  * See docs/agent-brief.md §"Realtime and caching architecture".
  */

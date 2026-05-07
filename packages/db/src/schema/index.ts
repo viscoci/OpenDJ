@@ -1,10 +1,10 @@
 /**
- * Drizzle schema for OpenDJ. Public OSS surface.
+ * Drizzle schema for OpenDJ.
  *
- * Includes everything except `subscriptions` and private hosted analytics
- * (those live in the private `opendj-live` repo). `action_events` and
- * `abuse_subjects` ARE included here because abuse prevention is core
- * product safety, not business analytics.
+ * Includes the foundation tables. Commercial extensions like `subscriptions`
+ * or product/funnel analytics dashboards belong in downstream consumer
+ * migrations, not here. `action_events` and `abuse_subjects` ARE included
+ * because abuse prevention is core product safety, not business analytics.
  */
 
 export * from './users.js';

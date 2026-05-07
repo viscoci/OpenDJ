@@ -2,7 +2,7 @@
 '@opendj/realtime': minor
 ---
 
-Add `NodeSessionRoom` — the in-process `RealtimeRoom` implementation for OSS deployments — plus the pure `applyEvent(snapshot, event)` transition shared with the hosted Cloudflare Durable Object `SessionRoom` in `opendj-live`.
+Add `NodeSessionRoom` — the in-process `RealtimeRoom` implementation for Node deploys — plus the pure `applyEvent(snapshot, event)` transition that can be reused by a Cloudflare Durable Object `SessionRoom` actor on Workers deploys.
 
 **`applyEvent`** (pure):
 

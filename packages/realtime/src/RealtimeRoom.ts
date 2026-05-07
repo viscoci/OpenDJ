@@ -6,9 +6,10 @@ import type { SessionSnapshot } from './types/snapshot.js';
 /**
  * Runtime-neutral interface for a per-session realtime room.
  *
- * - OSS: implemented by `NodeSessionRoom` (in-process, optional Valkey pub/sub
- *   for multi-container scale-out).
- * - Hosted: implemented by `SessionRoom` Durable Object in `opendj-live`.
+ * - Node: implemented by `NodeSessionRoom` (in-process, optional Valkey
+ *   pub/sub for multi-container scale-out).
+ * - Workers: implementable by a Cloudflare Durable Object actor in a
+ *   downstream consumer.
  *
  * Both implementations:
  * - Maintain a hot in-memory `SessionSnapshot`

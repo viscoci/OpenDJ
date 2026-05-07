@@ -4,7 +4,7 @@
  * Usage:
  *
  * ```ts
- * const client = new OpenDjClient({ baseUrl: 'https://app.opendj.live' });
+ * const client = new OpenDjClient({ baseUrl: 'https://your-app.example' });
  * const me = await client.auth.me();
  * const queue = await client.queue.list(sessionId);
  * ```

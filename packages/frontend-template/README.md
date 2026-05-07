@@ -1,14 +1,14 @@
 # @opendj/frontend-template
 
-Basic Angular 21 OSS frontend for OpenDJ. Web-first, Capacitor-ready (no native platforms added here — those live in `opendj-live/apps/mobile`).
+Angular 21 frontend template for OpenDJ. Web-first; Capacitor-ready but no native platforms are added here — downstream consumers can wrap it in their own native shell project.
 
-This template will host the free-tier guest request page and host dashboard. See [`docs/agent-brief.md`](../../docs/agent-brief.md) §"Cross-platform app shell" + §"Feature set".
+The template ships the guest request page, host dashboard, host-session moderation surface, and the public TV view. See [`docs/agent-brief.md`](../../docs/agent-brief.md) §"Cross-platform app shell" + §"Feature set".
 
 Wired:
 
 - Standalone components, signals, **zoneless change detection** (`provideZonelessChangeDetection()`)
 - Routing, SCSS, no SSR
-- `@capacitor/core` + `@capacitor/cli` + `capacitor.config.ts` (web-first; native add happens in `opendj-live`)
+- `@capacitor/core` + `@capacitor/cli` + `capacitor.config.ts` (web-first; native add happens in your fork)
 - `@opendj/app-shell` workspace dependency for platform-neutral behavior
 
 ## Development server
@@ -35,7 +35,7 @@ Tests run via Vitest under `@angular/build:unit-test`. No content yet — vitest
 
 ## Adding native shells
 
-Don't add `ios/` or `android/` here. The OSS template stays a plain web app. The hosted Capacitor wrapper lives in `opendj-live/apps/mobile`, where it consumes this same Angular app shell.
+Don't add `ios/` or `android/` here. This template stays a plain web app. To ship a native shell, fork or wrap in a separate project that consumes this Angular app shell via Capacitor.
 
 ---
 

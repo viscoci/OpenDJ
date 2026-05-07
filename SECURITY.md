@@ -33,4 +33,4 @@ We will credit reporters in the release notes unless you prefer to remain anonym
 
 ## Out of scope
 
-The hosted product at `opendj.live` runs on a separate codebase (`opendj-live`). Vulnerabilities specific to the hosted deployment should be reported through that repository's security policy, not here.
+Vulnerabilities specific to a particular hosted deployment built on top of OpenDJ should be reported to that deployment's operator, not here. This policy covers the OSS packages and the reference `apps/oss-demo` self-host.

@@ -1,8 +1,8 @@
 /**
- * Argon2id-backed `PasswordHasher` for the OSS Node deploy.
+ * Argon2id-backed `PasswordHasher` for Node deploys.
  *
  * Uses the `argon2` native module — Node-only by design (won't install in
- * Cloudflare Workers). Hosted (`opendj-live`) bundles a WASM-backed adapter
+ * Cloudflare Workers). Workers deploys should bundle a WASM-backed adapter
  * via the same `PasswordHasher` interface from `@opendj/auth`.
  *
  * `argon2` is listed under `optionalDependencies` in `@opendj/backend` so a

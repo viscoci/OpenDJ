@@ -5,7 +5,8 @@ const config: CapacitorConfig = {
   appName: 'opendj-template',
   webDir: 'dist/opendj-template/browser',
   // Native iOS/Android platforms are intentionally NOT added here.
-  // The hosted product (opendj-live) wraps this Angular app via Capacitor in its own apps/mobile project.
+  // Capacitor-ready by design — downstream consumers can wrap this Angular
+  // app in their own native shell project without changing app code.
 };
 
 export default config;

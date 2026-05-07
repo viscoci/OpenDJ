@@ -15,7 +15,7 @@
 import { ApiError, NetworkError, type ApiErrorPayload } from './errors.js';
 
 export interface HttpClientOptions {
-  /** Base URL — typically the API origin, e.g. `https://app.opendj.live`. No trailing slash. */
+  /** Base URL — typically the API origin, e.g. `https://your-app.example`. No trailing slash. */
   baseUrl: string;
   /** fetch impl. Defaults to `globalThis.fetch`. SSR/tests can pass their own. */
   fetchImpl?: typeof fetch;

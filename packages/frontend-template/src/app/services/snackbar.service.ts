@@ -5,8 +5,8 @@
  * displays the toasts in a fixed-position stack.
  *
  * Kept dead-simple by design — no queue priorities, no positioning
- * variants, no slot-by-slot animations. The OSS demo doesn't need a full
- * notification framework; opendj.live can swap in something heavier.
+ * variants, no slot-by-slot animations. Downstream consumers can swap in
+ * a heavier notification framework if needed.
  */
 
 import { Injectable, signal, type WritableSignal } from '@angular/core';

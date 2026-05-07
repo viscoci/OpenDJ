@@ -1,9 +1,10 @@
 /**
  * Realtime connection metadata.
  *
- * Concrete RealtimeRoom implementations (NodeSessionRoom in OSS, SessionRoom
- * Durable Object in opendj-live) hold a transport-specific socket reference
- * separately and use this struct only as identity + addressing context.
+ * Concrete RealtimeRoom implementations (NodeSessionRoom for Node deploys,
+ * a Durable Object actor for Workers deploys) hold a transport-specific
+ * socket reference separately and use this struct only as identity +
+ * addressing context.
  */
 export type RealtimeClientKind = 'guest' | 'host' | 'tv' | 'service';
 

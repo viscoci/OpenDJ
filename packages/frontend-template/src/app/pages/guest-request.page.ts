@@ -13,8 +13,8 @@
  * 4. Type into the search box → debounced fetch via the search proxy →
  *    click a result → request the track
  *
- * The hand-rolled "paste a Spotify URI" form is gone — guests get the same
- * UX as opendj.live's design canvas without any of the polish work.
+ * The hand-rolled "paste a Spotify URI" form is gone — guests get a real
+ * search-driven request flow.
  */
 
 import { CommonModule } from '@angular/common';

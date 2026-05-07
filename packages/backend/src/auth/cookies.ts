@@ -6,9 +6,10 @@
  * - `Secure`
  * - No `Domain` attribute
  *
- * `SameSite=Lax` is the right balance for the OSS demo (same-origin app +
- * API). Hosted (`app.opendj.live` + `api.opendj.live`) needs `SameSite=None`
- * cross-subdomain — `opendj-live` overrides the helper at the worker entry.
+ * `SameSite=Lax` is the right balance for the same-origin reference deploy
+ * (app + API on one host). Multi-subdomain deploys (e.g. `app.<root>` +
+ * `api.<root>`) need `SameSite=None`; downstream callers can override the
+ * helper at their entry point.
  *
  * `HttpOnly` keeps the token out of JavaScript.
  */

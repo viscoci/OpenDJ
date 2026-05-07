@@ -23,5 +23,5 @@ Replace the Angular CLI placeholder with a real OpenDJ guest experience.
 
 - Search picker (waits on backend `/search` route)
 - Host dashboard (next slice)
-- Capacitor build target wiring (template is Capacitor-ready but `npx cap add ios|android` lives in private `opendj-live`)
+- Capacitor build target wiring (template is Capacitor-ready but `npx cap add ios|android` is left to downstream consumers)
 - Login UI for the host flow

@@ -4,17 +4,17 @@ Thanks for your interest in OpenDJ! This document covers everything you need to 
 
 ## Scope of this repo
 
-This is the **public OSS foundation**. It contains reusable libraries (`@opendj/*`), the Angular template, and a reference self-host demo (`apps/oss-demo`).
+OpenDJ is a reusable foundation. It contains the libraries (`@opendj/*`), the Angular template, and a reference self-host demo (`apps/oss-demo`).
 
-**Out of scope here** (these belong in the private `opendj-live` repo):
+**Out of scope:**
 
-- Hosted Cloudflare deployment (`opendj.live`, `app.opendj.live`, `api.opendj.live`)
+- Vendor-specific deployment configuration tied to a particular cloud account
 - Billing, subscriptions, payment provider integration
-- Branding Studio, white-label features, hosted product analytics
-- Capacitor native iOS/Android wrapper (`apps/mobile`)
+- Branding Studio, white-label features, commercial product analytics dashboards
+- Native iOS/Android shells — the template is Capacitor-ready, but built shells go in your fork
 - Anything tied to a specific commercial deployment
 
-PRs that mix hosted-only content into this repo will be asked to split. See [`docs/REPO_BOUNDARY.md`](./docs/REPO_BOUNDARY.md).
+PRs that mix in commercial-only content will be asked to split. See [`docs/REPO_BOUNDARY.md`](./docs/REPO_BOUNDARY.md).
 
 ## Dev setup
 
