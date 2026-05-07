@@ -627,14 +627,13 @@ export class GuestRequestPage {
     const myGuestId = this.slot()?.guestId ?? null;
     if (!myGuestId) return [];
     const inProvider = new Set(this.providerQueue().map((t) => t.uri));
+    const nowPlayingUri = this.nowPlaying()?.uri ?? null;
     return this.queue().filter(
       (i) =>
         i.guestId === myGuestId &&
-        (i.status === 'pending' ||
-          i.status === 'approved' ||
-          i.status === 'queued' ||
-          i.status === 'playing') &&
-        !inProvider.has(i.trackUri),
+        (i.status === 'pending' || i.status === 'approved' || i.status === 'queued') &&
+        !inProvider.has(i.trackUri) &&
+        i.trackUri !== nowPlayingUri,
     );
   });
   readonly removingMyItemIds = signal<ReadonlySet<string>>(new Set());
