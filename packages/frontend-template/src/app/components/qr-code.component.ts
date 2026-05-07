@@ -25,17 +25,17 @@ import QRCode from 'qrcode';
   standalone: true,
   imports: [CommonModule],
   changeDetection: ChangeDetectionStrategy.OnPush,
-  template: `
-    <div class="qr" [style.--qr-size.px]="size">
-      <div class="qr-svg" [innerHTML]="svg()"></div>
-    </div>
-  `,
+  template: ` <div class="qr" [style.--qr-size.px]="size" [innerHTML]="svg()"></div> `,
   styles: [
     `
       :host {
         display: inline-block;
       }
       .qr {
+        /* border-box so the container's outer dimensions equal --qr-size.
+           Without this the container is size + padding wide and visually
+           overflows whatever flex/grid slot it sits in. */
+        box-sizing: border-box;
         width: var(--qr-size);
         height: var(--qr-size);
         background: #fff;
@@ -44,11 +44,10 @@ import QRCode from 'qrcode';
         display: grid;
         place-items: center;
       }
-      .qr-svg {
-        width: 100%;
-        height: 100%;
-      }
-      .qr-svg :global(svg) {
+      /* SVG comes from [innerHTML] — Angular's emulated encapsulation
+         doesn't tag it with the scoped attribute selector, so a normal
+         descendant rule wouldn't match. ::ng-deep punches through. */
+      :host ::ng-deep .qr svg {
         width: 100%;
         height: 100%;
         display: block;
