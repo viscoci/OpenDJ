@@ -1214,12 +1214,16 @@ export class HostSessionPage {
   <title>${escape(session.name)} — OpenDJ join code</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
-    @page { size: auto; margin: 12mm; }
+    /* margin:0 on @page tells the browser there's no header/footer
+       region — Chrome, Edge and Firefox suppress the URL / date /
+       page-number lines when the page margin is zero. The poster
+       carries its own internal padding so content still breathes. */
+    @page { size: auto; margin: 0; }
     * { box-sizing: border-box; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
       margin: 0;
-      padding: 24px;
+      padding: 16mm 12mm;
       color: #1a0a14;
       background: #fff;
       display: flex;
@@ -1280,7 +1284,6 @@ export class HostSessionPage {
     }
     .footer strong { color: #1a0a14; }
     @media print {
-      body { padding: 0; }
       .no-print { display: none; }
     }
   </style>
