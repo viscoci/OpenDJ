@@ -485,13 +485,26 @@ export class NowPlayingPoller {
 
     // First pass: if the currently-playing URI matches a queue item that
     // was voted-rejected (or moderated-rejected), skip it best-effort so
-    // guests don't have to listen to it play out. Only triggers on sessions
-    // where someone took action — most ticks short-circuit on the no-match.
+    // guests don't have to listen to it play out.
+    //
+    // Two safety gates so a stale rejection doesn't haunt the URI forever:
+    //
+    //   1. Skip if there's an active (approved/queued/playing) item with
+    //      the same URI — that means a guest re-requested the song after
+    //      the original rejection, so the user clearly wants it to play.
+    //   2. After we successfully dispatch a skip, flip the rejected row
+    //      to 'played' so a future re-queue of the same URI doesn't hit
+    //      this match again.
     if (nowPlaying) {
       const rejectedHit = items.find(
         (i) => i.status === 'rejected' && i.trackUri === nowPlaying.uri,
       );
-      if (rejectedHit) {
+      const hasActiveSameUri = items.some(
+        (i) =>
+          i.trackUri === nowPlaying.uri &&
+          (i.status === 'approved' || i.status === 'queued' || i.status === 'playing'),
+      );
+      if (rejectedHit && !hasActiveSameUri) {
         const cached = this.state.get(sessionId);
         if (cached?.cachedAccountId && cached.cachedProviderId) {
           try {
@@ -502,6 +515,15 @@ export class NowPlayingPoller {
             if (supportsSkipTrack(provider)) {
               await provider.skipTrack();
               skipDispatched = true;
+              // Tombstone the rejected row so this match doesn't re-fire
+              // on the same URI later. Status 'played' is semantically
+              // close — the item is no longer eligible for any queue
+              // pipeline; keeps it out of canEnqueue active-status checks.
+              await repo.setStatus({
+                id: rejectedHit.id,
+                status: 'played',
+                decidedAt: new Date(now),
+              });
               this.logger.warn('[NowPlayingPoller] auto-skipped rejected track', {
                 sessionId,
                 itemId: rejectedHit.id,

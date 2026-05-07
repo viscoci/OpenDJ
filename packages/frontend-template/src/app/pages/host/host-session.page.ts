@@ -1202,8 +1202,10 @@ export class HostSessionPage {
     } catch {
       return;
     }
-    const win = globalThis.open('', '_blank', 'noopener,noreferrer,width=900,height=1100');
-    if (!win) return;
+    // Use a Blob URL — opening about:blank with `noopener` returns null,
+    // and `document.write` against a popup is blocked by some browsers
+    // anyway. The Blob URL gets loaded as a real document by the new tab.
+    // Revoked after a generous delay so the tab has time to fetch it.
     const escape = (s: string): string => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
     const html = `<!doctype html>
 <html lang="en">
@@ -1297,9 +1299,18 @@ export class HostSessionPage {
   <script>window.addEventListener('load', () => setTimeout(() => window.print(), 300));<\/script>
 </body>
 </html>`;
-    win.document.open();
-    win.document.write(html);
-    win.document.close();
+    const blob = new Blob([html], { type: 'text/html' });
+    const blobUrl = URL.createObjectURL(blob);
+    const win = globalThis.open(blobUrl, '_blank');
+    if (!win) {
+      // Popup blocked — drop the URL right away.
+      URL.revokeObjectURL(blobUrl);
+      return;
+    }
+    // Give the new tab plenty of time to load + run window.print() before
+    // we revoke. 60s is generous and harmless — the URL is unique to this
+    // page load.
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
   }
 
   // ─── Bootstrap + realtime ─────────────────────────────────────────────
