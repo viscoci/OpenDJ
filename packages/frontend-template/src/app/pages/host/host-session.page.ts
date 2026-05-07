@@ -85,6 +85,15 @@ import QRCode from 'qrcode';
                   </button>
                   <button type="button" class="action" (click)="downloadQr()">Download</button>
                   <button type="button" class="action" (click)="openPrintView()">Print</button>
+                  <a
+                    class="action"
+                    [href]="tvUrl()"
+                    target="_blank"
+                    rel="noopener"
+                    title="Open the public TV view in a new tab"
+                  >
+                    TV view ↗
+                  </a>
                 </div>
               </div>
             </div>
@@ -386,6 +395,9 @@ import QRCode from 'qrcode';
         font: inherit;
         font-size: 11px;
         cursor: pointer;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
       }
       .qr-actions .action:hover {
         border-color: #a855f7;
@@ -756,6 +768,13 @@ export class HostSessionPage {
     if (!s) return '';
     if (typeof globalThis.location === 'undefined') return `/u/${s.qrSlug}`;
     return `${globalThis.location.origin}/u/${s.qrSlug}`;
+  });
+
+  readonly tvUrl = computed(() => {
+    const s = this.session();
+    if (!s) return '';
+    if (typeof globalThis.location === 'undefined') return `/tv/${s.qrSlug}`;
+    return `${globalThis.location.origin}/tv/${s.qrSlug}`;
   });
 
   /** Queue items still awaiting moderation. Drives the "Pending review" tray. */

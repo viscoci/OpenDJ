@@ -117,15 +117,28 @@ import { OpenDjClientService } from '../../services/opendj-client.service.js';
             <p class="empty">No sessions yet — create one above.</p>
           } @else {
             @for (s of sessions(); track s.id) {
-              <a class="session-row" [routerLink]="['/host/sessions', s.id]">
-                <div class="meta">
-                  <span class="name">{{ s.name }}</span>
-                  <span class="slug">/u/{{ s.qrSlug }}</span>
-                </div>
-                <span class="status" [attr.data-status]="s.endedAt ? 'ended' : 'live'">
-                  {{ s.endedAt ? 'Ended' : 'Live' }}
-                </span>
-              </a>
+              <div class="session-row">
+                <a class="session-row-main" [routerLink]="['/host/sessions', s.id]">
+                  <div class="meta">
+                    <span class="name">{{ s.name }}</span>
+                    <span class="slug">/u/{{ s.qrSlug }}</span>
+                  </div>
+                  <span class="status" [attr.data-status]="s.endedAt ? 'ended' : 'live'">
+                    {{ s.endedAt ? 'Ended' : 'Live' }}
+                  </span>
+                </a>
+                @if (!s.endedAt) {
+                  <a
+                    class="tv-link"
+                    [routerLink]="['/tv', s.qrSlug]"
+                    target="_blank"
+                    rel="noopener"
+                    title="Open the public TV view in a new tab"
+                  >
+                    TV view ↗
+                  </a>
+                }
+              </div>
             }
           }
         </section>
@@ -315,15 +328,40 @@ import { OpenDjClientService } from '../../services/opendj-client.service.js';
         background: #1a1525;
         border: 1px solid #2c2440;
         border-radius: 12px;
+        display: flex;
+        align-items: stretch;
+        gap: 0;
+        overflow: hidden;
+      }
+      .session-row:hover {
+        border-color: #a855f7;
+      }
+      .session-row-main {
+        flex: 1;
         padding: 14px 16px;
         display: flex;
         align-items: center;
         justify-content: space-between;
         text-decoration: none;
         color: inherit;
+        min-width: 0;
       }
-      .session-row:hover {
-        border-color: #a855f7;
+      .tv-link {
+        display: flex;
+        align-items: center;
+        padding: 0 16px;
+        text-decoration: none;
+        color: #c8b8e9;
+        font-size: 12px;
+        font-family: 'JetBrains Mono', ui-monospace, monospace;
+        letter-spacing: 0.04em;
+        border-left: 1px solid #2c2440;
+        background: rgba(168, 85, 247, 0.06);
+        white-space: nowrap;
+      }
+      .tv-link:hover {
+        background: rgba(168, 85, 247, 0.16);
+        color: #fff;
       }
       .meta {
         display: flex;
