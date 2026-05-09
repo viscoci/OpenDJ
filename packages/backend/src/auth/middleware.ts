@@ -38,7 +38,9 @@ async function resolve(
 ): Promise<{ context: AuthContext | null; sessionId: string | undefined }> {
   const token = readCookie(c);
   if (!token) return { context: null, sessionId: undefined };
-  const resolved = await authService.resolveAuthContext(token, Date.now());
+  // Read time from the service's configured clock so production uses
+  // Date.now and tests can inject a fixed clock.
+  const resolved = await authService.resolveAuthContext(token, authService.now());
   if (!resolved) return { context: null, sessionId: undefined };
   return { context: resolved.context, sessionId: resolved.sessionId };
 }

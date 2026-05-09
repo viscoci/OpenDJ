@@ -11,12 +11,7 @@ import {
 } from '../../src/repositories/in-memory/index.js';
 import { authRoutes } from '../../src/routes/auth.js';
 
-// Sessions persist real-time TTL; the middleware reads `Date.now()` for
-// expiry. Pinning NOW to a hardcoded date causes the issued cookie to be
-// "expired" once the wall clock crosses the TTL window, breaking these
-// tests over time. Bind NOW to the wall clock at module load so the
-// fixture and the middleware agree on "now".
-const NOW = Date.now();
+const NOW = new Date('2026-04-30T12:00:00Z').getTime();
 
 interface SetupOptions {
   withMembership?: boolean;
@@ -30,7 +25,11 @@ async function setup(options: SetupOptions = {}) {
   const memberships = new InMemoryMembershipRepository();
   const authSessions = new InMemoryAuthSessionRepository(clock);
   const claimsService = new ClaimsService({ memberships, accounts });
-  const authService = new AuthService({ authSessions, claims: claimsService });
+  const authService = new AuthService({
+    authSessions,
+    claims: claimsService,
+    clock: () => fixedNow,
+  });
 
   const user = await users.create({ primaryEmail: 'u@example.com', displayName: 'U One' });
   accounts.seed({

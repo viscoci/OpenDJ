@@ -62,7 +62,7 @@ export function authRoutes(deps: AuthRouteDeps): Hono<{ Variables: AuthVariables
   app.post('/logout', requireAuth(deps.authService), async (c) => {
     const sessionId = c.get('authSessionId') as string | undefined;
     if (sessionId) {
-      await deps.authService.revokeSession(sessionId, Date.now());
+      await deps.authService.revokeSession(sessionId);
     }
     c.header('Set-Cookie', clearSessionCookie());
     return c.json({ ok: true });

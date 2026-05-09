@@ -31,6 +31,13 @@ export interface AuthServiceDeps {
   authSessions: AuthSessionRepository;
   claims: ClaimsService;
   sessionTtlMs?: number;
+  /**
+   * Wall-clock function. Defaults to `Date.now`. Tests inject a fixed
+   * clock so issued sessions and the middleware that validates them
+   * agree on "now" — avoids the failure mode where a fixture pinned to
+   * a hardcoded date silently expires once real time crosses the TTL.
+   */
+  clock?: () => number;
 }
 
 export interface IssuedSession {
@@ -65,13 +72,20 @@ export interface IssueSessionInput {
 
 export class AuthService {
   private readonly sessionTtlMs: number;
+  private readonly clock: () => number;
 
   constructor(private readonly deps: AuthServiceDeps) {
     this.sessionTtlMs = deps.sessionTtlMs ?? DEFAULT_SESSION_TTL_MS;
+    this.clock = deps.clock ?? Date.now;
+  }
+
+  /** Wall-clock epoch ms via the configured clock. */
+  now(): number {
+    return this.clock();
   }
 
   async issueSession(input: IssueSessionInput): Promise<IssuedSession> {
-    const now = input.nowEpochMs ?? Date.now();
+    const now = input.nowEpochMs ?? this.now();
     const ttl = input.ttlMs ?? this.sessionTtlMs;
     const token = generateSessionToken();
     const sessionHash = await hashSessionToken(token);
@@ -131,8 +145,8 @@ export class AuthService {
     };
   }
 
-  async revokeSession(sessionId: string, nowEpochMs: number): Promise<void> {
-    await this.deps.authSessions.revoke(sessionId, nowEpochMs);
+  async revokeSession(sessionId: string, nowEpochMs?: number): Promise<void> {
+    await this.deps.authSessions.revoke(sessionId, nowEpochMs ?? this.now());
   }
 
   /**

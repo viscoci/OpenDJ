@@ -15,10 +15,7 @@ import {
 import { providerOAuthRoutes } from '../../src/routes/providerOAuth.js';
 import { defineCapabilities, PROVIDER_FEATURES, type IStreamingProvider } from '@opendj/core';
 
-// See auth.test.ts — NOW must be tied to the wall clock so the session
-// the fixture issues stays "alive" from the middleware's `Date.now()`
-// perspective regardless of when the suite runs.
-const NOW = Date.now();
+const NOW = new Date('2026-04-30T12:00:00Z').getTime();
 const ACCOUNT_ID = '11111111-1111-1111-1111-111111111111';
 const USER_ID = '22222222-2222-2222-2222-222222222222';
 
@@ -63,7 +60,7 @@ async function setup(options: SetupOptions = {}) {
   const oauthStates = new InMemoryOAuthStateRepository(clock);
   const providerConnections = new InMemoryProviderConnectionRepository(clock);
   const claims = new ClaimsService({ memberships, accounts });
-  const authService = new AuthService({ authSessions, claims });
+  const authService = new AuthService({ authSessions, claims, clock: () => NOW });
 
   accounts.seed({
     id: ACCOUNT_ID,
