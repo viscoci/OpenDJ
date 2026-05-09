@@ -15,7 +15,10 @@ import {
 import { providerOAuthRoutes } from '../../src/routes/providerOAuth.js';
 import { defineCapabilities, PROVIDER_FEATURES, type IStreamingProvider } from '@opendj/core';
 
-const NOW = new Date('2026-04-30T12:00:00Z').getTime();
+// See auth.test.ts — NOW must be tied to the wall clock so the session
+// the fixture issues stays "alive" from the middleware's `Date.now()`
+// perspective regardless of when the suite runs.
+const NOW = Date.now();
 const ACCOUNT_ID = '11111111-1111-1111-1111-111111111111';
 const USER_ID = '22222222-2222-2222-2222-222222222222';
 

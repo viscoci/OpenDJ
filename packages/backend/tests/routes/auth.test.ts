@@ -11,7 +11,12 @@ import {
 } from '../../src/repositories/in-memory/index.js';
 import { authRoutes } from '../../src/routes/auth.js';
 
-const NOW = new Date('2026-04-30T12:00:00Z').getTime();
+// Sessions persist real-time TTL; the middleware reads `Date.now()` for
+// expiry. Pinning NOW to a hardcoded date causes the issued cookie to be
+// "expired" once the wall clock crosses the TTL window, breaking these
+// tests over time. Bind NOW to the wall clock at module load so the
+// fixture and the middleware agree on "now".
+const NOW = Date.now();
 
 interface SetupOptions {
   withMembership?: boolean;
