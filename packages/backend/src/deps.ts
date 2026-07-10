@@ -175,11 +175,6 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
   // streaming router below. We hold a ref here so it can be returned in
   // AppDeps.
   let nowPlayingPoller: NowPlayingPoller | null = null;
-  // streamingRouter is constructed below — store a closure in deps so
-  // QueueService can resolve it lazily. We rebuild the service after the
-  // router is ready to avoid undefined deps.
-  let queueService: QueueService;
-
   const fetchImpl = options.fetchImpl ?? globalThis.fetch;
   const providerRegistry: ProviderRegistry =
     options.providerRegistry ??
@@ -214,7 +209,7 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
   // Now construct QueueService with the provider integration in scope so
   // approved guest requests get pushed into the host's actual playback
   // queue (Spotify queue, etc.).
-  queueService = new QueueService({
+  const queueService = new QueueService({
     sessions: repositories.sessions,
     guests: repositories.guests,
     guestSlots: repositories.guestSlots,

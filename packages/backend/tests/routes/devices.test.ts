@@ -99,7 +99,7 @@ async function setup(opts: SetupOpts = {}) {
   const sessions = new InMemorySessionRepository();
   const providerConnections = new InMemoryProviderConnectionRepository(clock);
   const claims = new ClaimsService({ memberships, accounts });
-  const authService = new AuthService({ authSessions, claims });
+  const authService = new AuthService({ authSessions, claims, clock: () => NOW });
 
   accounts.seed({
     id: ACCOUNT_ID,
