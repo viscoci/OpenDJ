@@ -66,7 +66,7 @@ jobs:
   dco:
     name: DCO sign-off
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && github.event.pull_request.user.login != 'github-actions[bot]'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -77,7 +77,7 @@ jobs:
   changeset-check:
     name: Changeset check
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'skip-changeset') && !contains(github.event.pull_request.title, '[skip-changeset]')
+    if: github.event_name == 'pull_request' && github.event.pull_request.user.login != 'github-actions[bot]' && !contains(github.event.pull_request.labels.*.name, 'skip-changeset') && !contains(github.event.pull_request.title, '[skip-changeset]')
     steps:
       - uses: actions/checkout@v4
         with:
@@ -106,3 +106,29 @@ jobs:
       - name: Validate docker-compose.yml
         working-directory: apps/oss-demo
         run: docker compose config --quiet
+
+  publish-verify:
+    name: Publish tarball verification
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build packages
+        run: pnpm turbo run build --filter='./packages/*'
+
+      - name: Verify tarball metadata
+        run: node scripts/verify-publish.mjs
+
+      - name: Verify dist consumption
+        run: node scripts/verify-dist-consumption.mjs
