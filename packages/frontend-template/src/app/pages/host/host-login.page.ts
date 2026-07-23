@@ -1,10 +1,12 @@
 /**
  * /host/login — email+password login + register, plus OAuth provider links.
  *
- * `mode` toggles between login and register. Register includes an optional
- * displayName field (used as the personal-account slug hint). Both paths
- * share the same backend bootstrap → on success, the user lands at
- * `/host/dashboard` with a fully-claimed session cookie.
+ * `mode` toggles between login, register, and forgot (password-reset
+ * request). Register includes an optional displayName field (used as the
+ * personal-account slug hint). Login/register share the same backend
+ * bootstrap → on success, the user lands at `/host/dashboard` with a
+ * fully-claimed session cookie. Forgot posts to request-reset and always
+ * shows the same confirmation — the backend never leaks account existence.
  */
 
 import { CommonModule } from '@angular/common';
@@ -23,7 +25,7 @@ import { ApiError, type PublicConfig } from '@opendj/frontend';
 import { AuthService } from '../../services/auth.service.js';
 import { OpenDjClientService } from '../../services/opendj-client.service.js';
 
-type Mode = 'login' | 'register';
+type Mode = 'login' | 'register' | 'forgot';
 
 @Component({
   selector: 'app-host-login',
@@ -34,67 +36,101 @@ type Mode = 'login' | 'register';
     <main>
       <section class="card">
         <h1 class="brand">OpenDJ</h1>
-        <div class="tabs" role="tablist">
-          <button
-            type="button"
-            role="tab"
-            [class.active]="mode() === 'login'"
-            (click)="setMode('login')"
-          >
-            Sign in
-          </button>
-          <button
-            type="button"
-            role="tab"
-            [class.active]="mode() === 'register'"
-            (click)="setMode('register')"
-          >
-            Create account
-          </button>
-        </div>
+        @if (mode() !== 'forgot') {
+          <div class="tabs" role="tablist">
+            <button
+              type="button"
+              role="tab"
+              [class.active]="mode() === 'login'"
+              (click)="setMode('login')"
+            >
+              Sign in
+            </button>
+            <button
+              type="button"
+              role="tab"
+              [class.active]="mode() === 'register'"
+              (click)="setMode('register')"
+            >
+              Create account
+            </button>
+          </div>
+        } @else {
+          <h2 class="subhead">Reset your password</h2>
+        }
 
-        <form (ngSubmit)="submit()" #f="ngForm">
-          <label>
-            <span>Email</span>
-            <input
-              type="email"
-              name="email"
-              [(ngModel)]="form.email"
-              autocomplete="email"
-              required
-            />
-          </label>
-          <label>
-            <span>Password</span>
-            <input
-              type="password"
-              name="password"
-              [(ngModel)]="form.password"
-              autocomplete="current-password"
-              required
-              minlength="8"
-            />
-          </label>
-          @if (mode() === 'register') {
+        @if (notice()) {
+          <p class="notice">{{ notice() }}</p>
+        }
+
+        @if (forgotSent()) {
+          <p class="notice">If an account exists for that email, a reset link has been sent.</p>
+          <p class="oauth-note">
+            Self-hosted demo without SMTP: the link prints to the server console.
+          </p>
+          <button type="button" class="link" (click)="setMode('login')">Back to sign in</button>
+        } @else {
+          <form (ngSubmit)="submit()" #f="ngForm">
             <label>
-              <span>Display name (optional)</span>
+              <span>Email</span>
               <input
-                type="text"
-                name="displayName"
-                [(ngModel)]="form.displayName"
-                autocomplete="name"
+                type="email"
+                name="email"
+                [(ngModel)]="form.email"
+                autocomplete="email"
+                required
               />
             </label>
+            @if (mode() !== 'forgot') {
+              <label>
+                <span>Password</span>
+                <input
+                  type="password"
+                  name="password"
+                  [(ngModel)]="form.password"
+                  autocomplete="current-password"
+                  required
+                  minlength="8"
+                />
+              </label>
+            }
+            @if (mode() === 'login') {
+              <button type="button" class="link forgot" (click)="setMode('forgot')">
+                Forgot password?
+              </button>
+            }
+            @if (mode() === 'register') {
+              <label>
+                <span>Display name (optional)</span>
+                <input
+                  type="text"
+                  name="displayName"
+                  [(ngModel)]="form.displayName"
+                  autocomplete="name"
+                />
+              </label>
+            }
+            <button type="submit" [disabled]="busy()">
+              {{
+                busy()
+                  ? 'Working…'
+                  : mode() === 'login'
+                    ? 'Sign in'
+                    : mode() === 'register'
+                      ? 'Create account'
+                      : 'Send reset link'
+              }}
+            </button>
+            @if (error()) {
+              <p class="error">{{ error() }}</p>
+            }
+          </form>
+          @if (mode() === 'forgot') {
+            <button type="button" class="link" (click)="setMode('login')">Back to sign in</button>
           }
-          <button type="submit" [disabled]="busy()">
-            {{ busy() ? 'Working…' : mode() === 'login' ? 'Sign in' : 'Create account' }}
-          </button>
-          @if (error()) {
-            <p class="error">{{ error() }}</p>
-          }
-        </form>
+        }
 
-        @if (anyOAuth()) {
+        @if (mode() !== 'forgot' && anyOAuth()) {
           <div class="divider"><span>or continue with</span></div>
           @if (oauth().google) {
             <a class="oauth" [href]="googleStartUrl">Sign in with Google</a>
@@ -105,7 +141,7 @@ type Mode = 'login' | 'register';
           @if (oauth().facebook) {
             <a class="oauth" [href]="facebookStartUrl">Sign in with Facebook</a>
           }
-        } @else {
+        } @else if (mode() !== 'forgot') {
           <p class="oauth-note">
             No OAuth providers configured on this server. Set
             <code>GOOGLE_CLIENT_ID</code> in <code>apps/oss-demo/.env</code> to enable Google
@@ -218,6 +254,34 @@ type Mode = 'login' | 'register';
         color: #fda4af;
         font-size: 13px;
       }
+      .notice {
+        margin: 0 0 12px;
+        color: #34d399;
+        font-size: 13px;
+      }
+      .subhead {
+        font-size: 18px;
+        margin: 0 0 20px;
+        color: #f3eef9;
+      }
+      .link {
+        background: none;
+        border: 0;
+        padding: 0;
+        margin-top: 12px;
+        color: #a855f7;
+        font: inherit;
+        font-size: 13px;
+        cursor: pointer;
+        text-align: left;
+      }
+      .link:hover {
+        text-decoration: underline;
+      }
+      .link.forgot {
+        margin-top: -6px;
+        justify-self: start;
+      }
       .divider {
         margin: 24px 0 16px;
         text-align: center;
@@ -278,6 +342,8 @@ export class HostLoginPage {
   readonly mode: WritableSignal<Mode> = signal('login');
   readonly busy = signal(false);
   readonly error = signal<string | null>(null);
+  readonly notice = signal<string | null>(null);
+  readonly forgotSent = signal(false);
   readonly publicConfig: WritableSignal<PublicConfig | null> = signal(null);
 
   form = { email: '', password: '', displayName: '' };
@@ -301,6 +367,11 @@ export class HostLoginPage {
       const dest = q.get('redirectTo');
       if (dest && dest.startsWith('/')) this.redirectTo = dest;
     });
+    // Router navigation state (not a query param) so the banner can't be
+    // conjured by handing someone a crafted URL.
+    if (globalThis.history?.state?.passwordReset === true) {
+      this.notice.set('Password updated — sign in.');
+    }
     void this.client.client.publicConfig
       .get()
       .then((cfg) => this.publicConfig.set(cfg))
@@ -310,13 +381,27 @@ export class HostLoginPage {
   setMode(m: Mode): void {
     this.mode.set(m);
     this.error.set(null);
+    this.notice.set(null);
+    this.forgotSent.set(false);
   }
 
   async submit(): Promise<void> {
+    const mode = this.mode();
+    if (mode === 'forgot' && !this.form.email.trim().includes('@')) {
+      this.error.set('Enter a valid email address.');
+      return;
+    }
     this.busy.set(true);
     this.error.set(null);
     try {
-      if (this.mode() === 'login') {
+      if (mode === 'forgot') {
+        await this.client.client.auth.requestPasswordReset(this.form.email.trim());
+        // The user may have navigated back to sign-in while this was in
+        // flight — don't clobber that view with the forgot confirmation.
+        if (this.mode() === 'forgot') this.forgotSent.set(true);
+        return;
+      }
+      if (mode === 'login') {
         await this.auth.login(this.form.email.trim(), this.form.password);
       } else {
         await this.auth.register(
@@ -327,6 +412,7 @@ export class HostLoginPage {
       }
       await this.router.navigateByUrl(this.redirectTo);
     } catch (err) {
+      if (this.mode() !== mode) return;
       if (err instanceof ApiError) {
         this.error.set(this.errorMessage(err.code));
       } else {

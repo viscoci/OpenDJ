@@ -3,6 +3,7 @@ import { hostGuard } from './guards/host.guard';
 import { GuestRequestPage } from './pages/guest-request.page';
 import { HostDashboardPage } from './pages/host/host-dashboard.page';
 import { HostLoginPage } from './pages/host/host-login.page';
+import { HostResetPasswordPage } from './pages/host/host-reset-password.page';
 import { HostSessionPage } from './pages/host/host-session.page';
 import { LandingPage } from './pages/landing.page';
 import { TvPage } from './pages/tv.page';
@@ -13,6 +14,7 @@ export const routes: Routes = [
   { path: 'tv/:slug', component: TvPage },
   { path: 'host', pathMatch: 'full', redirectTo: 'host/dashboard' },
   { path: 'host/login', component: HostLoginPage },
+  { path: 'host/reset-password', component: HostResetPasswordPage },
   { path: 'host/dashboard', component: HostDashboardPage, canActivate: [hostGuard] },
   { path: 'host/sessions/:id', component: HostSessionPage, canActivate: [hostGuard] },
 ];
