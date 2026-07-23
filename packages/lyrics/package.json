@@ -13,9 +13,20 @@
     }
   },
   "files": [
-    "dist",
+    "dist/lyrics",
     "src"
   ],
+  "publishConfig": {
+    "access": "public",
+    "main": "./dist/lyrics/src/index.js",
+    "types": "./dist/lyrics/src/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/lyrics/src/index.d.ts",
+        "import": "./dist/lyrics/src/index.js"
+      }
+    }
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "lint": "eslint src",

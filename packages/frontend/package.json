@@ -13,9 +13,20 @@
     }
   },
   "files": [
-    "dist",
+    "dist/frontend",
     "src"
   ],
+  "publishConfig": {
+    "access": "public",
+    "main": "./dist/frontend/src/index.js",
+    "types": "./dist/frontend/src/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/frontend/src/index.d.ts",
+        "import": "./dist/frontend/src/index.js"
+      }
+    }
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "lint": "eslint src",
