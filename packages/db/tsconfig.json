@@ -2,7 +2,11 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "outDir": "dist",
-    "types": ["node"]
+    "types": ["node"],
+    "rootDir": "src",
+    "paths": {
+      "@opendj/*": ["../*/dist"]
+    }
   },
   "include": ["src/**/*"]
 }
