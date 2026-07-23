@@ -20,3 +20,11 @@ Inside the workspace, packages resolve TS source (`main: ./src/index.ts`). At pa
 ## Secrets
 
 `NPM_TOKEN`: npm automation token with publish rights to the scope, stored as a GitHub Actions repo secret.
+
+## First-release prerequisites
+
+One-time GitHub repo settings before the first Version-Packages PR:
+
+1. Settings → Actions → General → Workflow permissions: enable **"Allow GitHub Actions to create and approve pull requests"** — without it, changesets/action cannot open the version PR.
+2. The bot PR is created with the default `GITHUB_TOKEN`, so it does **not** trigger `pull_request` CI checks (GitHub limitation). If `main` requires status checks, close and reopen the bot PR to trigger them (or switch the workflow to a PAT/GitHub App token later).
+3. Repo secret `NPM_TOKEN` must exist (npm automation token with publish rights to the scope).
