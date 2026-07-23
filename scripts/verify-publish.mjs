@@ -4,7 +4,13 @@
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, readFileSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// Resolve repo root from this script's location
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const repoRoot = resolve(__dirname, '..');
 
 const PACKAGES = [
   { name: '@opendj/core', dir: 'packages/core' },
@@ -37,33 +43,39 @@ function assertDbMigrations(pkgRoot, fail) {
 
 for (const { name, dir, extra } of PACKAGES) {
   const fail = (msg) => failures.push(`${name}: ${msg}`);
+  const pkgDir = resolve(repoRoot, dir);
   const dest = join(work, name.replace(/[@/]/g, '_'));
-  const out = execFileSync('pnpm', ['pack', '--pack-destination', dest], {
-    encoding: 'utf8',
-    cwd: dir,
-    shell: process.platform === 'win32',
-  });
-  const tarball = out.trim().split('\n').at(-1).trim();
-  execFileSync('tar', ['-xzf', tarball, '-C', dest]);
-  const pkgRoot = join(dest, 'package');
-  const pkg = JSON.parse(readFileSync(join(pkgRoot, 'package.json'), 'utf8'));
 
-  for (const field of ['main', 'types']) {
-    if (!pkg[field]?.startsWith('./dist/'))
-      fail(`${field} is "${pkg[field]}" — must point into ./dist/`);
+  try {
+    const out = execFileSync('pnpm', ['pack', '--pack-destination', dest], {
+      encoding: 'utf8',
+      cwd: pkgDir,
+      shell: process.platform === 'win32',
+    });
+    const tarball = out.trim().split('\n').at(-1).trim();
+    execFileSync('tar', ['-xzf', tarball, '-C', dest]);
+    const pkgRoot = join(dest, 'package');
+    const pkg = JSON.parse(readFileSync(join(pkgRoot, 'package.json'), 'utf8'));
+
+    for (const field of ['main', 'types']) {
+      if (!pkg[field]?.startsWith('./dist/'))
+        fail(`${field} is "${pkg[field]}" — must point into ./dist/`);
+    }
+    const leaves = stringLeaves(pkg.exports);
+    if (leaves.length === 0) fail('exports has no entries');
+    for (const leaf of leaves) {
+      if (!leaf.startsWith('./dist/')) fail(`exports leaf "${leaf}" — must point into ./dist/`);
+      else if (!existsSync(resolve(pkgRoot, leaf)))
+        fail(`exports leaf "${leaf}" not present in tarball`);
+    }
+    for (const field of ['main', 'types']) {
+      if (pkg[field]?.startsWith('./dist/') && !existsSync(resolve(pkgRoot, pkg[field])))
+        fail(`${field} "${pkg[field]}" not present in tarball`);
+    }
+    extra?.(pkgRoot, fail);
+  } catch (err) {
+    fail(`${err.message}`);
   }
-  const leaves = stringLeaves(pkg.exports);
-  if (leaves.length === 0) fail('exports has no entries');
-  for (const leaf of leaves) {
-    if (!leaf.startsWith('./dist/')) fail(`exports leaf "${leaf}" — must point into ./dist/`);
-    else if (!existsSync(resolve(pkgRoot, leaf)))
-      fail(`exports leaf "${leaf}" not present in tarball`);
-  }
-  for (const field of ['main', 'types']) {
-    if (pkg[field]?.startsWith('./dist/') && !existsSync(resolve(pkgRoot, pkg[field])))
-      fail(`${field} "${pkg[field]}" not present in tarball`);
-  }
-  extra?.(pkgRoot, fail);
 }
 
 rmSync(work, { recursive: true, force: true });
