@@ -33,6 +33,8 @@ pnpm turbo run lint typecheck test
 
 `pnpm prepare` runs automatically and installs git hooks via [lefthook](https://github.com/evilmartians/lefthook).
 
+Cross-package type imports resolve against each dependency's built `dist/` (not live source), so rebuild a dependency (`pnpm turbo run build --filter=@opendj/<dep>`) before typechecking a downstream package standalone. `pnpm turbo run typecheck` handles the ordering for you via `dependsOn: ^build`.
+
 ## Branching + PRs
 
 - Default branch: `main`
