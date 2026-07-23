@@ -125,7 +125,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Build packages
-        run: pnpm turbo run build --filter='./packages/*'
+        run: pnpm turbo run build --filter='./packages/*' --filter='!@opendj/frontend-template' --filter='!@opendj/agent-tools'
 
       - name: Verify tarball metadata
         run: node scripts/verify-publish.mjs
