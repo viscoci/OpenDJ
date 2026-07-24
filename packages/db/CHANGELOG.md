@@ -1,5 +1,16 @@
 # @opendj/db
 
+## 0.2.0
+
+### Minor Changes
+
+- [#17](https://github.com/viscoci/OpenDJ/pull/17) [`c4ba271`](https://github.com/viscoci/OpenDJ/commit/c4ba271813c9c2913d9b666e353bd1d47e09a46f) Thanks [@viscoci](https://github.com/viscoci)! - per-session consecutive-songs cap (maxConsecutivePerGuest) enforced in canEnqueue.
+
+### Patch Changes
+
+- Updated dependencies [[`c4ba271`](https://github.com/viscoci/OpenDJ/commit/c4ba271813c9c2913d9b666e353bd1d47e09a46f)]:
+  - @opendj/core@0.2.0
+
 ## 0.1.0
 
 ### Minor Changes

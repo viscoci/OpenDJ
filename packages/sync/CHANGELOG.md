@@ -1,5 +1,12 @@
 # @opendj/sync
 
+## 0.1.1
+
+### Patch Changes
+
+- Updated dependencies [[`c4ba271`](https://github.com/viscoci/OpenDJ/commit/c4ba271813c9c2913d9b666e353bd1d47e09a46f)]:
+  - @opendj/core@0.2.0
+
 ## 0.1.0
 
 ### Minor Changes
