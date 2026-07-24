@@ -1,6 +1,6 @@
 {
   "name": "@opendj/db",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Drizzle schema, base migrations, and query helpers for OpenDJ.",
   "license": "MIT",
   "type": "module",

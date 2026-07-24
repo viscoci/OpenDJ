@@ -1,6 +1,6 @@
 {
   "name": "@opendj/core",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Pure TypeScript domain logic, provider contracts, queue rules, and plan gates.",
   "license": "MIT",
   "type": "module",

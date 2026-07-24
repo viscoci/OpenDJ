@@ -1,6 +1,6 @@
 {
   "name": "@opendj/abuse",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Abuse signals, risk scoring, rate-limit contracts, and analytics primitives for OpenDJ.",
   "license": "MIT",
   "type": "module",
