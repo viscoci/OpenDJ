@@ -9,3 +9,4 @@
 
 export * from './api/index.js';
 export * from './realtime/index.js';
+export { LyricsEngine, type LyricsEngineState, type LyricsMode } from './lyrics/LyricsEngine.js';

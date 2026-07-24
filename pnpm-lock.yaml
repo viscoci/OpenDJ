@@ -220,6 +220,9 @@ importers:
       '@opendj/realtime':
         specifier: workspace:*
         version: link:../realtime
+      '@opendj/sync':
+        specifier: workspace:*
+        version: link:../sync
     devDependencies:
       typescript:
         specifier: ^5.7.0

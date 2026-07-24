@@ -36,7 +36,8 @@
   "dependencies": {
     "@opendj/core": "workspace:*",
     "@opendj/lyrics": "workspace:*",
-    "@opendj/realtime": "workspace:*"
+    "@opendj/realtime": "workspace:*",
+    "@opendj/sync": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.7.0",
