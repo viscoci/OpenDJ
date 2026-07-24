@@ -221,6 +221,13 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
     audit: sessionAuditService,
   });
 
+  const lyricsProvider = options.lyricsProvider ?? new LrclibAdapter({ fetchImpl });
+  const lyricsLookupService = new LyricsLookupService({
+    provider: lyricsProvider,
+    cache: repositories.lyricsCache,
+    feedback: repositories.lyricsFeedback,
+  });
+
   if (roomManager) {
     nowPlayingPoller = new NowPlayingPoller({
       sessions: repositories.sessions,
@@ -229,15 +236,9 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
       roomManager,
       queueItems: repositories.queueItems,
       providerQueueRejections: queueService,
+      lyricsLookup: lyricsLookupService,
     });
   }
-
-  const lyricsProvider = options.lyricsProvider ?? new LrclibAdapter({ fetchImpl });
-  const lyricsLookupService = new LyricsLookupService({
-    provider: lyricsProvider,
-    cache: repositories.lyricsCache,
-    feedback: repositories.lyricsFeedback,
-  });
 
   const abuseModerationService = new AbuseModerationService({
     abuseSubjects: repositories.abuseSubjects,

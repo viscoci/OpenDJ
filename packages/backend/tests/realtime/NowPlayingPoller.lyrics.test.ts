@@ -1,10 +1,12 @@
 /**
- * NowPlayingPoller — sync layer: `playback.clock_sampled` broadcast.
+ * NowPlayingPoller — sync layer: `playback.clock_sampled` broadcast, plus
+ * the lyrics-on-track-change wiring.
  *
  * Reuses the same fake provider / repos / room-manager harness as
  * NowPlayingPoller.test.ts (see that file for the full lifecycle suite).
- * This file only covers the clock-sample publish added on top of the
- * existing `now_playing.updated` tick.
+ * This file covers the clock-sample publish added on top of the existing
+ * `now_playing.updated` tick, and the `lyrics.loaded` publish that fires
+ * a cache-fronted lyrics lookup on track change.
  */
 
 import {
@@ -13,6 +15,7 @@ import {
   type IStreamingProvider,
   type NowPlayingTrack,
 } from '@opendj/core';
+import type { LyricsDocument } from '@opendj/lyrics';
 import type { PlaybackClockSample } from '@opendj/sync';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NowPlayingPoller } from '../../src/realtime/NowPlayingPoller.js';
@@ -92,12 +95,70 @@ function makeStubProvider(): { provider: IStreamingProvider; control: StubContro
   };
 }
 
+interface FakeLyricsLookupCall {
+  trackName: string;
+  artistName: string;
+  durationMs?: number | null;
+  providerTrackUri?: string;
+}
+
+interface FakeLyricsLookup {
+  lookup(input: FakeLyricsLookupCall): Promise<LyricsDocument | null>;
+  calls: FakeLyricsLookupCall[];
+  /** Resolve the pending lookup previously issued for `providerTrackUri`. */
+  resolve(providerTrackUri: string, doc: LyricsDocument | null): void;
+  /** Reject the pending lookup previously issued for `providerTrackUri`. */
+  reject(providerTrackUri: string, err: unknown): void;
+}
+
+/**
+ * Controllable fake for `NowPlayingPollerDeps.lyricsLookup`. Each call to
+ * `lookup()` records the input and returns a promise that stays pending
+ * until the test explicitly resolves/rejects it via the returned handle —
+ * lets tests control lookup-vs-tick ordering (e.g. the stale-result test).
+ */
+function makeFakeLyricsLookup(): FakeLyricsLookup {
+  const calls: FakeLyricsLookupCall[] = [];
+  const pending = new Map<
+    string,
+    { resolve: (doc: LyricsDocument | null) => void; reject: (err: unknown) => void }
+  >();
+  return {
+    calls,
+    lookup(input) {
+      calls.push(input);
+      return new Promise<LyricsDocument | null>((resolve, reject) => {
+        pending.set(input.providerTrackUri ?? '', { resolve, reject });
+      });
+    },
+    resolve(providerTrackUri, doc) {
+      pending.get(providerTrackUri)?.resolve(doc);
+    },
+    reject(providerTrackUri, err) {
+      pending.get(providerTrackUri)?.reject(err);
+    },
+  };
+}
+
+const LYRICS_DOC: LyricsDocument = {
+  id: 'lrclib:1',
+  source: 'lrclib',
+  trackName: 'A',
+  artistName: 'B',
+  albumName: null,
+  durationMs: 200_000,
+  isSynced: true,
+  lines: [],
+  matchConfidence: 'high',
+};
+
 async function setup(
   opts: {
     intervalMs?: number;
     idleGraceMs?: number;
     driftThresholdMs?: number;
     nowEpochMs?: () => number;
+    lyricsLookup?: FakeLyricsLookup;
   } = {},
 ) {
   const sessions = new InMemorySessionRepository();
@@ -148,6 +209,7 @@ async function setup(
       providerConnections,
       streamingRouter,
       roomManager,
+      ...(opts.lyricsLookup !== undefined && { lyricsLookup: opts.lyricsLookup }),
     },
     {
       intervalMs: opts.intervalMs ?? 5000,
@@ -224,6 +286,179 @@ describe('NowPlayingPoller clock sampling', () => {
       (e) => (e as { type: string }).type === 'playback.clock_sampled',
     );
     expect(clockEvents).toHaveLength(0);
+
+    poller.stopAll();
+  });
+});
+
+describe('NowPlayingPoller lyrics wiring', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('looks up lyrics on track change and publishes lyrics.loaded', async () => {
+    const fakeLyrics = makeFakeLyricsLookup();
+    const { poller, sessionId, control, publishedEvents } = await setup({
+      lyricsLookup: fakeLyrics,
+    });
+
+    control.setNowPlaying({
+      uri: 'spotify:track:aaa',
+      name: 'A',
+      artist: 'B',
+      albumArt: null,
+      durationMs: 200_000,
+      progressMs: 10_000,
+      isPlaying: true,
+      zoneId: 'default',
+    });
+    poller.start(sessionId);
+    await vi.advanceTimersByTimeAsync(0);
+
+    // The lookup was fired but not yet resolved — resolve it and flush.
+    fakeLyrics.resolve('spotify:track:aaa', LYRICS_DOC);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(fakeLyrics.calls).toEqual([
+      {
+        trackName: 'A',
+        artistName: 'B',
+        durationMs: 200_000,
+        providerTrackUri: 'spotify:track:aaa',
+      },
+    ]);
+    const loaded = publishedEvents.filter((e) => (e as { type: string }).type === 'lyrics.loaded');
+    expect(loaded).toHaveLength(1);
+    expect(loaded[0]).toMatchObject({ trackUri: 'spotify:track:aaa' });
+    expect((loaded[0] as { lyrics: unknown }).lyrics).not.toBeNull();
+
+    poller.stopAll();
+  });
+
+  it('does not re-lookup for the same track on subsequent ticks', async () => {
+    const fakeLyrics = makeFakeLyricsLookup();
+    const { poller, sessionId, control, publishedEvents } = await setup({
+      intervalMs: 5000,
+      lyricsLookup: fakeLyrics,
+    });
+
+    control.setNowPlaying({
+      uri: 'spotify:track:aaa',
+      name: 'A',
+      artist: 'B',
+      albumArt: null,
+      durationMs: 200_000,
+      progressMs: 10_000,
+      isPlaying: true,
+      zoneId: 'default',
+    });
+    poller.start(sessionId);
+    await vi.advanceTimersByTimeAsync(0);
+    fakeLyrics.resolve('spotify:track:aaa', LYRICS_DOC);
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Second tick, same track (progress drifted forward) — no new lookup.
+    control.setNowPlaying({
+      uri: 'spotify:track:aaa',
+      name: 'A',
+      artist: 'B',
+      albumArt: null,
+      durationMs: 200_000,
+      progressMs: 15_000,
+      isPlaying: true,
+      zoneId: 'default',
+    });
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(fakeLyrics.calls).toHaveLength(1);
+    const loaded = publishedEvents.filter((e) => (e as { type: string }).type === 'lyrics.loaded');
+    expect(loaded).toHaveLength(1);
+
+    poller.stopAll();
+  });
+
+  it('publishes lyrics.loaded with null lyrics when lookup rejects', async () => {
+    const fakeLyrics = makeFakeLyricsLookup();
+    const { poller, sessionId, control, publishedEvents } = await setup({
+      lyricsLookup: fakeLyrics,
+    });
+
+    control.setNowPlaying({
+      uri: 'spotify:track:aaa',
+      name: 'A',
+      artist: 'B',
+      albumArt: null,
+      durationMs: 200_000,
+      progressMs: 10_000,
+      isPlaying: true,
+      zoneId: 'default',
+    });
+    poller.start(sessionId);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(() => fakeLyrics.reject('spotify:track:aaa', new Error('lookup boom'))).not.toThrow();
+    await vi.advanceTimersByTimeAsync(0);
+
+    const loaded = publishedEvents.filter((e) => (e as { type: string }).type === 'lyrics.loaded');
+    expect(loaded).toHaveLength(1);
+    expect(loaded[0]).toMatchObject({ trackUri: 'spotify:track:aaa', lyrics: null });
+
+    poller.stopAll();
+  });
+
+  it('suppresses a stale lookup result after the track changed again', async () => {
+    const fakeLyrics = makeFakeLyricsLookup();
+    const { poller, sessionId, control, publishedEvents } = await setup({
+      intervalMs: 5000,
+      lyricsLookup: fakeLyrics,
+    });
+
+    control.setNowPlaying({
+      uri: 'spotify:track:aaa',
+      name: 'A',
+      artist: 'B',
+      albumArt: null,
+      durationMs: 200_000,
+      progressMs: 10_000,
+      isPlaying: true,
+      zoneId: 'default',
+    });
+    poller.start(sessionId);
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Track moves on to bbb on the next tick, before aaa's lookup resolves.
+    control.setNowPlaying({
+      uri: 'spotify:track:bbb',
+      name: 'C',
+      artist: 'D',
+      albumArt: null,
+      durationMs: 180_000,
+      progressMs: 0,
+      isPlaying: true,
+      zoneId: 'default',
+    });
+    await vi.advanceTimersByTimeAsync(5000);
+
+    // aaa's lookup resolves late — the room's now-playing already moved to
+    // bbb, so the stale result must be suppressed (no lyrics.loaded: aaa).
+    fakeLyrics.resolve('spotify:track:aaa', LYRICS_DOC);
+    await vi.advanceTimersByTimeAsync(0);
+
+    let loaded = publishedEvents.filter((e) => (e as { type: string }).type === 'lyrics.loaded');
+    expect(loaded).toHaveLength(0);
+
+    // bbb's own lookup resolving does publish.
+    fakeLyrics.resolve('spotify:track:bbb', LYRICS_DOC);
+    await vi.advanceTimersByTimeAsync(0);
+
+    loaded = publishedEvents.filter((e) => (e as { type: string }).type === 'lyrics.loaded');
+    expect(loaded).toHaveLength(1);
+    expect(loaded[0]).toMatchObject({ trackUri: 'spotify:track:bbb' });
 
     poller.stopAll();
   });

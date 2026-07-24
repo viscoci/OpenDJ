@@ -47,6 +47,7 @@ import {
   type NowPlayingTrack,
   type Track,
 } from '@opendj/core';
+import type { LyricsDocument } from '@opendj/lyrics';
 import { createPlaybackClockSample } from '@opendj/sync';
 import {
   ProviderConnectionNotFoundError,
@@ -80,6 +81,19 @@ export interface NowPlayingPollerDeps {
   providerQueueRejections?: {
     getRejectedProviderUris(sessionId: string): ReadonlySet<string>;
     consumeProviderRejection(sessionId: string, trackUri: string): boolean;
+  };
+  /**
+   * When supplied, the poller fires a cache-fronted lyrics lookup on every
+   * track change and publishes `lyrics.loaded` (null lyrics on miss/failure).
+   * Failures never affect playback or queue behavior.
+   */
+  lyricsLookup?: {
+    lookup(input: {
+      trackName: string;
+      artistName: string;
+      durationMs?: number | null;
+      providerTrackUri?: string;
+    }): Promise<LyricsDocument | null>;
   };
 }
 
@@ -120,6 +134,12 @@ interface PerSession {
    * duplicate Spotify entries.
    */
   lastPushedAt: Map<string, number>;
+  /**
+   * Provider URI of the track we last fired a lyrics lookup for. `null`
+   * until the first lookup. Prevents re-looking-up the same track on
+   * every tick while it's still playing.
+   */
+  lastLyricsUri: string | null;
 }
 
 const SPOTIFY_PROVIDER_ID = 'spotify';
@@ -160,6 +180,7 @@ export class NowPlayingPoller {
         cachedProviderId: null,
         backoffMs: null,
         lastPushedAt: new Map(),
+        lastLyricsUri: null,
       };
       this.state.set(sessionId, entry);
     }
@@ -296,6 +317,32 @@ export class NowPlayingPoller {
           type: 'playback.clock_sampled',
           sample: createPlaybackClockSample(next, this.nowEpochMs()),
         });
+      }
+
+      // Lyrics: on track change, fire a non-blocking lookup and publish the
+      // result. Guard against out-of-order completion by re-checking the
+      // room's CURRENT now-playing before publishing.
+      if (this.deps.lyricsLookup && next && next.uri !== entry.lastLyricsUri) {
+        entry.lastLyricsUri = next.uri;
+        const lookupUri = next.uri;
+        void this.deps.lyricsLookup
+          .lookup({
+            trackName: next.name,
+            artistName: next.artist,
+            durationMs: next.durationMs,
+            providerTrackUri: next.uri,
+          })
+          .catch(() => null)
+          .then(async (lyrics) => {
+            const currentRoom = this.deps.roomManager.forSession(sessionId);
+            if (!currentRoom) return;
+            const current = await currentRoom.getSnapshot();
+            if (current.nowPlaying?.uri !== lookupUri) return; // stale result
+            await currentRoom.publish({ type: 'lyrics.loaded', trackUri: lookupUri, lyrics });
+          })
+          .catch(() => {
+            /* publish failed (room torn down) — lyrics never block playback */
+          });
       }
 
       // Auto-skip rejected provider-queue URIs the moment they reach the
