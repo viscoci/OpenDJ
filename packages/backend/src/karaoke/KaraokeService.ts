@@ -267,6 +267,13 @@ export class KaraokeService {
    * claim. Broadcasts `karaoke.spotlight` only when the spotlight actually
    * changes; a fresh spotlight under `auto` pause mode also pauses playback
    * and broadcasts `karaoke.paused` with the auto-resume deadline.
+   *
+   * When the session's `karaokeMode` is `off`, old claims (made while
+   * karaoke was on) must never re-trigger the spotlight: no new spotlight
+   * is entered, and any spotlight left over from before the host turned
+   * karaoke off is cleared (broadcast `itemId: null`, pause state dropped
+   * WITHOUT a provider resume call — the host controls playback directly
+   * once karaoke is off).
    */
   async handleTrackChange(input: {
     sessionId: string;
@@ -275,6 +282,20 @@ export class KaraokeService {
   }): Promise<void> {
     const now = input.nowEpochMs ?? this.now();
     const state = this.stateFor(input.sessionId);
+    const session = await this.deps.sessions.findById(input.sessionId);
+
+    if (session?.karaokeMode === 'off') {
+      if (state.spotlightItemId === null) return; // already clear — stay quiet
+      state.spotlightItemId = null;
+      state.paused = false;
+      state.pausedUntilEpochMs = null;
+      await this.publishToRoom(input.sessionId, {
+        type: 'karaoke.spotlight',
+        itemId: null,
+        claims: [],
+      });
+      return;
+    }
 
     let spotlightItemId: string | null = null;
     let claims: KaraokeClaimSummary[] = [];
@@ -308,7 +329,6 @@ export class KaraokeService {
 
     if (spotlightItemId === null) return;
 
-    const session = await this.deps.sessions.findById(input.sessionId);
     if (!session || session.karaokePauseMode !== 'auto') return;
 
     await this.callProvider(session, 'pause');

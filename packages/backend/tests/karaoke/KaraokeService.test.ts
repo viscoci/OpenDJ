@@ -1,15 +1,60 @@
 import { describe, expect, it } from 'vitest';
 import { NodeSessionRoom } from '@opendj/realtime';
+import { defineCapabilities, PROVIDER_FEATURES, type IStreamingProvider } from '@opendj/core';
 import { KaraokeService, type KaraokeRoomRegistry } from '../../src/karaoke/KaraokeService.js';
 import { sanitizeKaraokeDisplayName } from '../../src/karaoke/displayName.js';
+import { StreamingRouter } from '../../src/providers/streaming/StreamingRouter.js';
+import type { ProviderRegistry } from '../../src/providers/streaming/providerRegistry.js';
 import {
   InMemoryGuestRepository,
   InMemoryGuestSlotRepository,
   InMemoryKaraokeClaimRepository,
+  InMemoryProviderConnectionRepository,
   InMemoryQueueItemRepository,
   InMemorySessionRepository,
 } from '../../src/repositories/in-memory/index.js';
 import type { QueueItemStatus, SessionRecord } from '../../src/repositories/types.js';
+
+/**
+ * Stub provider used only to assert pause/resume call counts (e.g. that a
+ * karaoke-off clear never calls provider resume — the host controls
+ * playback directly once karaoke is off).
+ */
+function makeStubProvider(): {
+  provider: IStreamingProvider;
+  pauseCalls: () => number;
+  resumeCalls: () => number;
+} {
+  let pauseCalls = 0;
+  let resumeCalls = 0;
+  const feature = (id: string) =>
+    ({ id, supported: true, access: 'host', reliability: 'native' }) as const;
+  const provider: IStreamingProvider = {
+    providerId: 'spotify',
+    displayName: 'Spotify',
+    async connect() {},
+    async disconnect() {},
+    isConnected() {
+      return true;
+    },
+    async refreshCredentials() {
+      return {};
+    },
+    getCapabilities() {
+      return defineCapabilities('spotify', {
+        [PROVIDER_FEATURES.Pause]: feature(PROVIDER_FEATURES.Pause),
+        [PROVIDER_FEATURES.Resume]: feature(PROVIDER_FEATURES.Resume),
+      });
+    },
+    async pause() {
+      pauseCalls += 1;
+    },
+    async resume() {
+      resumeCalls += 1;
+    },
+  } as IStreamingProvider;
+  return { provider, pauseCalls: () => pauseCalls, resumeCalls: () => resumeCalls };
+}
 
 const SESSION_ID = '11111111-1111-1111-1111-111111111111';
 const NOW = new Date('2026-04-30T12:00:00Z').getTime();
@@ -40,6 +85,8 @@ function setup(
     karaokeMicCount?: number;
     karaokePauseMode?: 'off' | 'manual' | 'auto';
     karaokePauseTimeoutSec?: number;
+    /** Wire a stub streaming provider so pause/resume calls are countable. */
+    withProviderMock?: boolean;
   } = {},
 ) {
   const clock = { now: () => new Date(NOW) };
@@ -62,6 +109,28 @@ function setup(
     forSession: (id) => (id === SESSION_ID ? room : null),
   };
 
+  let providerControl: { pauseCalls: () => number; resumeCalls: () => number } | undefined;
+  let streamingRouter: StreamingRouter | undefined;
+  let providerConnections: InMemoryProviderConnectionRepository | undefined;
+  if (opts.withProviderMock) {
+    providerConnections = new InMemoryProviderConnectionRepository(clock);
+    // upsert has no internal `await` before the write, so this lands
+    // synchronously even though setup() itself stays sync.
+    void providerConnections.upsert({
+      accountId: baseSession.accountId,
+      providerId: 'spotify',
+      accessToken: 'fake-access-token',
+    });
+    const stub = makeStubProvider();
+    const registry: ProviderRegistry = { spotify: () => stub.provider } as ProviderRegistry;
+    streamingRouter = new StreamingRouter({
+      providerConnections,
+      registry,
+      context: { fetch: globalThis.fetch },
+    });
+    providerControl = { pauseCalls: stub.pauseCalls, resumeCalls: stub.resumeCalls };
+  }
+
   const service = new KaraokeService({
     sessions,
     guests,
@@ -69,6 +138,8 @@ function setup(
     queueItems,
     karaokeClaims,
     rooms,
+    streamingRouter,
+    providerConnections,
     nowEpochMs: () => NOW,
   });
 
@@ -123,6 +194,7 @@ function setup(
     addGuest,
     addItem,
     captureEvents,
+    providerControl,
   };
 }
 
@@ -587,6 +659,70 @@ describe('KaraokeService.handleTrackChange (spotlight)', () => {
       paused: true,
       pausedUntilEpochMs: NOW + 45_000,
     });
+  });
+
+  it('karaokeMode "off": a claimed track change never enters the spotlight', async () => {
+    const { service, karaokeClaims, addGuest, addItem, captureEvents } = setup({
+      karaokeMode: 'off',
+    });
+    const { guest } = await addGuest();
+    const item = await addItem('queued');
+    await karaokeClaims.create({
+      sessionId: SESSION_ID,
+      queueItemId: item.id,
+      guestId: guest.id,
+      displayName: 'Ana',
+    });
+    const captured = await captureEvents();
+
+    await service.handleTrackChange({ sessionId: SESSION_ID, trackUri: URI });
+
+    expect(captured).toEqual([]);
+    expect(service.getKaraokeState(SESSION_ID)).toEqual({
+      spotlightItemId: null,
+      paused: false,
+      pausedUntilEpochMs: null,
+    });
+  });
+
+  it('host flips karaokeMode to "off" mid-spotlight: next track change clears it (and any pause) without calling provider resume', async () => {
+    const { service, sessions, karaokeClaims, addGuest, addItem, captureEvents, providerControl } =
+      setup({
+        karaokePauseMode: 'auto',
+        karaokePauseTimeoutSec: 30,
+        withProviderMock: true,
+      });
+    const { guest } = await addGuest();
+    const item = await addItem('queued');
+    await karaokeClaims.create({
+      sessionId: SESSION_ID,
+      queueItemId: item.id,
+      guestId: guest.id,
+      displayName: 'Ana',
+    });
+
+    // Enter the spotlight while karaoke is still on — auto mode also pauses.
+    await service.handleTrackChange({ sessionId: SESSION_ID, trackUri: URI, nowEpochMs: NOW });
+    expect(service.getKaraokeState(SESSION_ID).paused).toBe(true);
+    expect(providerControl?.pauseCalls()).toBe(1);
+
+    // Host turns karaoke off mid-song (track hasn't changed yet).
+    await sessions.update({ id: SESSION_ID, karaokeMode: 'off' });
+    const captured = await captureEvents();
+
+    // Next track-change tick (poller fires this on every URI sample, even
+    // when the URI is unchanged from the poller's perspective — here we
+    // simulate the same URI still playing) must clear the stale spotlight.
+    await service.handleTrackChange({ sessionId: SESSION_ID, trackUri: URI, nowEpochMs: NOW });
+
+    expect(captured).toEqual([{ type: 'karaoke.spotlight', itemId: null, claims: [] }]);
+    expect(service.getKaraokeState(SESSION_ID)).toEqual({
+      spotlightItemId: null,
+      paused: false,
+      pausedUntilEpochMs: null,
+    });
+    // The host controls playback directly once karaoke is off — no resume.
+    expect(providerControl?.resumeCalls()).toBe(0);
   });
 });
 
