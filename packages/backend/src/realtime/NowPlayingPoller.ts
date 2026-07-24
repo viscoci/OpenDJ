@@ -324,6 +324,11 @@ export class NowPlayingPoller {
       // Lyrics: on track change, fire a non-blocking lookup and publish the
       // result. Guard against out-of-order completion by re-checking the
       // room's CURRENT now-playing before publishing.
+      if (next === null) {
+        // Playback fully stopped (device stop, not pause): reset so the
+        // lookup re-fires when the same track resumes with the same URI.
+        entry.lastLyricsUri = null;
+      }
       if (this.deps.lyricsLookup && next && next.uri !== entry.lastLyricsUri) {
         entry.lastLyricsUri = next.uri;
         const lookupUri = next.uri;
