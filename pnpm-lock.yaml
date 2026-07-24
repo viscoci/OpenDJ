@@ -214,9 +214,15 @@ importers:
       '@opendj/core':
         specifier: workspace:*
         version: link:../core
+      '@opendj/lyrics':
+        specifier: workspace:*
+        version: link:../lyrics
       '@opendj/realtime':
         specifier: workspace:*
         version: link:../realtime
+      '@opendj/sync':
+        specifier: workspace:*
+        version: link:../sync
     devDependencies:
       typescript:
         specifier: ^5.7.0
@@ -257,9 +263,15 @@ importers:
       '@opendj/frontend':
         specifier: workspace:*
         version: link:../frontend
+      '@opendj/lyrics':
+        specifier: workspace:*
+        version: link:../lyrics
       '@opendj/realtime':
         specifier: workspace:*
         version: link:../realtime
+      '@opendj/sync':
+        specifier: workspace:*
+        version: link:../sync
       qrcode:
         specifier: ^1.5.4
         version: 1.5.4

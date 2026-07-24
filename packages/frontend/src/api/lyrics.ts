@@ -1,5 +1,6 @@
 import type { HttpClient } from './http.js';
-import type { LyricsFeedbackBody, LyricsResponse } from './types.js';
+import type { LyricsDocument } from '@opendj/lyrics';
+import type { LyricsFeedbackBody } from './types.js';
 
 /**
  * Lyrics resource — `/api/v1/lyrics/*`.
@@ -10,12 +11,17 @@ import type { LyricsFeedbackBody, LyricsResponse } from './types.js';
 export class LyricsApi {
   constructor(private readonly http: HttpClient) {}
 
-  lookupByTrackUri(trackUri: string): Promise<LyricsResponse | null> {
+  /** Cache-fronted lookup. Mirrors GET /api/v1/lyrics/lookup. */
+  lookup(input: {
+    trackName: string;
+    artistName: string;
+    albumName?: string;
+    durationMs?: number;
+    providerTrackUri?: string;
+  }): Promise<LyricsDocument | null> {
     return this.http
-      .request<LyricsResponse | { lyrics: null }>('/api/v1/lyrics/lookup', {
-        query: { trackUri },
-      })
-      .then((r) => ((r as { lyrics?: null }).lyrics === null ? null : (r as LyricsResponse)));
+      .request<{ match: LyricsDocument | null }>('/api/v1/lyrics/lookup', { query: { ...input } })
+      .then((r) => r.match);
   }
 
   /**

@@ -116,24 +116,6 @@ export interface ModerateQueueItemBody {
   decision: 'approved' | 'rejected';
 }
 
-export interface LyricsLineWire {
-  startMs: number;
-  text: string;
-  endMs?: number;
-}
-
-export interface LyricsResponse {
-  trackUri: string;
-  source: string;
-  isSynced: boolean;
-  isInstrumental: boolean;
-  matchConfidence: 'low' | 'medium' | 'high';
-  attribution: string | null;
-  lines: ReadonlyArray<LyricsLineWire>;
-  /** Plain-lyrics fallback when no synced LRC is available. */
-  plain: string | null;
-}
-
 export interface LyricsFeedbackBody {
   /** `wrong_song` | `bad_timing` | `offensive` | `missing` — backend accepts any string. */
   kind: string;

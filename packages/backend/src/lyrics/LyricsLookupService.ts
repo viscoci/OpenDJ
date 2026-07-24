@@ -13,6 +13,7 @@
 import {
   lookupCacheKey,
   normalizeLookup,
+  parseLrc,
   type LyricsDocument,
   type LyricsFeedbackInput,
   type LyricsProvider,
@@ -80,7 +81,16 @@ export class LyricsLookupService {
     );
     if (cached) {
       await this.deps.cache.recordHit(cached.id, this.now());
-      return cached.suppressedAt !== null ? null : cacheRowToDocument(cached);
+      if (cached.suppressedAt !== null) {
+        return null;
+      }
+      const hasSyncedLrc = cached.syncedLrc !== null && cached.syncedLrc.length > 0;
+      const hasPlainLyrics = cached.plainLyrics !== null && cached.plainLyrics.length > 0;
+      if (!hasSyncedLrc && !hasPlainLyrics) {
+        // No-match sentinel row (negative cache): nothing to hydrate.
+        return null;
+      }
+      return cacheRowToDocument(cached);
     }
 
     let document: LyricsDocument | null = null;
@@ -165,9 +175,10 @@ export class LyricsLookupService {
 
 function cacheRowToDocument(row: LyricsCacheRecord): LyricsDocument {
   // Late-bound import would force a circular dep; we rebuild a LyricsDocument
-  // shape here. The lines array is intentionally empty in the cache projection
-  // — callers re-parse `rawLrc` via @opendj/lyrics' parseLrc when they need
-  // the structured timeline. The TV view typically does this on the client.
+  // shape here. When the row carries synced LRC, we re-parse it with
+  // @opendj/lyrics' parseLrc so cache hits hydrate a full timed line list
+  // (mirrors what the LRCLIB adapter does on a fresh provider match).
+  const hasSyncedLrc = row.syncedLrc !== null && row.syncedLrc.length > 0;
   const document: LyricsDocument = {
     id: row.id,
     source: row.source,
@@ -178,7 +189,7 @@ function cacheRowToDocument(row: LyricsCacheRecord): LyricsDocument {
     durationMs: row.durationMs,
     isSynced: row.isSynced,
     isInstrumental: row.isInstrumental,
-    lines: [],
+    lines: hasSyncedLrc ? parseLrc(row.syncedLrc!) : [],
     ...(row.syncedLrc !== null && { rawLrc: row.syncedLrc }),
     ...(row.plainLyrics !== null && { plainText: row.plainLyrics }),
     ...(row.attribution !== null && { attribution: row.attribution }),

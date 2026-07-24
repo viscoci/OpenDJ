@@ -23,9 +23,15 @@ import {
 } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { ActivatedRoute } from '@angular/router';
-import { RealtimeClient, type SessionWire } from '@opendj/frontend';
+import {
+  LyricsEngine,
+  RealtimeClient,
+  type LyricsEngineState,
+  type SessionWire,
+} from '@opendj/frontend';
 import type { NowPlayingTrack, Track } from '@opendj/core';
 import type { SessionEvent, SessionSnapshot } from '@opendj/realtime';
+import { LyricsPanelComponent } from '../components/lyrics-panel.component.js';
 import { NowPlayingCardComponent } from '../components/now-playing-card.component.js';
 import { QrCodeComponent } from '../components/qr-code.component.js';
 import { QueueListComponent, type QueueListItem } from '../components/queue-list.component.js';
@@ -34,7 +40,13 @@ import { OpenDjClientService } from '../services/opendj-client.service.js';
 @Component({
   selector: 'app-tv',
   standalone: true,
-  imports: [CommonModule, NowPlayingCardComponent, QrCodeComponent, QueueListComponent],
+  imports: [
+    CommonModule,
+    LyricsPanelComponent,
+    NowPlayingCardComponent,
+    QrCodeComponent,
+    QueueListComponent,
+  ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     @if (loadError()) {
@@ -54,6 +66,7 @@ import { OpenDjClientService } from '../services/opendj-client.service.js';
         <section class="tv-main">
           <div class="now-playing">
             <app-now-playing-card [track]="nowPlaying()" [lastUpdatedAtMs]="nowPlayingAt()" />
+            <app-lyrics-panel [state]="lyricsState()" variant="tv" />
           </div>
           <aside class="sidebar">
             <div class="qr-card">
@@ -318,6 +331,9 @@ export class TvPage {
 
   private realtime: RealtimeClient | null = null;
   private clockInterval: ReturnType<typeof setInterval> | null = null;
+  private readonly lyricsEngine = new LyricsEngine({ prevCount: 1, nextCount: 2 });
+  readonly lyricsState = signal<LyricsEngineState | null>(null);
+  private lyricsInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
     this.route.paramMap.pipe(takeUntilDestroyed(this.destroyRef)).subscribe((p) => {
@@ -327,9 +343,13 @@ export class TvPage {
     this.clockInterval = setInterval(() => {
       this.clockText.set(formatClock(new Date()));
     }, 30_000);
+    this.lyricsInterval = setInterval(() => {
+      this.lyricsState.set(this.lyricsEngine.computeState());
+    }, 250);
     this.destroyRef.onDestroy(() => {
       this.realtime?.close();
       if (this.clockInterval) clearInterval(this.clockInterval);
+      if (this.lyricsInterval) clearInterval(this.lyricsInterval);
     });
   }
 
@@ -361,6 +381,7 @@ export class TvPage {
       this.upcoming.set(snapshot.queue);
       this.providerQueue.set(snapshot.providerQueue);
       this.activeGuestCount.set(snapshot.activeGuestCount);
+      this.lyricsEngine.applySnapshot(snapshot);
     });
     this.realtime.on('now_playing.updated', (event) => {
       this.nowPlaying.set(event.track);
@@ -373,6 +394,7 @@ export class TvPage {
       this.activeGuestCount.set(event.activeCount);
     });
     this.realtime.onEvent((event: SessionEvent) => {
+      this.lyricsEngine.applyEvent(event);
       // Refresh the queue on any queue mutation. The polished hosted
       // version applies the delta directly; OSS keeps it simple.
       if (

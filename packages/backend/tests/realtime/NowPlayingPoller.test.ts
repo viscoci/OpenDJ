@@ -222,8 +222,14 @@ describe('NowPlayingPoller — lifecycle', () => {
     poller.start(sessionId);
     expect(poller.size()).toBe(1);
     await vi.advanceTimersByTimeAsync(0);
-    expect(sentEvents).toHaveLength(1);
-    expect(sentEvents[0]).toMatchObject({
+    // Each tick also publishes a `playback.clock_sampled` event alongside
+    // `now_playing.updated` (see NowPlayingPoller.lyrics.test.ts) — filter
+    // to the event this test cares about.
+    const nowPlayingEvents = sentEvents.filter(
+      (e) => (e as { type: string }).type === 'now_playing.updated',
+    );
+    expect(nowPlayingEvents).toHaveLength(1);
+    expect(nowPlayingEvents[0]).toMatchObject({
       type: 'now_playing.updated',
       track: { uri: 'spotify:track:a' },
     });
@@ -231,21 +237,26 @@ describe('NowPlayingPoller — lifecycle', () => {
 
   it('reschedules at intervalMs after a tick', async () => {
     const { poller, sessionId, control, sentEvents } = await setup({ intervalMs: 5000 });
+    // Each tick also publishes a `playback.clock_sampled` event alongside
+    // `now_playing.updated` (see NowPlayingPoller.lyrics.test.ts) — filter
+    // to the event this test cares about.
+    const nowPlayingEvents = () =>
+      sentEvents.filter((e) => (e as { type: string }).type === 'now_playing.updated');
     control.setNowPlaying(track('spotify:track:a'));
     poller.start(sessionId);
     await vi.advanceTimersByTimeAsync(0);
-    expect(sentEvents).toHaveLength(1);
+    expect(nowPlayingEvents()).toHaveLength(1);
 
     // Same track, small drift — should NOT republish.
     control.setNowPlaying(track('spotify:track:a', 32_000));
     await vi.advanceTimersByTimeAsync(5000);
-    expect(sentEvents).toHaveLength(1);
+    expect(nowPlayingEvents()).toHaveLength(1);
 
     // Track change → should publish.
     control.setNowPlaying(track('spotify:track:b'));
     await vi.advanceTimersByTimeAsync(5000);
-    expect(sentEvents).toHaveLength(2);
-    expect(sentEvents[1]).toMatchObject({ track: { uri: 'spotify:track:b' } });
+    expect(nowPlayingEvents()).toHaveLength(2);
+    expect(nowPlayingEvents()[1]).toMatchObject({ track: { uri: 'spotify:track:b' } });
   });
 
   it('start is idempotent — second start while running is a no-op', async () => {

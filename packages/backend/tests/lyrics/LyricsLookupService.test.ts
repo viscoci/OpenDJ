@@ -112,6 +112,28 @@ describe('LyricsLookupService.lookup — cache hit', () => {
     const fresh = await service.lookup({ trackName: 'Hello', artistName: 'World' });
     expect(fresh).toBeNull();
   });
+
+  it('hydrates timed lines from the cached rawLrc on a cache hit', async () => {
+    const provider = fakeProvider({ getBestMatch: async () => SAMPLE_DOC });
+    const { service } = setup(provider);
+    const first = await service.lookup({ trackName: 'Hello', artistName: 'World' });
+    const second = await service.lookup({ trackName: 'Hello', artistName: 'World' });
+    expect(provider.getBestMatch).toHaveBeenCalledTimes(1);
+    expect(first?.lines).toEqual([{ id: 'l-0', text: 'hello', startsAtMs: 1000 }]);
+    expect(second?.isSynced).toBe(true);
+    expect(second?.lines.length).toBeGreaterThan(0);
+    expect(second?.lines[0]).toMatchObject({ text: 'hello', startsAtMs: 1000 });
+  });
+
+  it('returns null on a negative-cache hit (no synced/plain lyrics stored)', async () => {
+    const provider = fakeProvider({ getBestMatch: async () => null });
+    const { service } = setup(provider);
+    const first = await service.lookup({ trackName: 'Hello', artistName: 'World' });
+    const second = await service.lookup({ trackName: 'Hello', artistName: 'World' });
+    expect(first).toBeNull();
+    expect(second).toBeNull();
+    expect(provider.getBestMatch).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('LyricsLookupService.recordFeedback', () => {

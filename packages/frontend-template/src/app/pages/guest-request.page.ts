@@ -32,13 +32,16 @@ import { FormsModule } from '@angular/forms';
 import { ActivatedRoute } from '@angular/router';
 import {
   ApiError,
+  LyricsEngine,
   RealtimeClient,
   type GuestIdentityResponse,
+  type LyricsEngineState,
   type SearchResultWire,
   type SessionWire,
 } from '@opendj/frontend';
 import type { NowPlayingTrack, Track } from '@opendj/core';
 import type { SessionEvent, SessionSnapshot } from '@opendj/realtime';
+import { LyricsPanelComponent } from '../components/lyrics-panel.component.js';
 import { NowPlayingCardComponent } from '../components/now-playing-card.component.js';
 import { QueueListComponent, type QueueListItem } from '../components/queue-list.component.js';
 import { RecentlyPlayedListComponent } from '../components/recently-played-list.component.js';
@@ -57,6 +60,7 @@ import { buildQueueEtaMs, formatEta } from '../utils/queue-eta.js';
   imports: [
     CommonModule,
     FormsModule,
+    LyricsPanelComponent,
     NowPlayingCardComponent,
     QueueListComponent,
     RecentlyPlayedListComponent,
@@ -102,6 +106,17 @@ import { buildQueueEtaMs, formatEta } from '../utils/queue-eta.js';
             (voteSkip)="onVoteSkipNowPlaying()"
           />
         </section>
+
+        @if (
+          lyricsState()?.mode === 'synced' ||
+          lyricsState()?.mode === 'unsynced' ||
+          lyricsState()?.mode === 'paused'
+        ) {
+          <details class="card lyrics-card">
+            <summary>Live lyrics</summary>
+            <app-lyrics-panel [state]="lyricsState()" variant="guest" />
+          </details>
+        }
 
         @if (myPendingItems().length > 0) {
           <section class="card pending-section">
@@ -310,6 +325,18 @@ import { buildQueueEtaMs, formatEta } from '../utils/queue-eta.js';
       }
       .now-playing-section {
         padding: 16px;
+      }
+      .lyrics-card {
+        padding: 16px 20px;
+      }
+      .lyrics-card summary {
+        cursor: pointer;
+        font-family: 'Syne', 'Inter', sans-serif;
+        font-size: 16px;
+        font-weight: 600;
+      }
+      .lyrics-card[open] summary {
+        margin-bottom: 12px;
       }
       .toast {
         margin: 12px 0 0;
@@ -719,6 +746,9 @@ export class GuestRequestPage {
 
   private realtime: RealtimeClient | null = null;
   private latestQuery = '';
+  private readonly lyricsEngine = new LyricsEngine();
+  readonly lyricsState = signal<LyricsEngineState | null>(null);
+  private lyricsInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
     this.route.paramMap.pipe(takeUntilDestroyed()).subscribe((params) => {
@@ -729,7 +759,13 @@ export class GuestRequestPage {
       }
       void this.bootstrap(slug);
     });
-    this.destroyRef.onDestroy(() => this.realtime?.close());
+    this.lyricsInterval = setInterval(() => {
+      this.lyricsState.set(this.lyricsEngine.computeState());
+    }, 250);
+    this.destroyRef.onDestroy(() => {
+      this.realtime?.close();
+      if (this.lyricsInterval) clearInterval(this.lyricsInterval);
+    });
   }
 
   // ─── Search wiring (debounced via SearchResultListComponent) ───────────
@@ -980,6 +1016,7 @@ export class GuestRequestPage {
       // events keep it in sync.
       this.nowPlayingSkipVoteState.set(snapshot.nowPlayingSkipVote);
       this.providerSkipVotes.set(new Map(Object.entries(snapshot.providerQueueSkipVotes)));
+      this.lyricsEngine.applySnapshot(snapshot);
     });
     this.realtime.on('now_playing.updated', (event) => {
       const prevUri = this.nowPlaying()?.uri ?? null;
@@ -1028,6 +1065,7 @@ export class GuestRequestPage {
       }
     });
     this.realtime.onEvent((event: SessionEvent) => {
+      this.lyricsEngine.applyEvent(event);
       if (event.type === 'session.ended') {
         this.session.update((s) => (s ? { ...s, endedAt: new Date().toISOString() } : s));
         return;

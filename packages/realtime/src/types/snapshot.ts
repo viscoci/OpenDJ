@@ -25,7 +25,11 @@ export interface SessionSnapshot {
   playbackClock: PlaybackClockSample | null;
   /** Current lyrics document (synced or unsynced). null when no match. */
   lyrics: LyricsDocument | null;
-  /** Pre-computed window around the active position for TV/live view convenience. */
+  /**
+   * Client-computed; the server never populates this (kept empty by design).
+   * Clients derive the active window from `lyrics` + `playbackClock` using
+   * `predictPlaybackPosition` locally — see the LyricsEngine in @opendj/frontend.
+   */
   activeLyricsWindow: LyricsLine[];
   /** Approved or queued items awaiting / during playback. */
   queue: QueueItemSummary[];
