@@ -103,4 +103,23 @@ describe('LyricsEngine', () => {
     });
     expect(e.computeState().mode).toBe('synced');
   });
+
+  it('reports none when a snapshot carries null lyrics for the playing track', () => {
+    const e = engineAt(1_001_000);
+    e.applySnapshot({
+      nowPlaying: {
+        uri: 'spotify:track:aaa',
+        name: 'A',
+        artist: 'B',
+        albumArt: null,
+        durationMs: 200_000,
+        progressMs: 6000,
+        isPlaying: true,
+        zoneId: 'z',
+      },
+      playbackClock: sample(6000),
+      lyrics: null,
+    });
+    expect(e.computeState().mode).toBe('none');
+  });
 });

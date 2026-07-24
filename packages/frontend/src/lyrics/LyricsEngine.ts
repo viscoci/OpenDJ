@@ -48,7 +48,7 @@ export class LyricsEngine {
 
   applySnapshot(s: Pick<SessionSnapshot, 'lyrics' | 'playbackClock' | 'nowPlaying'>): void {
     if (s.playbackClock) this.sample = s.playbackClock;
-    if (s.nowPlaying && s.lyrics !== undefined && s.lyrics !== null) {
+    if (s.nowPlaying) {
       this.lyricsByUri = { uri: s.nowPlaying.uri, doc: s.lyrics };
     }
   }
