@@ -50,6 +50,7 @@ function mapErrorToStatus(code: string): { status: number; payload: { error: str
     case 'session_ended':
     case 'guest_session_mismatch':
     case 'cap_reached':
+    case 'consecutive_cap_reached':
     case 'item_playing':
     case 'already_voted':
     case 'duplicate_request':

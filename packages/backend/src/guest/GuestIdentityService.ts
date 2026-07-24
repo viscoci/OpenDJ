@@ -149,6 +149,7 @@ export class GuestIdentityService {
         qrSlug: session.qrSlug,
         guestCapOverride: session.guestCapOverride,
         songsPerGuestCap: session.songsPerGuestCap,
+        maxConsecutivePerGuest: session.maxConsecutivePerGuest,
         allowDuplicates: session.allowDuplicates,
         moderationEnabled: session.moderationEnabled,
         voteSkipMode: session.voteSkipMode,

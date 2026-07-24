@@ -24,6 +24,7 @@ const baseSession: SessionRecord = {
   qrSlug: 'test',
   guestCapOverride: null,
   songsPerGuestCap: 3,
+  maxConsecutivePerGuest: null,
   moderationEnabled: false,
   voteSkipMode: 'fixed',
   voteSkipThreshold: 5,
@@ -31,7 +32,13 @@ const baseSession: SessionRecord = {
   endedAt: null,
 };
 
-function setup(opts: { moderationEnabled?: boolean; capOverride?: number | null } = {}) {
+function setup(
+  opts: {
+    moderationEnabled?: boolean;
+    capOverride?: number | null;
+    maxConsecutivePerGuest?: number | null;
+  } = {},
+) {
   const clock = { now: () => new Date(NOW) };
   const sessions = new InMemorySessionRepository();
   const guests = new InMemoryGuestRepository(clock);
@@ -43,6 +50,7 @@ function setup(opts: { moderationEnabled?: boolean; capOverride?: number | null 
     ...baseSession,
     moderationEnabled: opts.moderationEnabled ?? false,
     songsPerGuestCap: opts.capOverride ?? 3,
+    maxConsecutivePerGuest: opts.maxConsecutivePerGuest ?? null,
   });
 
   const room = new NodeSessionRoom({ sessionId: SESSION_ID, nowEpochMs: () => NOW });
@@ -175,6 +183,25 @@ describe('QueueService.requestTrack', () => {
         NOW,
       ),
     ).rejects.toMatchObject({ code: 'cap_reached' });
+  });
+
+  it('rejects when the guest would exceed the consecutive-songs cap', async () => {
+    const { service, addGuest } = setup({ maxConsecutivePerGuest: 1 });
+    await addGuest();
+    await service.requestTrack(
+      { sessionId: SESSION_ID, slotToken: 'slot-fp-1', track: TRACK },
+      NOW,
+    );
+    await expect(
+      service.requestTrack(
+        {
+          sessionId: SESSION_ID,
+          slotToken: 'slot-fp-1',
+          track: { ...TRACK, uri: 'spotify:track:second' },
+        },
+        NOW,
+      ),
+    ).rejects.toMatchObject({ code: 'consecutive_cap_reached' });
   });
 });
 

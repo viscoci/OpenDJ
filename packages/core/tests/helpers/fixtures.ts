@@ -22,6 +22,7 @@ export function makeSession(overrides: Partial<Session> = {}): Session {
     qrSlug: 'test',
     guestCapOverride: null,
     songsPerGuestCap: 3,
+    maxConsecutivePerGuest: null,
     moderationEnabled: false,
     voteSkipMode: 'fixed' satisfies VoteSkipMode,
     voteSkipThreshold: 5,

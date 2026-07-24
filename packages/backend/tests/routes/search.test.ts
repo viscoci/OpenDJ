@@ -137,6 +137,7 @@ function buildHarness(
       qrSlug: 'search-test',
       guestCapOverride: null,
       songsPerGuestCap: 3,
+      maxConsecutivePerGuest: null,
       moderationEnabled: false,
       voteSkipMode: 'fixed',
       voteSkipThreshold: 5,

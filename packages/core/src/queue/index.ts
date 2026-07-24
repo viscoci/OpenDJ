@@ -1,4 +1,5 @@
 export * from './countActiveItemsForGuest.js';
+export * from './enforceConsecutiveCap.js';
 export * from './enforcePerGuestCap.js';
 export * from './dedupeQueue.js';
 export * from './applyModerationDecision.js';

@@ -908,6 +908,7 @@ function sessionToDomain(record: {
   qrSlug: string;
   guestCapOverride: number | null;
   songsPerGuestCap: number;
+  maxConsecutivePerGuest?: number | null;
   allowDuplicates?: boolean;
   moderationEnabled: boolean;
   voteSkipMode: 'fixed' | 'percentage' | 'host_approval';
@@ -922,6 +923,7 @@ function sessionToDomain(record: {
     qrSlug: record.qrSlug,
     guestCapOverride: record.guestCapOverride,
     songsPerGuestCap: record.songsPerGuestCap,
+    maxConsecutivePerGuest: record.maxConsecutivePerGuest ?? null,
     allowDuplicates: record.allowDuplicates ?? false,
     moderationEnabled: record.moderationEnabled,
     voteSkipMode: record.voteSkipMode,

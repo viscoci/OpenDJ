@@ -20,6 +20,7 @@ describe('SessionService.create', () => {
     expect(session.qrSlug).toBe('slug-1');
     expect(session.guestCapOverride).toBeNull();
     expect(session.songsPerGuestCap).toBe(3);
+    expect(session.maxConsecutivePerGuest).toBeNull();
     expect(session.moderationEnabled).toBe(false);
     expect(session.voteSkipMode).toBe('fixed');
     expect(session.voteSkipThreshold).toBe(5);
@@ -50,6 +51,7 @@ describe('SessionService.create', () => {
       name: 'X',
       guestCapOverride: 50,
       songsPerGuestCap: 5,
+      maxConsecutivePerGuest: 2,
       moderationEnabled: true,
       voteSkipMode: 'percentage',
       voteSkipThreshold: 60,
@@ -57,6 +59,7 @@ describe('SessionService.create', () => {
     expect(session).toMatchObject({
       guestCapOverride: 50,
       songsPerGuestCap: 5,
+      maxConsecutivePerGuest: 2,
       moderationEnabled: true,
       voteSkipMode: 'percentage',
       voteSkipThreshold: 60,
@@ -97,6 +100,20 @@ describe('SessionService.update', () => {
     });
     expect(updated.moderationEnabled).toBe(true);
     expect(updated.voteSkipThreshold).toBe(9);
+    // Untouched fields remain
+    expect(updated.songsPerGuestCap).toBe(3);
+    expect(updated.maxConsecutivePerGuest).toBeNull();
+  });
+
+  it('updates maxConsecutivePerGuest independently', async () => {
+    const { service } = setup();
+    const created = await service.create({ accountId: ACCOUNT_ID, name: 'X' });
+    const updated = await service.update({
+      id: created.id,
+      accountId: ACCOUNT_ID,
+      maxConsecutivePerGuest: 2,
+    });
+    expect(updated.maxConsecutivePerGuest).toBe(2);
     // Untouched fields remain
     expect(updated.songsPerGuestCap).toBe(3);
   });

@@ -38,6 +38,7 @@ function setup(opts: { plan?: 'free' | 'oss' | 'paid_monthly'; cap?: number | nu
     qrSlug: 'test-event',
     guestCapOverride: opts.cap ?? null,
     songsPerGuestCap: 3,
+    maxConsecutivePerGuest: null,
     moderationEnabled: false,
     voteSkipMode: 'fixed',
     voteSkipThreshold: 5,

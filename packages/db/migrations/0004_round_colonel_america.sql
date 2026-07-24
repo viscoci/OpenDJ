@@ -1,0 +1,1 @@
+ALTER TABLE "sessions" ADD COLUMN "max_consecutive_per_guest" integer;

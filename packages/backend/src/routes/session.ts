@@ -38,6 +38,9 @@ const CreateBody = v.object({
   qrSlug: v.optional(v.pipe(v.string(), v.nonEmpty())),
   guestCapOverride: v.optional(v.union([v.pipe(v.number(), v.integer(), v.minValue(1)), v.null()])),
   songsPerGuestCap: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1))),
+  maxConsecutivePerGuest: v.optional(
+    v.union([v.pipe(v.number(), v.integer(), v.minValue(1)), v.null()]),
+  ),
   allowDuplicates: v.optional(v.boolean()),
   moderationEnabled: v.optional(v.boolean()),
   voteSkipMode: v.optional(VoteSkipMode),
@@ -48,6 +51,9 @@ const UpdateBody = v.object({
   name: v.optional(v.pipe(v.string(), v.nonEmpty())),
   guestCapOverride: v.optional(v.union([v.pipe(v.number(), v.integer(), v.minValue(1)), v.null()])),
   songsPerGuestCap: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1))),
+  maxConsecutivePerGuest: v.optional(
+    v.union([v.pipe(v.number(), v.integer(), v.minValue(1)), v.null()]),
+  ),
   allowDuplicates: v.optional(v.boolean()),
   moderationEnabled: v.optional(v.boolean()),
   voteSkipMode: v.optional(VoteSkipMode),

@@ -39,6 +39,7 @@ export interface CreateSessionInput {
   qrSlug?: string;
   guestCapOverride?: number | null;
   songsPerGuestCap?: number;
+  maxConsecutivePerGuest?: number | null;
   allowDuplicates?: boolean;
   moderationEnabled?: boolean;
   voteSkipMode?: 'fixed' | 'percentage' | 'host_approval';
@@ -52,6 +53,7 @@ export interface UpdateSessionInput {
   name?: string;
   guestCapOverride?: number | null;
   songsPerGuestCap?: number;
+  maxConsecutivePerGuest?: number | null;
   allowDuplicates?: boolean;
   moderationEnabled?: boolean;
   voteSkipMode?: 'fixed' | 'percentage' | 'host_approval';
@@ -72,6 +74,7 @@ export class SessionService {
       qrSlug,
       guestCapOverride: input.guestCapOverride ?? null,
       songsPerGuestCap: input.songsPerGuestCap ?? DEFAULT_SONGS_PER_GUEST_CAP,
+      maxConsecutivePerGuest: input.maxConsecutivePerGuest ?? null,
       allowDuplicates: input.allowDuplicates ?? false,
       moderationEnabled: input.moderationEnabled ?? false,
       voteSkipMode: input.voteSkipMode ?? 'fixed',
