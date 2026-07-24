@@ -1,5 +1,16 @@
 # @opendj/backend
 
+## 0.2.0
+
+### Minor Changes
+
+- [#15](https://github.com/viscoci/OpenDJ/pull/15) [`395d51e`](https://github.com/viscoci/OpenDJ/commit/395d51e07bd5091094ecc8d8f294e914d378ef63) Thanks [@viscoci](https://github.com/viscoci)! - Lyrics sync end-to-end: the now-playing poller broadcasts `playback.clock_sampled` each tick and `lyrics.loaded` on track change (cache-fronted LRCLIB lookup, null on miss, stale-result guard); new framework-free `LyricsEngine` in @opendj/frontend computes karaoke display state client-side via `predictPlaybackPosition`; TV view gains a karaoke panel and the guest page a collapsible live-lyrics card; `LyricsApi` fixed to the real lookup contract.
+
+### Patch Changes
+
+- Updated dependencies [[`395d51e`](https://github.com/viscoci/OpenDJ/commit/395d51e07bd5091094ecc8d8f294e914d378ef63)]:
+  - @opendj/realtime@0.1.1
+
 ## 0.1.0
 
 ### Minor Changes
