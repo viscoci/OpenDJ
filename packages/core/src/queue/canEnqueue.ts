@@ -1,13 +1,19 @@
 import type { Guest } from '../types/guest.js';
 import type { QueueItem } from '../types/queue.js';
 import type { Session } from '../types/session.js';
+import { enforceConsecutiveCap } from './enforceConsecutiveCap.js';
 import { enforcePerGuestCap } from './enforcePerGuestCap.js';
 
 export type CanEnqueueResult =
   | { ok: true }
   | {
       ok: false;
-      reason: 'session_ended' | 'guest_session_mismatch' | 'cap_reached' | 'duplicate_request';
+      reason:
+        | 'session_ended'
+        | 'guest_session_mismatch'
+        | 'cap_reached'
+        | 'consecutive_cap_reached'
+        | 'duplicate_request';
     };
 
 /**
@@ -17,7 +23,9 @@ export type CanEnqueueResult =
  * 1. Session is still live (not ended).
  * 2. Guest belongs to this session.
  * 3. Guest has not hit the per-guest cap (`session.songsPerGuestCap`).
- * 4. When `session.allowDuplicates` is false, the track URI is not
+ * 4. Guest would not exceed the consecutive-songs cap
+ *    (`session.maxConsecutivePerGuest`) at the tail of the waiting queue.
+ * 5. When `session.allowDuplicates` is false, the track URI is not
  *    already in the active queue.
  *
  * Provider availability ("no active device") is intentionally not here —
@@ -38,6 +46,9 @@ export function canEnqueue(
   }
   if (enforcePerGuestCap(existingItems, guest.id, session.songsPerGuestCap)) {
     return { ok: false, reason: 'cap_reached' };
+  }
+  if (enforceConsecutiveCap(existingItems, guest.id, session.maxConsecutivePerGuest)) {
+    return { ok: false, reason: 'consecutive_cap_reached' };
   }
   if (!session.allowDuplicates && candidateTrackUri !== undefined) {
     const isActiveStatus = (s: QueueItem['status']) =>

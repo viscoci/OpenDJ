@@ -18,6 +18,12 @@ export interface Session {
   guestCapOverride: number | null;
   songsPerGuestCap: number;
   /**
+   * Limits how many songs a single guest may have back-to-back at the tail
+   * of the waiting queue (pending/approved/queued, ordered by request time).
+   * `null` means unlimited (off). When set, must be >= 1.
+   */
+  maxConsecutivePerGuest: number | null;
+  /**
    * When false (default), guests can't request a track that's already in
    * the active queue or currently playing. When true, the same song can
    * appear multiple times — useful for sing-along nights / requested

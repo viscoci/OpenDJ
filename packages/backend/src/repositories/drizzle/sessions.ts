@@ -11,6 +11,7 @@ function mapSession(row: typeof schema.sessions.$inferSelect): SessionRecord {
     qrSlug: row.qrSlug,
     guestCapOverride: row.guestCapOverride,
     songsPerGuestCap: row.songsPerGuestCap,
+    maxConsecutivePerGuest: row.maxConsecutivePerGuest,
     allowDuplicates: row.allowDuplicates,
     moderationEnabled: row.moderationEnabled,
     voteSkipMode: row.voteSkipMode as SessionRecord['voteSkipMode'],
@@ -55,6 +56,7 @@ export class DrizzleSessionRepository implements SessionRepository {
     qrSlug: string;
     guestCapOverride?: number | null;
     songsPerGuestCap?: number;
+    maxConsecutivePerGuest?: number | null;
     allowDuplicates?: boolean;
     moderationEnabled?: boolean;
     voteSkipMode?: 'fixed' | 'percentage' | 'host_approval';
@@ -68,6 +70,7 @@ export class DrizzleSessionRepository implements SessionRepository {
         qrSlug: input.qrSlug,
         guestCapOverride: input.guestCapOverride ?? null,
         songsPerGuestCap: input.songsPerGuestCap ?? 3,
+        maxConsecutivePerGuest: input.maxConsecutivePerGuest ?? null,
         allowDuplicates: input.allowDuplicates ?? false,
         moderationEnabled: input.moderationEnabled ?? false,
         voteSkipMode: input.voteSkipMode ?? 'fixed',
@@ -83,6 +86,7 @@ export class DrizzleSessionRepository implements SessionRepository {
     id: string;
     guestCapOverride?: number | null;
     songsPerGuestCap?: number;
+    maxConsecutivePerGuest?: number | null;
     allowDuplicates?: boolean;
     moderationEnabled?: boolean;
     voteSkipMode?: 'fixed' | 'percentage' | 'host_approval';
@@ -92,6 +96,8 @@ export class DrizzleSessionRepository implements SessionRepository {
     const set: Record<string, unknown> = {};
     if (input.guestCapOverride !== undefined) set['guestCapOverride'] = input.guestCapOverride;
     if (input.songsPerGuestCap !== undefined) set['songsPerGuestCap'] = input.songsPerGuestCap;
+    if (input.maxConsecutivePerGuest !== undefined)
+      set['maxConsecutivePerGuest'] = input.maxConsecutivePerGuest;
     if (input.allowDuplicates !== undefined) set['allowDuplicates'] = input.allowDuplicates;
     if (input.moderationEnabled !== undefined) set['moderationEnabled'] = input.moderationEnabled;
     if (input.voteSkipMode !== undefined) set['voteSkipMode'] = input.voteSkipMode;

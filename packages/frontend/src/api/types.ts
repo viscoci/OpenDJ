@@ -16,6 +16,11 @@ export interface SessionWire {
   qrSlug: string;
   guestCapOverride: number | null;
   songsPerGuestCap: number;
+  /**
+   * Limits how many songs a single guest may have back-to-back at the tail
+   * of the waiting queue. `null` means unlimited (off).
+   */
+  maxConsecutivePerGuest: number | null;
   /** When false (default), duplicate trackUris are rejected on enqueue. */
   allowDuplicates?: boolean;
   moderationEnabled: boolean;
@@ -92,6 +97,7 @@ export interface CreateSessionRequest {
   qrSlug?: string;
   guestCapOverride?: number | null;
   songsPerGuestCap?: number;
+  maxConsecutivePerGuest?: number | null;
   allowDuplicates?: boolean;
   moderationEnabled?: boolean;
   voteSkipMode?: VoteSkipMode;

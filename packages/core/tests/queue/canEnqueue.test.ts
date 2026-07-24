@@ -64,4 +64,174 @@ describe('canEnqueue', () => {
     const result = canEnqueue(session, guest, [], now);
     expect(result).toEqual({ ok: false, reason: 'session_ended' });
   });
+
+  describe('maxConsecutivePerGuest', () => {
+    it("N=1: rejects when the tail item of the waiting list is the guest's own", () => {
+      const session = makeSession({ songsPerGuestCap: 99, maxConsecutivePerGuest: 1 });
+      const guest = makeGuest({ id: 'guest-1' });
+      const items = [
+        makeItem({
+          id: 'a',
+          guestId: 'guest-1',
+          status: 'pending',
+          createdAt: new Date('2026-04-30T10:00:00Z'),
+        }),
+      ];
+      const result = canEnqueue(session, guest, items, now);
+      expect(result).toEqual({ ok: false, reason: 'consecutive_cap_reached' });
+    });
+
+    it('N=1: allows when the tail item of the waiting list belongs to another guest', () => {
+      const session = makeSession({ songsPerGuestCap: 99, maxConsecutivePerGuest: 1 });
+      const guest = makeGuest({ id: 'guest-1' });
+      const items = [
+        makeItem({
+          id: 'a',
+          guestId: 'guest-2',
+          status: 'pending',
+          createdAt: new Date('2026-04-30T10:00:00Z'),
+        }),
+      ];
+      const result = canEnqueue(session, guest, items, now);
+      expect(result.ok).toBe(true);
+    });
+
+    it('N=2: rejects when the last two waiting items both belong to the guest', () => {
+      const session = makeSession({ songsPerGuestCap: 99, maxConsecutivePerGuest: 2 });
+      const guest = makeGuest({ id: 'guest-1' });
+      const items = [
+        makeItem({
+          id: 'a',
+          guestId: 'guest-2',
+          status: 'pending',
+          createdAt: new Date('2026-04-30T09:00:00Z'),
+        }),
+        makeItem({
+          id: 'b',
+          guestId: 'guest-1',
+          status: 'approved',
+          createdAt: new Date('2026-04-30T10:00:00Z'),
+        }),
+        makeItem({
+          id: 'c',
+          guestId: 'guest-1',
+          status: 'queued',
+          createdAt: new Date('2026-04-30T11:00:00Z'),
+        }),
+      ];
+      const result = canEnqueue(session, guest, items, now);
+      expect(result).toEqual({ ok: false, reason: 'consecutive_cap_reached' });
+    });
+
+    it('N=2: allows when the last two waiting items are mixed between guests', () => {
+      const session = makeSession({ songsPerGuestCap: 99, maxConsecutivePerGuest: 2 });
+      const guest = makeGuest({ id: 'guest-1' });
+      const items = [
+        makeItem({
+          id: 'a',
+          guestId: 'guest-1',
+          status: 'pending',
+          createdAt: new Date('2026-04-30T09:00:00Z'),
+        }),
+        makeItem({
+          id: 'b',
+          guestId: 'guest-1',
+          status: 'approved',
+          createdAt: new Date('2026-04-30T10:00:00Z'),
+        }),
+        makeItem({
+          id: 'c',
+          guestId: 'guest-2',
+          status: 'queued',
+          createdAt: new Date('2026-04-30T11:00:00Z'),
+        }),
+      ];
+      const result = canEnqueue(session, guest, items, now);
+      expect(result.ok).toBe(true);
+    });
+
+    it('N=3: allows when waiting queue has exactly 2 items (below cap) both owned by guest', () => {
+      const session = makeSession({ songsPerGuestCap: 99, maxConsecutivePerGuest: 3 });
+      const guest = makeGuest({ id: 'guest-1' });
+      const items = [
+        makeItem({
+          id: 'a',
+          guestId: 'guest-1',
+          status: 'approved',
+          createdAt: new Date('2026-04-30T10:00:00Z'),
+        }),
+        makeItem({
+          id: 'b',
+          guestId: 'guest-1',
+          status: 'approved',
+          createdAt: new Date('2026-04-30T11:00:00Z'),
+        }),
+      ];
+      const result = canEnqueue(session, guest, items, now);
+      expect(result.ok).toBe(true);
+    });
+
+    it('null: never rejects for consecutive_cap_reached regardless of tail composition', () => {
+      const session = makeSession({ songsPerGuestCap: 99, maxConsecutivePerGuest: null });
+      const guest = makeGuest({ id: 'guest-1' });
+      const items = [
+        makeItem({
+          id: 'a',
+          guestId: 'guest-1',
+          status: 'pending',
+          createdAt: new Date('2026-04-30T09:00:00Z'),
+        }),
+        makeItem({
+          id: 'b',
+          guestId: 'guest-1',
+          status: 'approved',
+          createdAt: new Date('2026-04-30T10:00:00Z'),
+        }),
+        makeItem({
+          id: 'c',
+          guestId: 'guest-1',
+          status: 'queued',
+          createdAt: new Date('2026-04-30T11:00:00Z'),
+        }),
+      ];
+      const result = canEnqueue(session, guest, items, now);
+      expect(result.ok).toBe(true);
+    });
+
+    it('played/rejected items in between do not count as part of the waiting tail', () => {
+      const session = makeSession({ songsPerGuestCap: 99, maxConsecutivePerGuest: 1 });
+      const guest = makeGuest({ id: 'guest-1' });
+      const items = [
+        makeItem({
+          id: 'a',
+          guestId: 'guest-1',
+          status: 'pending',
+          createdAt: new Date('2026-04-30T09:00:00Z'),
+        }),
+        makeItem({
+          id: 'b',
+          guestId: 'guest-1',
+          status: 'played',
+          createdAt: new Date('2026-04-30T10:00:00Z'),
+        }),
+        makeItem({
+          id: 'c',
+          guestId: 'guest-2',
+          status: 'rejected',
+          createdAt: new Date('2026-04-30T10:30:00Z'),
+        }),
+        makeItem({
+          id: 'd',
+          guestId: 'guest-2',
+          status: 'queued',
+          createdAt: new Date('2026-04-30T11:00:00Z'),
+        }),
+      ];
+      // Waiting tail (pending/approved/queued only) is just [d] (guest-2) —
+      // the played/rejected items must not shield or count toward guest-1's
+      // consecutive run, nor otherwise affect the tail check.
+      const result = canEnqueue(session, guest, items, now);
+      expect(result.ok).toBe(true);
+    });
+  });
 });
