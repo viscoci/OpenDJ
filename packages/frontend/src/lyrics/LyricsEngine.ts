@@ -110,11 +110,17 @@ export class LyricsEngine {
       (l): l is LyricsLine & { startsAtMs: number } => typeof l.startsAtMs === 'number',
     );
     if (!doc.isSynced || timed.length === 0) {
+      const plainText = doc.plainText ?? doc.lines.map((l) => l.text).join('\n');
+      // Instrumental tracks and docs with nothing to show render an empty
+      // "unsynced" panel otherwise — treat both as no lyrics at all.
+      if (doc.isInstrumental === true || plainText.trim().length === 0) {
+        return { ...EMPTY, ...base, mode: 'none' };
+      }
       return {
         ...EMPTY,
         ...base,
         mode: this.sample.isPlaying ? 'unsynced' : 'paused',
-        plainText: doc.plainText ?? doc.lines.map((l) => l.text).join('\n'),
+        plainText,
       };
     }
     // Active = last timed line whose start is <= predicted progress.

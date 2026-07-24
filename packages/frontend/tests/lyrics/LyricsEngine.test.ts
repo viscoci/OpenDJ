@@ -71,6 +71,28 @@ describe('LyricsEngine', () => {
     expect(s.plainText).toBe('all the words');
   });
 
+  it('reports none for an instrumental track even though a doc was returned', () => {
+    const e = engineAt(1_000_000);
+    e.applyEvent({ type: 'playback.clock_sampled', sample: sample(1000) });
+    e.applyEvent({
+      type: 'lyrics.loaded',
+      trackUri: 'spotify:track:aaa',
+      lyrics: doc({ isSynced: false, lines: [], isInstrumental: true, plainText: '' }),
+    });
+    expect(e.computeState().mode).toBe('none');
+  });
+
+  it('reports none for an unsynced doc with no lines and empty plain text', () => {
+    const e = engineAt(1_000_000);
+    e.applyEvent({ type: 'playback.clock_sampled', sample: sample(1000) });
+    e.applyEvent({
+      type: 'lyrics.loaded',
+      trackUri: 'spotify:track:aaa',
+      lyrics: doc({ isSynced: false, lines: [], plainText: '' }),
+    });
+    expect(e.computeState().mode).toBe('none');
+  });
+
   it('reports none when lyrics.loaded carried null', () => {
     const e = engineAt(1_000_000);
     e.applyEvent({ type: 'playback.clock_sampled', sample: sample(1000) });
