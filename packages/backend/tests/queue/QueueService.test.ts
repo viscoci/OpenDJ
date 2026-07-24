@@ -8,6 +8,7 @@ import {
 import {
   InMemoryGuestRepository,
   InMemoryGuestSlotRepository,
+  InMemoryKaraokeClaimRepository,
   InMemoryQueueItemRepository,
   InMemoryQueueSkipVoteRepository,
   InMemorySessionRepository,
@@ -41,6 +42,7 @@ function setup(
     moderationEnabled?: boolean;
     capOverride?: number | null;
     maxConsecutivePerGuest?: number | null;
+    karaokeMode?: 'off' | 'optional' | 'required';
   } = {},
 ) {
   const clock = { now: () => new Date(NOW) };
@@ -49,12 +51,14 @@ function setup(
   const guestSlots = new InMemoryGuestSlotRepository(clock);
   const queueItems = new InMemoryQueueItemRepository(clock);
   const queueSkipVotes = new InMemoryQueueSkipVoteRepository(queueItems, clock);
+  const karaokeClaims = new InMemoryKaraokeClaimRepository(clock);
 
   sessions.seed({
     ...baseSession,
     moderationEnabled: opts.moderationEnabled ?? false,
     songsPerGuestCap: opts.capOverride ?? 3,
     maxConsecutivePerGuest: opts.maxConsecutivePerGuest ?? null,
+    karaokeMode: opts.karaokeMode ?? 'off',
   });
 
   const room = new NodeSessionRoom({ sessionId: SESSION_ID, nowEpochMs: () => NOW });
@@ -68,6 +72,7 @@ function setup(
     guestSlots,
     queueItems,
     queueSkipVotes,
+    karaokeClaims,
     rooms,
   });
 
@@ -89,6 +94,7 @@ function setup(
     guestSlots,
     queueItems,
     queueSkipVotes,
+    karaokeClaims,
     rooms,
     room,
     service,
@@ -366,5 +372,112 @@ describe('QueueService.castSkipVote', () => {
         slotToken: 'slot-fp-1',
       }),
     ).rejects.toMatchObject({ code: 'item_not_found' });
+  });
+});
+
+describe('QueueService.requestTrack — karaoke claim bundling', () => {
+  it("rejects with karaoke_claim_required in 'required' mode when no claim is bundled — BEFORE inserting", async () => {
+    const { service, queueItems, addGuest } = setup({ karaokeMode: 'required' });
+    await addGuest();
+    await expect(
+      service.requestTrack({ sessionId: SESSION_ID, slotToken: 'slot-fp-1', track: TRACK }, NOW),
+    ).rejects.toMatchObject({ code: 'karaoke_claim_required' });
+    expect(queueItems.rows.size).toBe(0);
+  });
+
+  it("rejects with karaoke_off when a claim is bundled but karaokeMode is 'off' — BEFORE inserting", async () => {
+    const { service, queueItems, addGuest } = setup({ karaokeMode: 'off' });
+    await addGuest();
+    await expect(
+      service.requestTrack(
+        {
+          sessionId: SESSION_ID,
+          slotToken: 'slot-fp-1',
+          track: TRACK,
+          karaoke: { displayName: 'Ana' },
+        },
+        NOW,
+      ),
+    ).rejects.toMatchObject({ code: 'karaoke_off' });
+    expect(queueItems.rows.size).toBe(0);
+  });
+
+  it('rejects invalid display names BEFORE inserting the item', async () => {
+    const { service, queueItems, addGuest } = setup({ karaokeMode: 'optional' });
+    await addGuest();
+    await expect(
+      service.requestTrack(
+        {
+          sessionId: SESSION_ID,
+          slotToken: 'slot-fp-1',
+          track: TRACK,
+          karaoke: { displayName: '   ' },
+        },
+        NOW,
+      ),
+    ).rejects.toMatchObject({ code: 'invalid_display_name' });
+    expect(queueItems.rows.size).toBe(0);
+  });
+
+  it("creates item + claim and broadcasts claim_added in 'optional' mode", async () => {
+    const { service, karaokeClaims, room, addGuest } = setup({ karaokeMode: 'optional' });
+    const captured: unknown[] = [];
+    await room.connect({
+      clientId: 'c1',
+      kind: 'host',
+      sessionId: SESSION_ID,
+      connectedAtEpochMs: NOW,
+    });
+    room.subscribe('c1', (e) => {
+      captured.push(e);
+    });
+    const { guest } = await addGuest();
+
+    const created = await service.requestTrack(
+      {
+        sessionId: SESSION_ID,
+        slotToken: 'slot-fp-1',
+        track: TRACK,
+        karaoke: { displayName: '  Ana  ' },
+      },
+      NOW,
+    );
+
+    const claims = await karaokeClaims.findAllForItem(created.id);
+    expect(claims).toHaveLength(1);
+    expect(claims[0]).toMatchObject({ guestId: guest.id, displayName: 'Ana' });
+
+    const types = captured.map((e) => (e as { type: string }).type);
+    expect(types).toEqual(['queue.item_requested', 'karaoke.claim_added', 'queue.item_approved']);
+    const requested = captured[0] as { item: { karaokeClaims: unknown[] } };
+    expect(requested.item.karaokeClaims).toEqual([{ guestId: guest.id, displayName: 'Ana' }]);
+    const claimAdded = captured[1] as { itemId: string; claim: unknown };
+    expect(claimAdded.itemId).toBe(created.id);
+    expect(claimAdded.claim).toEqual({ guestId: guest.id, displayName: 'Ana' });
+  });
+
+  it("satisfies 'required' mode when the claim is bundled", async () => {
+    const { service, karaokeClaims, addGuest } = setup({ karaokeMode: 'required' });
+    await addGuest();
+    const created = await service.requestTrack(
+      {
+        sessionId: SESSION_ID,
+        slotToken: 'slot-fp-1',
+        track: TRACK,
+        karaoke: { displayName: 'Ben' },
+      },
+      NOW,
+    );
+    expect(await karaokeClaims.findAllForItem(created.id)).toHaveLength(1);
+  });
+
+  it('plain request without karaoke input still works in optional mode (no claim created)', async () => {
+    const { service, karaokeClaims, addGuest } = setup({ karaokeMode: 'optional' });
+    await addGuest();
+    const created = await service.requestTrack(
+      { sessionId: SESSION_ID, slotToken: 'slot-fp-1', track: TRACK },
+      NOW,
+    );
+    expect(await karaokeClaims.findAllForItem(created.id)).toEqual([]);
   });
 });

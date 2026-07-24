@@ -32,6 +32,9 @@ export type SessionAuditAction =
   | 'skip_vote.now_playing_cast'
   | 'skip_vote.provider_track_cast'
   | 'skip_vote.threshold_reached'
+  // Karaoke mic claims (guest self-service + host override)
+  | 'karaoke.claim_added'
+  | 'karaoke.claim_removed'
   // Playback control (host)
   | 'playback.skip'
   | 'playback.pause'

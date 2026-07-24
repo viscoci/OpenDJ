@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   createInMemoryRepositories,
   InMemoryAuthSessionRepository,
+  InMemoryKaraokeClaimRepository,
   InMemoryUserRepository,
 } from '../../src/repositories/in-memory/index.js';
 
@@ -14,6 +15,72 @@ describe('createInMemoryRepositories', () => {
     expect(repos.authIdentities).toBeDefined();
     expect(repos.authSessions).toBeDefined();
     expect(repos.passwordCredentials).toBeDefined();
+    expect(repos.karaokeClaims).toBeDefined();
+  });
+});
+
+describe('InMemoryKaraokeClaimRepository', () => {
+  let claims: InMemoryKaraokeClaimRepository;
+  beforeEach(() => {
+    claims = new InMemoryKaraokeClaimRepository();
+  });
+
+  it('creates and finds by item + guest', async () => {
+    const created = await claims.create({
+      sessionId: 's-1',
+      queueItemId: 'i-1',
+      guestId: 'g-1',
+      displayName: 'Ana',
+    });
+    expect(await claims.findByItemAndGuest('i-1', 'g-1')).toBe(created);
+    expect(await claims.findByItemAndGuest('i-1', 'g-2')).toBeNull();
+  });
+
+  it('enforces the unique (item, guest) pair like the DB constraint', async () => {
+    await claims.create({
+      sessionId: 's-1',
+      queueItemId: 'i-1',
+      guestId: 'g-1',
+      displayName: 'Ana',
+    });
+    await expect(
+      claims.create({ sessionId: 's-1', queueItemId: 'i-1', guestId: 'g-1', displayName: 'Dup' }),
+    ).rejects.toThrow();
+  });
+
+  it('lists per item and per session', async () => {
+    await claims.create({
+      sessionId: 's-1',
+      queueItemId: 'i-1',
+      guestId: 'g-1',
+      displayName: 'Ana',
+    });
+    await claims.create({
+      sessionId: 's-1',
+      queueItemId: 'i-2',
+      guestId: 'g-1',
+      displayName: 'Ana',
+    });
+    await claims.create({
+      sessionId: 's-2',
+      queueItemId: 'i-9',
+      guestId: 'g-9',
+      displayName: 'Zoe',
+    });
+    expect(await claims.findAllForItem('i-1')).toHaveLength(1);
+    expect(await claims.findAllForSession('s-1')).toHaveLength(2);
+    expect(await claims.findAllForSession('s-2')).toHaveLength(1);
+  });
+
+  it('deletes by id', async () => {
+    const created = await claims.create({
+      sessionId: 's-1',
+      queueItemId: 'i-1',
+      guestId: 'g-1',
+      displayName: 'Ana',
+    });
+    await claims.delete(created.id);
+    expect(await claims.findAllForItem('i-1')).toEqual([]);
   });
 });
 

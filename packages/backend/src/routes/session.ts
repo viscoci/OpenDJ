@@ -13,8 +13,13 @@ import type { AuthService } from '../auth/AuthService.js';
 import { requireAuth, requireClaim, type AuthVariables } from '../auth/middleware.js';
 import type { RealtimeRoomRegistry } from '../queue/QueueService.js';
 import { SessionService, SessionServiceError } from '../session/SessionService.js';
-import { toQueueItemSummary } from '@opendj/realtime';
-import type { GuestSlotRepository, QueueItemRepository } from '../repositories/types.js';
+import { toQueueItemSummary, type KaraokeClaimSummary } from '@opendj/realtime';
+import { groupClaimSummaries } from '../karaoke/claimSummaries.js';
+import type {
+  GuestSlotRepository,
+  KaraokeClaimRepository,
+  QueueItemRepository,
+} from '../repositories/types.js';
 import type { SessionAuditService } from '../session/SessionAuditService.js';
 
 export interface SessionRouteDeps {
@@ -24,6 +29,8 @@ export interface SessionRouteDeps {
   rooms?: RealtimeRoomRegistry;
   queueItems?: QueueItemRepository;
   guestSlots?: GuestSlotRepository;
+  /** Optional — decorates DB-sourced queue summaries with mic claims. */
+  karaokeClaims?: KaraokeClaimRepository;
   audit?: SessionAuditService;
 }
 
@@ -179,12 +186,16 @@ export function sessionRoutes(deps: SessionRouteDeps): Hono<{ Variables: AuthVar
 
     let queueSummaries: ReturnType<typeof toQueueItemSummary>[];
     if (snapshot && snapshot.queue.length > 0) {
+      // Room summaries already carry karaokeClaims via the event reducer.
       queueSummaries = [...snapshot.queue];
     } else if (deps.queueItems) {
       const items = await deps.queueItems.findAllForSession(session.id);
+      const claimsByItem = deps.karaokeClaims
+        ? groupClaimSummaries(await deps.karaokeClaims.findAllForSession(session.id))
+        : new Map<string, KaraokeClaimSummary[]>();
       queueSummaries = items
         .filter((i) => i.status === 'approved' || i.status === 'queued' || i.status === 'playing')
-        .map(toQueueItemSummary);
+        .map((i) => toQueueItemSummary(i, claimsByItem.get(i.id) ?? []));
     } else {
       queueSummaries = [];
     }
