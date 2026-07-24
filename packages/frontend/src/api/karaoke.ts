@@ -6,6 +6,13 @@ export interface KaraokeClaimResponse {
   claim: KaraokeClaimWire & { queueItemId: string };
 }
 
+/** Response envelope of POST /karaoke/pause. */
+export interface KaraokePauseResponse {
+  ok: true;
+  /** Wall-clock auto-resume deadline — render a countdown against it. */
+  untilEpochMs: number;
+}
+
 /**
  * Karaoke resource — `/api/v1/sessions/:id/karaoke/*`.
  *
@@ -58,5 +65,30 @@ export class KaraokeApi {
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/karaoke/claims/${encodeURIComponent(queueItemId)}`,
       { method: 'DELETE', query: { guestId } },
     );
+  }
+
+  /**
+   * Hold playback while grabbing the mic. Only a claimer of the CURRENT
+   * spotlight item may pause (`403 not_a_claimer`), and only when the
+   * session's `karaokePauseMode` is `'manual'` (`400 pause_disabled`).
+   * The response carries the wall-clock auto-resume deadline.
+   */
+  pause(sessionId: string, slotToken: string): Promise<KaraokePauseResponse> {
+    return this.http.request(`/api/v1/sessions/${encodeURIComponent(sessionId)}/karaoke/pause`, {
+      method: 'POST',
+      slotToken,
+    });
+  }
+
+  /**
+   * "I'm ready" — resume playback from a karaoke pause. Any claimer of the
+   * spotlight item may resume (`403 not_a_claimer`); requires an active
+   * karaoke pause (`400 not_paused`).
+   */
+  ready(sessionId: string, slotToken: string): Promise<{ ok: true }> {
+    return this.http.request(`/api/v1/sessions/${encodeURIComponent(sessionId)}/karaoke/ready`, {
+      method: 'POST',
+      slotToken,
+    });
   }
 }

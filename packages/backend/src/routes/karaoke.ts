@@ -1,11 +1,16 @@
 /**
- * `/api/v1/sessions/:id/karaoke/*` routes — mic claims.
+ * `/api/v1/sessions/:id/karaoke/*` routes — mic claims + spotlight pause.
  *
  * Auth model (same as the queue routes):
- * - Guest actions (claim, remove own claim) authenticate by slot token
- *   (`Authorization: Bearer <slotToken>`)
+ * - Guest actions (claim, remove own claim, pause, ready) authenticate by
+ *   slot token (`Authorization: Bearer <slotToken>`)
  * - Host claim removal requires the `queue:moderate` claim (cookie session)
  *   and names the target guest via the `guestId` query param.
+ *
+ * Pause/ready guards (spec §4): the guest must hold a mic claim on the
+ * CURRENT spotlight item (`not_a_claimer`), pause additionally requires
+ * `karaokePauseMode === 'manual'` (`pause_disabled`) and ready requires an
+ * active karaoke pause (`not_paused`).
  */
 
 import { Hono } from 'hono';
@@ -41,6 +46,7 @@ function mapErrorToStatus(code: string): { status: number; payload: { error: str
     case 'claim_not_found':
       return { status: 404, payload: { error: code } };
     case 'not_claim_owner':
+    case 'not_a_claimer':
       return { status: 403, payload: { error: code } };
     case 'slot_session_mismatch':
     case 'item_session_mismatch':
@@ -51,6 +57,8 @@ function mapErrorToStatus(code: string): { status: number; payload: { error: str
     case 'already_claimed':
     case 'invalid_display_name':
     case 'item_not_waiting':
+    case 'pause_disabled':
+    case 'not_paused':
       return { status: 400, payload: { error: code } };
     default:
       return { status: 400, payload: { error: code } };
@@ -93,6 +101,47 @@ export function karaokeRoutes(deps: KaraokeRouteDeps): Hono<{ Variables: AuthVar
         },
         201,
       );
+    } catch (err) {
+      if (err instanceof KaraokeServiceError) {
+        const { status, payload } = mapErrorToStatus(err.code);
+        return c.json(payload, status as 400 | 401 | 403 | 404);
+      }
+      throw err;
+    }
+  });
+
+  /**
+   * POST /karaoke/pause — a spotlight claimer holds playback while they
+   * grab a mic. Manual pause mode only. Responds with the auto-resume
+   * deadline so the client can render a countdown.
+   */
+  app.post('/pause', async (c) => {
+    const sessionId = c.req.param('id') ?? '';
+    const slotToken = bearerFromAuthHeader(c.req.header('authorization'));
+    if (!slotToken) return c.json({ error: 'missing_slot_token' }, 401);
+    try {
+      const { untilEpochMs } = await deps.karaokeService.pause({ sessionId, slotToken });
+      return c.json({ ok: true, untilEpochMs });
+    } catch (err) {
+      if (err instanceof KaraokeServiceError) {
+        const { status, payload } = mapErrorToStatus(err.code);
+        return c.json(payload, status as 400 | 401 | 403 | 404);
+      }
+      throw err;
+    }
+  });
+
+  /**
+   * POST /karaoke/ready — a spotlight claimer resumes playback ("I'm
+   * ready"). Requires an active karaoke pause.
+   */
+  app.post('/ready', async (c) => {
+    const sessionId = c.req.param('id') ?? '';
+    const slotToken = bearerFromAuthHeader(c.req.header('authorization'));
+    if (!slotToken) return c.json({ error: 'missing_slot_token' }, 401);
+    try {
+      await deps.karaokeService.ready({ sessionId, slotToken });
+      return c.json({ ok: true });
     } catch (err) {
       if (err instanceof KaraokeServiceError) {
         const { status, payload } = mapErrorToStatus(err.code);

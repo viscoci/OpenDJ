@@ -9,7 +9,11 @@
 
 import type { SessionEvent } from './types/event.js';
 import type { QueueItemSummary } from './types/queue-summary.js';
-import { RECENTLY_PLAYED_MAX, type SessionSnapshot } from './types/snapshot.js';
+import {
+  createEmptyKaraokeState,
+  RECENTLY_PLAYED_MAX,
+  type SessionSnapshot,
+} from './types/snapshot.js';
 
 /**
  * Apply `update` to the item with `itemId` wherever it lives (pending or
@@ -166,6 +170,45 @@ export function applyEvent(snapshot: SessionSnapshot, event: SessionEvent): Sess
         ...item,
         karaokeClaims: item.karaokeClaims.filter((c) => c.guestId !== event.guestId),
       }));
+
+    case 'karaoke.spotlight': {
+      // `?? createEmptyKaraokeState()` tolerates snapshots serialized by
+      // older servers that predate the karaoke slice.
+      const prev = snapshot.karaoke ?? createEmptyKaraokeState();
+      const changed = prev.spotlightItemId !== event.itemId;
+      const karaoke = {
+        spotlightItemId: event.itemId,
+        // A pause is bound to its spotlight item — a NEW (or cleared)
+        // spotlight drops any stale hold. Same-item re-broadcast keeps it.
+        paused: changed ? false : prev.paused,
+        pausedUntilEpochMs: changed ? null : prev.pausedUntilEpochMs,
+      };
+      // Refresh the spotlighted item's singer list from the event so a
+      // client that missed claim deltas still renders the right names.
+      const next =
+        event.itemId === null
+          ? snapshot
+          : updateItemById(snapshot, event.itemId, (item) => ({
+              ...item,
+              karaokeClaims: [...event.claims],
+            }));
+      return { ...next, karaoke };
+    }
+
+    case 'karaoke.paused':
+      return {
+        ...snapshot,
+        karaoke: {
+          spotlightItemId: event.itemId,
+          paused: true,
+          pausedUntilEpochMs: event.untilEpochMs,
+        },
+      };
+
+    case 'karaoke.resumed': {
+      const prev = snapshot.karaoke ?? createEmptyKaraokeState();
+      return { ...snapshot, karaoke: { ...prev, paused: false, pausedUntilEpochMs: null } };
+    }
 
     case 'guest_slots.updated':
       return {

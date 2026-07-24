@@ -49,7 +49,12 @@ const baseSession: SessionRecord = {
   endedAt: null,
 };
 
-async function setup(opts: { karaokeMode?: 'off' | 'optional' | 'required' } = {}) {
+async function setup(
+  opts: {
+    karaokeMode?: 'off' | 'optional' | 'required';
+    karaokePauseMode?: 'off' | 'manual' | 'auto';
+  } = {},
+) {
   const clock = { now: () => new Date(NOW) };
   const sessions = new InMemorySessionRepository();
   const guests = new InMemoryGuestRepository(clock);
@@ -62,7 +67,11 @@ async function setup(opts: { karaokeMode?: 'off' | 'optional' | 'required' } = {
   const claims = new ClaimsService({ memberships, accounts });
   const authService = new AuthService({ authSessions, claims, clock: () => NOW });
 
-  sessions.seed({ ...baseSession, karaokeMode: opts.karaokeMode ?? 'optional' });
+  sessions.seed({
+    ...baseSession,
+    karaokeMode: opts.karaokeMode ?? 'optional',
+    karaokePauseMode: opts.karaokePauseMode ?? 'manual',
+  });
 
   const karaokeService = new KaraokeService({
     sessions,
@@ -70,6 +79,7 @@ async function setup(opts: { karaokeMode?: 'off' | 'optional' | 'required' } = {
     guestSlots,
     queueItems,
     karaokeClaims,
+    nowEpochMs: () => NOW,
   });
 
   const app = new Hono<{ Variables: AuthVariables }>();
@@ -82,6 +92,17 @@ async function setup(opts: { karaokeMode?: 'off' | 'optional' | 'required' } = {
     slotToken: 'slot-1',
     status: 'active',
   });
+
+  async function addGuest(fingerprint: string, slotToken: string) {
+    const extra = await guests.create({ sessionId: SESSION_ID, fingerprint });
+    await guestSlots.create({
+      sessionId: SESSION_ID,
+      fingerprintHash: fingerprint,
+      slotToken,
+      status: 'active',
+    });
+    return extra;
+  }
 
   async function addItem(status: QueueItemStatus = 'queued') {
     return queueItems.create({
@@ -104,7 +125,7 @@ async function setup(opts: { karaokeMode?: 'off' | 'optional' | 'required' } = {
     return `${SESSION_COOKIE_NAME}=${issued.token}`;
   }
 
-  return { app, guest, karaokeClaims, queueItems, addItem, hostCookie };
+  return { app, guest, karaokeClaims, karaokeService, queueItems, addItem, addGuest, hostCookie };
 }
 
 describe('POST /sessions/:id/karaoke/claims', () => {
@@ -306,5 +327,100 @@ describe('DELETE /sessions/:id/karaoke/claims/:itemId', () => {
       { method: 'DELETE', headers: { cookie } },
     );
     expect(res.status).toBe(403);
+  });
+});
+
+describe('POST /sessions/:id/karaoke/pause and /ready', () => {
+  const TRACK_URI = 'spotify:track:abc';
+
+  /** Claim the item via the API (slot-1) and put it in the spotlight. */
+  async function claimAndSpotlight(s: Awaited<ReturnType<typeof setup>>, slotToken = 'slot-1') {
+    const item = await s.addItem();
+    const res = await s.app.request(`http://x/sessions/${SESSION_ID}/karaoke/claims`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${slotToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ queueItemId: item.id, displayName: 'Ana' }),
+    });
+    expect(res.status).toBe(201);
+    await s.karaokeService.handleTrackChange({ sessionId: SESSION_ID, trackUri: TRACK_URI });
+    return item;
+  }
+
+  function post(s: Awaited<ReturnType<typeof setup>>, path: 'pause' | 'ready', token?: string) {
+    return s.app.request(`http://x/sessions/${SESSION_ID}/karaoke/${path}`, {
+      method: 'POST',
+      ...(token && { headers: { authorization: `Bearer ${token}` } }),
+    });
+  }
+
+  it('pause: 200 with the auto-resume deadline for a spotlight claimer in manual mode', async () => {
+    const s = await setup();
+    await claimAndSpotlight(s);
+    const res = await post(s, 'pause', 'slot-1');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, untilEpochMs: NOW + 30_000 });
+    expect(s.karaokeService.getKaraokeState(SESSION_ID).paused).toBe(true);
+  });
+
+  it('pause: 401 missing_slot_token without the Authorization header', async () => {
+    const s = await setup();
+    await claimAndSpotlight(s);
+    const res = await post(s, 'pause');
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: 'missing_slot_token' });
+  });
+
+  it('pause: 403 not_a_claimer when no spotlight is active', async () => {
+    const s = await setup();
+    await s.addItem(); // item exists but nothing is spotlighted
+    const res = await post(s, 'pause', 'slot-1');
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: 'not_a_claimer' });
+  });
+
+  it('pause: 403 not_a_claimer for a guest without a claim on the spotlight item', async () => {
+    const s = await setup();
+    await s.addGuest('fp-2', 'slot-2');
+    await claimAndSpotlight(s, 'slot-2'); // guest 2 owns the claim
+    const res = await post(s, 'pause', 'slot-1');
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: 'not_a_claimer' });
+  });
+
+  it('pause: 400 pause_disabled outside manual pause mode', async () => {
+    const s = await setup({ karaokePauseMode: 'auto' });
+    await claimAndSpotlight(s);
+    const res = await post(s, 'pause', 'slot-1');
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'pause_disabled' });
+  });
+
+  it('ready: 200 resumes after a pause', async () => {
+    const s = await setup();
+    await claimAndSpotlight(s);
+    expect((await post(s, 'pause', 'slot-1')).status).toBe(200);
+    const res = await post(s, 'ready', 'slot-1');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(s.karaokeService.getKaraokeState(SESSION_ID).paused).toBe(false);
+  });
+
+  it('ready: 400 not_paused when playback is not karaoke-paused', async () => {
+    const s = await setup();
+    await claimAndSpotlight(s);
+    const res = await post(s, 'ready', 'slot-1');
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'not_paused' });
+  });
+
+  it('ready: 403 not_a_claimer for a non-claimer even while paused', async () => {
+    const s = await setup();
+    await s.addGuest('fp-2', 'slot-2');
+    await claimAndSpotlight(s, 'slot-2');
+    // Guest 2 pauses; guest 1 (no claim) may not resume.
+    expect((await post(s, 'pause', 'slot-2')).status).toBe(200);
+    const res = await post(s, 'ready', 'slot-1');
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: 'not_a_claimer' });
   });
 });

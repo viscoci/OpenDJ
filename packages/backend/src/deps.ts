@@ -232,6 +232,10 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
     karaokeClaims: repositories.karaokeClaims,
     rooms,
     audit: sessionAuditService,
+    // Spotlight/pause transitions drive the host's provider playback
+    // (pause on spotlight in auto mode, resume on ready/deadline).
+    streamingRouter,
+    providerConnections: repositories.providerConnections,
   });
 
   const lyricsProvider = options.lyricsProvider ?? new LrclibAdapter({ fetchImpl });
@@ -250,6 +254,7 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
       queueItems: repositories.queueItems,
       providerQueueRejections: queueService,
       lyricsLookup: lyricsLookupService,
+      karaoke: karaokeService,
     });
   }
 

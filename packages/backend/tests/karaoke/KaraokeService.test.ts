@@ -38,6 +38,8 @@ function setup(
   opts: {
     karaokeMode?: 'off' | 'optional' | 'required';
     karaokeMicCount?: number;
+    karaokePauseMode?: 'off' | 'manual' | 'auto';
+    karaokePauseTimeoutSec?: number;
   } = {},
 ) {
   const clock = { now: () => new Date(NOW) };
@@ -51,6 +53,8 @@ function setup(
     ...baseSession,
     karaokeMode: opts.karaokeMode ?? 'optional',
     karaokeMicCount: opts.karaokeMicCount ?? 1,
+    karaokePauseMode: opts.karaokePauseMode ?? 'manual',
+    karaokePauseTimeoutSec: opts.karaokePauseTimeoutSec ?? 30,
   });
 
   const room = new NodeSessionRoom({ sessionId: SESSION_ID, nowEpochMs: () => NOW });
@@ -65,6 +69,7 @@ function setup(
     queueItems,
     karaokeClaims,
     rooms,
+    nowEpochMs: () => NOW,
   });
 
   async function addGuest(fingerprint = 'fp-1') {
@@ -78,11 +83,15 @@ function setup(
     return { guest, slot };
   }
 
-  async function addItem(status: QueueItemStatus = 'queued', guestId = 'requester-guest') {
+  async function addItem(
+    status: QueueItemStatus = 'queued',
+    guestId = 'requester-guest',
+    trackUri = 'spotify:track:abc',
+  ) {
     return queueItems.create({
       sessionId: SESSION_ID,
       guestId,
-      trackUri: 'spotify:track:abc',
+      trackUri,
       trackName: 'Hello',
       artistName: 'World',
       status,
@@ -446,5 +455,280 @@ describe('KaraokeService.hostRemoveClaim', () => {
         guestId: 'nobody',
       }),
     ).rejects.toMatchObject({ code: 'claim_not_found' });
+  });
+});
+
+describe('KaraokeService.handleTrackChange (spotlight)', () => {
+  const URI = 'spotify:track:abc';
+
+  it('spotlights the earliest CLAIMED matching item, skipping unclaimed earlier ones', async () => {
+    const { service, karaokeClaims, addGuest, addItem, captureEvents } = setup();
+    const { guest } = await addGuest();
+    // Earliest item has NO claims; a later duplicate of the same track does.
+    const unclaimed = await addItem('queued');
+    Object.assign(unclaimed, { createdAt: new Date(NOW - 2000) });
+    const claimed = await addItem('queued');
+    Object.assign(claimed, { createdAt: new Date(NOW - 1000) });
+    await karaokeClaims.create({
+      sessionId: SESSION_ID,
+      queueItemId: claimed.id,
+      guestId: guest.id,
+      displayName: 'Ana',
+    });
+    const captured = await captureEvents();
+
+    await service.handleTrackChange({ sessionId: SESSION_ID, trackUri: URI });
+
+    expect(captured).toEqual([
+      {
+        type: 'karaoke.spotlight',
+        itemId: claimed.id,
+        claims: [{ guestId: guest.id, displayName: 'Ana' }],
+      },
+    ]);
+    expect(service.getKaraokeState(SESSION_ID)).toEqual({
+      spotlightItemId: claimed.id,
+      paused: false,
+      pausedUntilEpochMs: null,
+    });
+  });
+
+  it('ties between claimed duplicates go to the earliest createdAt', async () => {
+    const { service, karaokeClaims, addGuest, addItem, captureEvents } = setup({
+      karaokeMicCount: 2,
+    });
+    const { guest } = await addGuest();
+    const later = await addItem('queued');
+    Object.assign(later, { createdAt: new Date(NOW - 1000) });
+    const earlier = await addItem('queued');
+    Object.assign(earlier, { createdAt: new Date(NOW - 5000) });
+    for (const item of [later, earlier]) {
+      await karaokeClaims.create({
+        sessionId: SESSION_ID,
+        queueItemId: item.id,
+        guestId: guest.id,
+        displayName: 'Ana',
+      });
+    }
+    const captured = await captureEvents();
+
+    await service.handleTrackChange({ sessionId: SESSION_ID, trackUri: URI });
+
+    expect(captured).toEqual([expect.objectContaining({ itemId: earlier.id })]);
+  });
+
+  it('does not spotlight rejected/played items or other URIs', async () => {
+    const { service, karaokeClaims, addGuest, addItem, captureEvents } = setup();
+    const { guest } = await addGuest();
+    const rejected = await addItem('rejected');
+    const otherUri = await addItem('queued', 'requester-guest', 'spotify:track:zzz');
+    for (const item of [rejected, otherUri]) {
+      await karaokeClaims.create({
+        sessionId: SESSION_ID,
+        queueItemId: item.id,
+        guestId: guest.id,
+        displayName: 'Ana',
+      });
+    }
+    const captured = await captureEvents();
+
+    await service.handleTrackChange({ sessionId: SESSION_ID, trackUri: URI });
+
+    // Starting state was already "no spotlight" — no change, no broadcast.
+    expect(captured).toEqual([]);
+  });
+
+  it('broadcasts only on CHANGE and clears with itemId null when the track moves on', async () => {
+    const { service, karaokeClaims, addGuest, addItem, captureEvents } = setup();
+    const { guest } = await addGuest();
+    const item = await addItem('queued');
+    await karaokeClaims.create({
+      sessionId: SESSION_ID,
+      queueItemId: item.id,
+      guestId: guest.id,
+      displayName: 'Ana',
+    });
+    const captured = await captureEvents();
+
+    await service.handleTrackChange({ sessionId: SESSION_ID, trackUri: URI });
+    await service.handleTrackChange({ sessionId: SESSION_ID, trackUri: URI }); // same — quiet
+    await service.handleTrackChange({ sessionId: SESSION_ID, trackUri: 'spotify:track:next' });
+    await service.handleTrackChange({ sessionId: SESSION_ID, trackUri: null }); // already null — quiet
+
+    expect(captured).toEqual([
+      expect.objectContaining({ type: 'karaoke.spotlight', itemId: item.id }),
+      { type: 'karaoke.spotlight', itemId: null, claims: [] },
+    ]);
+  });
+
+  it('auto pause mode: a fresh spotlight also broadcasts karaoke.paused with the deadline', async () => {
+    const { service, karaokeClaims, addGuest, addItem, captureEvents } = setup({
+      karaokePauseMode: 'auto',
+      karaokePauseTimeoutSec: 45,
+    });
+    const { guest } = await addGuest();
+    const item = await addItem('queued');
+    await karaokeClaims.create({
+      sessionId: SESSION_ID,
+      queueItemId: item.id,
+      guestId: guest.id,
+      displayName: 'Ana',
+    });
+    const captured = await captureEvents();
+
+    await service.handleTrackChange({ sessionId: SESSION_ID, trackUri: URI, nowEpochMs: NOW });
+
+    expect(captured).toEqual([
+      expect.objectContaining({ type: 'karaoke.spotlight', itemId: item.id }),
+      { type: 'karaoke.paused', itemId: item.id, untilEpochMs: NOW + 45_000 },
+    ]);
+    expect(service.getKaraokeState(SESSION_ID)).toEqual({
+      spotlightItemId: item.id,
+      paused: true,
+      pausedUntilEpochMs: NOW + 45_000,
+    });
+  });
+});
+
+describe('KaraokeService.pause / ready', () => {
+  const URI = 'spotify:track:abc';
+
+  async function spotlightWithClaim(s: ReturnType<typeof setup>) {
+    const { guest } = await s.addGuest();
+    const item = await s.addItem('queued');
+    await s.service.claim({
+      sessionId: SESSION_ID,
+      slotToken: 'slot-fp-1',
+      queueItemId: item.id,
+      displayName: 'Ana',
+    });
+    await s.service.handleTrackChange({ sessionId: SESSION_ID, trackUri: URI });
+    return { guest, item };
+  }
+
+  it('pause: spotlight claimer pauses in manual mode; broadcasts with deadline', async () => {
+    const s = setup(); // manual by default
+    const { item } = await spotlightWithClaim(s);
+    const captured = await s.captureEvents();
+
+    const result = await s.service.pause({ sessionId: SESSION_ID, slotToken: 'slot-fp-1' });
+
+    expect(result).toEqual({ untilEpochMs: NOW + 30_000 });
+    expect(captured).toEqual([
+      { type: 'karaoke.paused', itemId: item.id, untilEpochMs: NOW + 30_000 },
+    ]);
+    expect(s.service.getKaraokeState(SESSION_ID).paused).toBe(true);
+  });
+
+  it('pause rejects not_a_claimer when no spotlight is active', async () => {
+    const s = setup();
+    await s.addGuest();
+    await expect(
+      s.service.pause({ sessionId: SESSION_ID, slotToken: 'slot-fp-1' }),
+    ).rejects.toMatchObject({ code: 'not_a_claimer' });
+  });
+
+  it('pause rejects not_a_claimer for a guest without a claim on the spotlight item', async () => {
+    const s = setup();
+    await spotlightWithClaim(s);
+    await s.addGuest('fp-2');
+    await expect(
+      s.service.pause({ sessionId: SESSION_ID, slotToken: 'slot-fp-2' }),
+    ).rejects.toMatchObject({ code: 'not_a_claimer' });
+  });
+
+  it('pause rejects pause_disabled outside manual mode', async () => {
+    for (const karaokePauseMode of ['off', 'auto'] as const) {
+      const s = setup({ karaokePauseMode });
+      await spotlightWithClaim(s);
+      await expect(
+        s.service.pause({ sessionId: SESSION_ID, slotToken: 'slot-fp-1' }),
+      ).rejects.toMatchObject({ code: 'pause_disabled' });
+    }
+  });
+
+  it('ready: resumes and broadcasts karaoke.resumed while paused', async () => {
+    const s = setup();
+    const { item } = await spotlightWithClaim(s);
+    await s.service.pause({ sessionId: SESSION_ID, slotToken: 'slot-fp-1' });
+    const captured = await s.captureEvents();
+
+    await s.service.ready({ sessionId: SESSION_ID, slotToken: 'slot-fp-1' });
+
+    expect(captured).toEqual([{ type: 'karaoke.resumed', itemId: item.id }]);
+    expect(s.service.getKaraokeState(SESSION_ID)).toEqual({
+      spotlightItemId: item.id,
+      paused: false,
+      pausedUntilEpochMs: null,
+    });
+  });
+
+  it('ready rejects not_paused when playback is not karaoke-paused', async () => {
+    const s = setup();
+    await spotlightWithClaim(s);
+    await expect(
+      s.service.ready({ sessionId: SESSION_ID, slotToken: 'slot-fp-1' }),
+    ).rejects.toMatchObject({ code: 'not_paused' });
+  });
+});
+
+describe('KaraokeService.reconcilePlayback', () => {
+  const URI = 'spotify:track:abc';
+
+  async function pausedSetup() {
+    const s = setup({ karaokePauseMode: 'auto', karaokePauseTimeoutSec: 30 });
+    const { guest } = await s.addGuest();
+    const item = await s.addItem('queued');
+    await s.karaokeClaims.create({
+      sessionId: SESSION_ID,
+      queueItemId: item.id,
+      guestId: guest.id,
+      displayName: 'Ana',
+    });
+    // Auto mode: entering the spotlight pauses with deadline NOW + 30s.
+    await s.service.handleTrackChange({ sessionId: SESSION_ID, trackUri: URI, nowEpochMs: NOW });
+    return { ...s, item };
+  }
+
+  it('provider reports playing while karaoke-paused → clears + broadcasts resumed', async () => {
+    const s = await pausedSetup();
+    const captured = await s.captureEvents();
+
+    await s.service.reconcilePlayback({ sessionId: SESSION_ID, isPlaying: true, nowEpochMs: NOW });
+
+    expect(captured).toEqual([{ type: 'karaoke.resumed', itemId: s.item.id }]);
+    expect(s.service.getKaraokeState(SESSION_ID).paused).toBe(false);
+  });
+
+  it('past the deadline → clears + broadcasts resumed; idempotent afterwards', async () => {
+    const s = await pausedSetup();
+    const captured = await s.captureEvents();
+
+    await s.service.reconcilePlayback({
+      sessionId: SESSION_ID,
+      isPlaying: false,
+      nowEpochMs: NOW + 30_001,
+    });
+    await s.service.reconcilePlayback({
+      sessionId: SESSION_ID,
+      isPlaying: false,
+      nowEpochMs: NOW + 35_000,
+    });
+
+    expect(captured).toEqual([{ type: 'karaoke.resumed', itemId: s.item.id }]);
+  });
+
+  it('before the deadline and still paused → no-op', async () => {
+    const s = await pausedSetup();
+    const captured = await s.captureEvents();
+
+    await s.service.reconcilePlayback({
+      sessionId: SESSION_ID,
+      isPlaying: false,
+      nowEpochMs: NOW + 29_999,
+    });
+
+    expect(captured).toEqual([]);
+    expect(s.service.getKaraokeState(SESSION_ID).paused).toBe(true);
   });
 });

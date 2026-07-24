@@ -189,6 +189,28 @@ describe('KaraokeApi', () => {
     });
     expect(captures[0]?.init?.body).toContain('"karaoke":{"displayName":"Ana"}');
   });
+
+  it('pause POSTs /karaoke/pause with Bearer slot token and returns the deadline', async () => {
+    const { client, captures } = makeClient({
+      body: { ok: true, untilEpochMs: 1_700_000_030_000 },
+    });
+    const result = await client.karaoke.pause('sess-1', 'slt_abc');
+    expect(captures[0]?.url).toBe('https://api.test/api/v1/sessions/sess-1/karaoke/pause');
+    expect(captures[0]?.init?.method).toBe('POST');
+    const headers = captures[0]?.init?.headers as Record<string, string>;
+    expect(headers['authorization']).toBe('Bearer slt_abc');
+    expect(result).toEqual({ ok: true, untilEpochMs: 1_700_000_030_000 });
+  });
+
+  it('ready POSTs /karaoke/ready with Bearer slot token', async () => {
+    const { client, captures } = makeClient({ body: { ok: true } });
+    const result = await client.karaoke.ready('sess-1', 'slt_abc');
+    expect(captures[0]?.url).toBe('https://api.test/api/v1/sessions/sess-1/karaoke/ready');
+    expect(captures[0]?.init?.method).toBe('POST');
+    const headers = captures[0]?.init?.headers as Record<string, string>;
+    expect(headers['authorization']).toBe('Bearer slt_abc');
+    expect(result).toEqual({ ok: true });
+  });
 });
 
 describe('GuestApi', () => {
