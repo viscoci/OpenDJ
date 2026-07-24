@@ -50,6 +50,9 @@ jobs:
           commit: 'chore: version packages'
           title: 'chore: version packages [skip-changeset]'
         env:
+          # pnpm install ran `prepare` → lefthook install; skip repo hooks for the
+          # bot's version commit (DCO sign-off is guarded at the PR level instead)
+          LEFTHOOK: '0'
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           # setup-node's registry-url writes a project .npmrc keyed on NODE_AUTH_TOKEN
