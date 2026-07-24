@@ -16,6 +16,10 @@ function mapSession(row: typeof schema.sessions.$inferSelect): SessionRecord {
     moderationEnabled: row.moderationEnabled,
     voteSkipMode: row.voteSkipMode as SessionRecord['voteSkipMode'],
     voteSkipThreshold: row.voteSkipThreshold,
+    karaokeMode: row.karaokeMode as SessionRecord['karaokeMode'],
+    karaokeMicCount: row.karaokeMicCount,
+    karaokePauseMode: row.karaokePauseMode as SessionRecord['karaokePauseMode'],
+    karaokePauseTimeoutSec: row.karaokePauseTimeoutSec,
     startedAt: row.startedAt,
     endedAt: row.endedAt,
   };
@@ -61,6 +65,10 @@ export class DrizzleSessionRepository implements SessionRepository {
     moderationEnabled?: boolean;
     voteSkipMode?: 'fixed' | 'percentage' | 'host_approval';
     voteSkipThreshold?: number;
+    karaokeMode?: 'off' | 'optional' | 'required';
+    karaokeMicCount?: number;
+    karaokePauseMode?: 'off' | 'manual' | 'auto';
+    karaokePauseTimeoutSec?: number;
   }): Promise<SessionRecord> {
     const rows = await this.db
       .insert(schema.sessions)
@@ -75,6 +83,10 @@ export class DrizzleSessionRepository implements SessionRepository {
         moderationEnabled: input.moderationEnabled ?? false,
         voteSkipMode: input.voteSkipMode ?? 'fixed',
         voteSkipThreshold: input.voteSkipThreshold ?? 5,
+        karaokeMode: input.karaokeMode ?? 'off',
+        karaokeMicCount: input.karaokeMicCount ?? 1,
+        karaokePauseMode: input.karaokePauseMode ?? 'manual',
+        karaokePauseTimeoutSec: input.karaokePauseTimeoutSec ?? 30,
       })
       .returning();
     const row = rows[0];
@@ -91,6 +103,10 @@ export class DrizzleSessionRepository implements SessionRepository {
     moderationEnabled?: boolean;
     voteSkipMode?: 'fixed' | 'percentage' | 'host_approval';
     voteSkipThreshold?: number;
+    karaokeMode?: 'off' | 'optional' | 'required';
+    karaokeMicCount?: number;
+    karaokePauseMode?: 'off' | 'manual' | 'auto';
+    karaokePauseTimeoutSec?: number;
     name?: string;
   }): Promise<SessionRecord | null> {
     const set: Record<string, unknown> = {};
@@ -102,6 +118,11 @@ export class DrizzleSessionRepository implements SessionRepository {
     if (input.moderationEnabled !== undefined) set['moderationEnabled'] = input.moderationEnabled;
     if (input.voteSkipMode !== undefined) set['voteSkipMode'] = input.voteSkipMode;
     if (input.voteSkipThreshold !== undefined) set['voteSkipThreshold'] = input.voteSkipThreshold;
+    if (input.karaokeMode !== undefined) set['karaokeMode'] = input.karaokeMode;
+    if (input.karaokeMicCount !== undefined) set['karaokeMicCount'] = input.karaokeMicCount;
+    if (input.karaokePauseMode !== undefined) set['karaokePauseMode'] = input.karaokePauseMode;
+    if (input.karaokePauseTimeoutSec !== undefined)
+      set['karaokePauseTimeoutSec'] = input.karaokePauseTimeoutSec;
     if (input.name !== undefined) set['name'] = input.name;
     if (Object.keys(set).length === 0) return this.findById(input.id);
     const rows = await this.db

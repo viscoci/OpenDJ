@@ -33,6 +33,9 @@ const VoteSkipMode = v.union([
   v.literal('host_approval'),
 ]);
 
+const KaraokeMode = v.picklist(['off', 'optional', 'required']);
+const KaraokePauseMode = v.picklist(['off', 'manual', 'auto']);
+
 const CreateBody = v.object({
   name: v.pipe(v.string(), v.nonEmpty()),
   qrSlug: v.optional(v.pipe(v.string(), v.nonEmpty())),
@@ -45,6 +48,12 @@ const CreateBody = v.object({
   moderationEnabled: v.optional(v.boolean()),
   voteSkipMode: v.optional(VoteSkipMode),
   voteSkipThreshold: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1))),
+  karaokeMode: v.optional(KaraokeMode),
+  karaokeMicCount: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(8))),
+  karaokePauseMode: v.optional(KaraokePauseMode),
+  karaokePauseTimeoutSec: v.optional(
+    v.pipe(v.number(), v.integer(), v.minValue(5), v.maxValue(180)),
+  ),
 });
 
 const UpdateBody = v.object({
@@ -58,6 +67,12 @@ const UpdateBody = v.object({
   moderationEnabled: v.optional(v.boolean()),
   voteSkipMode: v.optional(VoteSkipMode),
   voteSkipThreshold: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1))),
+  karaokeMode: v.optional(KaraokeMode),
+  karaokeMicCount: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(8))),
+  karaokePauseMode: v.optional(KaraokePauseMode),
+  karaokePauseTimeoutSec: v.optional(
+    v.pipe(v.number(), v.integer(), v.minValue(5), v.maxValue(180)),
+  ),
 });
 
 function mapErrorToStatus(code: string): { status: number; payload: { error: string } } {

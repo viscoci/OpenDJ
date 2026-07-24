@@ -28,6 +28,10 @@ const baseSession: SessionRecord = {
   moderationEnabled: false,
   voteSkipMode: 'fixed',
   voteSkipThreshold: 5,
+  karaokeMode: 'off',
+  karaokeMicCount: 1,
+  karaokePauseMode: 'manual',
+  karaokePauseTimeoutSec: 30,
   startedAt: new Date(NOW),
   endedAt: null,
 };

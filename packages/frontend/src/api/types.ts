@@ -7,7 +7,13 @@
  * `string` so callers parse them when needed.
  */
 
-import type { Plan, QueueItemStatus, VoteSkipMode } from '@opendj/core';
+import type {
+  KaraokeMode,
+  KaraokePauseMode,
+  Plan,
+  QueueItemStatus,
+  VoteSkipMode,
+} from '@opendj/core';
 
 export interface SessionWire {
   id: string;
@@ -26,6 +32,14 @@ export interface SessionWire {
   moderationEnabled: boolean;
   voteSkipMode: VoteSkipMode;
   voteSkipThreshold: number;
+  /** `off`: mic claims disabled. See `KaraokeMode` for `optional`/`required`. */
+  karaokeMode: KaraokeMode;
+  /** Mics available per song; each song can carry up to this many claims. 1-8. */
+  karaokeMicCount: number;
+  /** See `KaraokePauseMode`. */
+  karaokePauseMode: KaraokePauseMode;
+  /** Auto-resume deadline (seconds) for any karaoke pause. 5-180. */
+  karaokePauseTimeoutSec: number;
   startedAt: string;
   endedAt: string | null;
 }
@@ -102,6 +116,10 @@ export interface CreateSessionRequest {
   moderationEnabled?: boolean;
   voteSkipMode?: VoteSkipMode;
   voteSkipThreshold?: number;
+  karaokeMode?: KaraokeMode;
+  karaokeMicCount?: number;
+  karaokePauseMode?: KaraokePauseMode;
+  karaokePauseTimeoutSec?: number;
 }
 
 /**

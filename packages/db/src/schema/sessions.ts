@@ -19,6 +19,8 @@ import { users } from './users.js';
  * Live event / session. One row per event hosts run.
  *
  * `voteSkipMode`: 'fixed' | 'percentage' | 'host_approval'
+ * `karaokeMode`: 'off' | 'optional' | 'required'
+ * `karaokePauseMode`: 'off' | 'manual' | 'auto'
  */
 export const sessions = pgTable('sessions', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -34,6 +36,10 @@ export const sessions = pgTable('sessions', {
   moderationEnabled: boolean('moderation_enabled').notNull().default(false),
   voteSkipMode: text('vote_skip_mode').notNull().default('fixed'),
   voteSkipThreshold: integer('vote_skip_threshold').notNull().default(5),
+  karaokeMode: text('karaoke_mode').notNull().default('off'),
+  karaokeMicCount: integer('karaoke_mic_count').notNull().default(1),
+  karaokePauseMode: text('karaoke_pause_mode').notNull().default('manual'),
+  karaokePauseTimeoutSec: integer('karaoke_pause_timeout_sec').notNull().default(30),
   startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
   endedAt: timestamp('ended_at', { withTimezone: true }),
 });

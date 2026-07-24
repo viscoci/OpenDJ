@@ -8,6 +8,19 @@
 
 export type VoteSkipMode = 'fixed' | 'percentage' | 'host_approval';
 
+/**
+ * `optional`: requester may claim a mic while queuing; `required`: a song
+ * request MUST include a mic claim (reject `karaoke_claim_required`).
+ */
+export type KaraokeMode = 'off' | 'optional' | 'required';
+
+/**
+ * `manual`: claimers get a Pause button when their song is playing;
+ * `auto`: a claimed song auto-pauses the moment it starts; `off`: no guest
+ * pause.
+ */
+export type KaraokePauseMode = 'off' | 'manual' | 'auto';
+
 export interface Session {
   id: string;
   accountId: string;
@@ -38,6 +51,14 @@ export interface Session {
    * Ignored for voteSkipMode === 'host_approval'.
    */
   voteSkipThreshold: number;
+  /** `off`: mic claims disabled. See `KaraokeMode` for `optional`/`required`. */
+  karaokeMode: KaraokeMode;
+  /** Mics available per song; each song can carry up to this many claims. 1-8. */
+  karaokeMicCount: number;
+  /** See `KaraokePauseMode`. */
+  karaokePauseMode: KaraokePauseMode;
+  /** Auto-resume deadline (seconds) for any karaoke pause. 5-180. */
+  karaokePauseTimeoutSec: number;
   startedAt: Date;
   endedAt: Date | null;
 }

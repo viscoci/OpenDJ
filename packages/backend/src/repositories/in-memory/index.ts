@@ -623,6 +623,10 @@ export class InMemorySessionRepository implements SessionRepository {
     moderationEnabled?: boolean;
     voteSkipMode?: 'fixed' | 'percentage' | 'host_approval';
     voteSkipThreshold?: number;
+    karaokeMode?: 'off' | 'optional' | 'required';
+    karaokeMicCount?: number;
+    karaokePauseMode?: 'off' | 'manual' | 'auto';
+    karaokePauseTimeoutSec?: number;
   }): Promise<SessionRecord> {
     const id = crypto.randomUUID();
     const row: SessionRecord = {
@@ -637,6 +641,10 @@ export class InMemorySessionRepository implements SessionRepository {
       moderationEnabled: input.moderationEnabled ?? false,
       voteSkipMode: input.voteSkipMode ?? 'fixed',
       voteSkipThreshold: input.voteSkipThreshold ?? 5,
+      karaokeMode: input.karaokeMode ?? 'off',
+      karaokeMicCount: input.karaokeMicCount ?? 1,
+      karaokePauseMode: input.karaokePauseMode ?? 'manual',
+      karaokePauseTimeoutSec: input.karaokePauseTimeoutSec ?? 30,
       startedAt: this.clock.now(),
       endedAt: null,
     };
@@ -653,6 +661,10 @@ export class InMemorySessionRepository implements SessionRepository {
     moderationEnabled?: boolean;
     voteSkipMode?: 'fixed' | 'percentage' | 'host_approval';
     voteSkipThreshold?: number;
+    karaokeMode?: 'off' | 'optional' | 'required';
+    karaokeMicCount?: number;
+    karaokePauseMode?: 'off' | 'manual' | 'auto';
+    karaokePauseTimeoutSec?: number;
     name?: string;
   }): Promise<SessionRecord | null> {
     const row = this.rows.get(input.id);
@@ -665,6 +677,11 @@ export class InMemorySessionRepository implements SessionRepository {
     if (input.moderationEnabled !== undefined) row.moderationEnabled = input.moderationEnabled;
     if (input.voteSkipMode !== undefined) row.voteSkipMode = input.voteSkipMode;
     if (input.voteSkipThreshold !== undefined) row.voteSkipThreshold = input.voteSkipThreshold;
+    if (input.karaokeMode !== undefined) row.karaokeMode = input.karaokeMode;
+    if (input.karaokeMicCount !== undefined) row.karaokeMicCount = input.karaokeMicCount;
+    if (input.karaokePauseMode !== undefined) row.karaokePauseMode = input.karaokePauseMode;
+    if (input.karaokePauseTimeoutSec !== undefined)
+      row.karaokePauseTimeoutSec = input.karaokePauseTimeoutSec;
     if (input.name !== undefined) row.name = input.name;
     return row;
   }

@@ -913,6 +913,10 @@ function sessionToDomain(record: {
   moderationEnabled: boolean;
   voteSkipMode: 'fixed' | 'percentage' | 'host_approval';
   voteSkipThreshold: number;
+  karaokeMode: 'off' | 'optional' | 'required';
+  karaokeMicCount: number;
+  karaokePauseMode: 'off' | 'manual' | 'auto';
+  karaokePauseTimeoutSec: number;
   startedAt: Date;
   endedAt: Date | null;
 }): Session {
@@ -928,6 +932,10 @@ function sessionToDomain(record: {
     moderationEnabled: record.moderationEnabled,
     voteSkipMode: record.voteSkipMode,
     voteSkipThreshold: record.voteSkipThreshold,
+    karaokeMode: record.karaokeMode,
+    karaokeMicCount: record.karaokeMicCount,
+    karaokePauseMode: record.karaokePauseMode,
+    karaokePauseTimeoutSec: record.karaokePauseTimeoutSec,
     startedAt: record.startedAt,
     endedAt: record.endedAt,
   };

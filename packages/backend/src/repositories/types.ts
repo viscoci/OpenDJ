@@ -88,6 +88,10 @@ export interface SessionRecord {
   moderationEnabled: boolean;
   voteSkipMode: 'fixed' | 'percentage' | 'host_approval';
   voteSkipThreshold: number;
+  karaokeMode: 'off' | 'optional' | 'required';
+  karaokeMicCount: number;
+  karaokePauseMode: 'off' | 'manual' | 'auto';
+  karaokePauseTimeoutSec: number;
   startedAt: Date;
   endedAt: Date | null;
 }
@@ -107,6 +111,10 @@ export interface SessionRepository {
     moderationEnabled?: boolean;
     voteSkipMode?: 'fixed' | 'percentage' | 'host_approval';
     voteSkipThreshold?: number;
+    karaokeMode?: 'off' | 'optional' | 'required';
+    karaokeMicCount?: number;
+    karaokePauseMode?: 'off' | 'manual' | 'auto';
+    karaokePauseTimeoutSec?: number;
   }): Promise<SessionRecord>;
   update(input: {
     id: string;
@@ -117,6 +125,10 @@ export interface SessionRepository {
     moderationEnabled?: boolean;
     voteSkipMode?: 'fixed' | 'percentage' | 'host_approval';
     voteSkipThreshold?: number;
+    karaokeMode?: 'off' | 'optional' | 'required';
+    karaokeMicCount?: number;
+    karaokePauseMode?: 'off' | 'manual' | 'auto';
+    karaokePauseTimeoutSec?: number;
     name?: string;
   }): Promise<SessionRecord | null>;
   /** Mark a session as ended. Idempotent — if already ended, returns the existing row. */

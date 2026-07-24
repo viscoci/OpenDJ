@@ -44,6 +44,10 @@ export interface CreateSessionInput {
   moderationEnabled?: boolean;
   voteSkipMode?: 'fixed' | 'percentage' | 'host_approval';
   voteSkipThreshold?: number;
+  karaokeMode?: 'off' | 'optional' | 'required';
+  karaokeMicCount?: number;
+  karaokePauseMode?: 'off' | 'manual' | 'auto';
+  karaokePauseTimeoutSec?: number;
 }
 
 export interface UpdateSessionInput {
@@ -58,6 +62,10 @@ export interface UpdateSessionInput {
   moderationEnabled?: boolean;
   voteSkipMode?: 'fixed' | 'percentage' | 'host_approval';
   voteSkipThreshold?: number;
+  karaokeMode?: 'off' | 'optional' | 'required';
+  karaokeMicCount?: number;
+  karaokePauseMode?: 'off' | 'manual' | 'auto';
+  karaokePauseTimeoutSec?: number;
 }
 
 export class SessionService {
@@ -79,6 +87,10 @@ export class SessionService {
       moderationEnabled: input.moderationEnabled ?? false,
       voteSkipMode: input.voteSkipMode ?? 'fixed',
       voteSkipThreshold: input.voteSkipThreshold ?? 5,
+      karaokeMode: input.karaokeMode ?? 'off',
+      karaokeMicCount: input.karaokeMicCount ?? 1,
+      karaokePauseMode: input.karaokePauseMode ?? 'manual',
+      karaokePauseTimeoutSec: input.karaokePauseTimeoutSec ?? 30,
     });
   }
 
