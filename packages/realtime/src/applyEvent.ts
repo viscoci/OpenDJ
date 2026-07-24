@@ -74,7 +74,11 @@ export function applyEvent(snapshot: SessionSnapshot, event: SessionEvent): Sess
       // Skip-vote tally is bound to a single track URI — drop it on any
       // track transition so the count restarts at 0 for the new song.
       const nowPlayingSkipVote = trackChanged ? null : snapshot.nowPlayingSkipVote;
-      return { ...snapshot, nowPlaying: next, recentlyPlayed, nowPlayingSkipVote };
+      // Lyrics are bound to the previous track's URI — carrying them across
+      // a track change would let a mid-join/reconnect client render the old
+      // song's lyrics under the new track until its own lyrics.loaded lands.
+      const lyrics = trackChanged ? null : snapshot.lyrics;
+      return { ...snapshot, nowPlaying: next, recentlyPlayed, nowPlayingSkipVote, lyrics };
     }
 
     case 'now_playing_skip_vote.updated':

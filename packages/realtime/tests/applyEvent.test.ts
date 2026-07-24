@@ -182,6 +182,45 @@ describe('applyEvent — playback / now-playing', () => {
     expect(s.recentlyPlayed[0]?.uri).toBe('spotify:track:13');
   });
 
+  it('clears lyrics when the track changes, but preserves them on same-track updates', () => {
+    const trackA = {
+      uri: 'spotify:track:a',
+      name: 'A',
+      artist: 'A',
+      albumArt: null,
+      durationMs: 200_000,
+      progressMs: 0,
+      isPlaying: true,
+      zoneId: 'default',
+    };
+    const trackB = { ...trackA, uri: 'spotify:track:b', name: 'B' };
+    const lyricsForA = {
+      id: 'lrclib:1',
+      source: 'lrclib' as const,
+      trackName: 'A',
+      artistName: 'A',
+      isSynced: false,
+      lines: [],
+      matchConfidence: 'medium' as const,
+    };
+    let s = snapshot();
+    s = applyEvent(s, { type: 'now_playing.updated', track: trackA });
+    s = applyEvent(s, { type: 'lyrics.loaded', trackUri: 'spotify:track:a', lyrics: lyricsForA });
+    expect(s.lyrics?.id).toBe('lrclib:1');
+
+    // Re-applying the SAME track (e.g. a progress-drift tick) preserves lyrics.
+    const sameTrack = applyEvent(s, {
+      type: 'now_playing.updated',
+      track: { ...trackA, progressMs: 5000 },
+    });
+    expect(sameTrack.lyrics?.id).toBe('lrclib:1');
+
+    // Track change to B clears lyrics from the snapshot immediately, before
+    // B's own lyrics.loaded arrives.
+    const changed = applyEvent(s, { type: 'now_playing.updated', track: trackB });
+    expect(changed.lyrics).toBeNull();
+  });
+
   it('playback.clock_sampled stores the sample', () => {
     const next = applyEvent(snapshot(), {
       type: 'playback.clock_sampled',
