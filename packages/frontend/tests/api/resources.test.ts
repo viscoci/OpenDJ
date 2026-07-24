@@ -171,31 +171,3 @@ describe('GuestApi', () => {
     expect(headers['authorization']).toBe('Bearer slt_abc');
   });
 });
-
-describe('LyricsApi', () => {
-  it('lookupByTrackUri encodes the trackUri query', async () => {
-    const { client, captures } = makeClient({
-      body: {
-        trackUri: 'spotify:track:1',
-        source: 'lrclib',
-        isSynced: true,
-        isInstrumental: false,
-        matchConfidence: 'high',
-        attribution: 'LRCLIB',
-        lines: [],
-        plain: null,
-      },
-    });
-    const lyrics = await client.lyrics.lookupByTrackUri('spotify:track:1');
-    expect(captures[0]?.url).toBe(
-      'https://api.test/api/v1/lyrics/lookup?trackUri=spotify%3Atrack%3A1',
-    );
-    expect(lyrics?.source).toBe('lrclib');
-  });
-
-  it('lookupByTrackUri returns null when backend signals { lyrics: null }', async () => {
-    const { client } = makeClient({ body: { lyrics: null } });
-    const lyrics = await client.lyrics.lookupByTrackUri('spotify:track:missing');
-    expect(lyrics).toBeNull();
-  });
-});

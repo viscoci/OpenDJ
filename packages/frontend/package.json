@@ -35,6 +35,7 @@
   },
   "dependencies": {
     "@opendj/core": "workspace:*",
+    "@opendj/lyrics": "workspace:*",
     "@opendj/realtime": "workspace:*"
   },
   "devDependencies": {
