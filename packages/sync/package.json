@@ -1,6 +1,6 @@
 {
   "name": "@opendj/sync",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Song timing/synchronization primitives, normalized progress helpers, and sync adapter contracts.",
   "license": "MIT",
   "type": "module",
