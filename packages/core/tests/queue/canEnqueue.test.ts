@@ -150,6 +150,27 @@ describe('canEnqueue', () => {
       expect(result.ok).toBe(true);
     });
 
+    it('N=3: allows when waiting queue has exactly 2 items (below cap) both owned by guest', () => {
+      const session = makeSession({ songsPerGuestCap: 99, maxConsecutivePerGuest: 3 });
+      const guest = makeGuest({ id: 'guest-1' });
+      const items = [
+        makeItem({
+          id: 'a',
+          guestId: 'guest-1',
+          status: 'approved',
+          createdAt: new Date('2026-04-30T10:00:00Z'),
+        }),
+        makeItem({
+          id: 'b',
+          guestId: 'guest-1',
+          status: 'approved',
+          createdAt: new Date('2026-04-30T11:00:00Z'),
+        }),
+      ];
+      const result = canEnqueue(session, guest, items, now);
+      expect(result.ok).toBe(true);
+    });
+
     it('null: never rejects for consecutive_cap_reached regardless of tail composition', () => {
       const session = makeSession({ songsPerGuestCap: 99, maxConsecutivePerGuest: null });
       const guest = makeGuest({ id: 'guest-1' });
