@@ -269,6 +269,7 @@ describe('NowPlayingPoller clock sampling', () => {
     expect(sample.progressMs).toBe(10_000);
     expect(sample.isPlaying).toBe(true);
     expect(sample.sampledAtEpochMs).toBe(1_000_000);
+    expect(sample.providerId).toBe('spotify');
 
     poller.stopAll();
   });

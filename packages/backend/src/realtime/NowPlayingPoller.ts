@@ -315,7 +315,9 @@ export class NowPlayingPoller {
       if (next) {
         await room.publish({
           type: 'playback.clock_sampled',
-          sample: createPlaybackClockSample(next, this.nowEpochMs()),
+          sample: createPlaybackClockSample(next, this.nowEpochMs(), {
+            providerId: entry.cachedProviderId ?? SPOTIFY_PROVIDER_ID,
+          }),
         });
       }
 
