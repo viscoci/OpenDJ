@@ -53,6 +53,22 @@ describe('AuthApi', () => {
     const { client } = makeClient();
     expect(client.auth.oauthStartUrl('google')).toBe('/api/v1/auth/oauth/google/start');
   });
+
+  it('requestPasswordReset POSTs /api/v1/auth/email/request-reset with the email', async () => {
+    const { client, captures } = makeClient({ body: { ok: true } });
+    await client.auth.requestPasswordReset('a@b.test');
+    expect(captures[0]?.url).toBe('https://api.test/api/v1/auth/email/request-reset');
+    expect(captures[0]?.init?.method).toBe('POST');
+    expect(captures[0]?.init?.body).toBe('{"email":"a@b.test"}');
+  });
+
+  it('resetPassword POSTs /api/v1/auth/email/reset with token + newPassword', async () => {
+    const { client, captures } = makeClient({ body: { ok: true, userId: 'u1' } });
+    await client.auth.resetPassword('tok-123', 'new-password-1');
+    expect(captures[0]?.url).toBe('https://api.test/api/v1/auth/email/reset');
+    expect(captures[0]?.init?.method).toBe('POST');
+    expect(captures[0]?.init?.body).toBe('{"token":"tok-123","newPassword":"new-password-1"}');
+  });
 });
 
 describe('SessionsApi', () => {

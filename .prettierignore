@@ -1,0 +1,3 @@
+# Angular CLI build/test cache (git-ignored via nested .gitignore, which
+# prettier does not read)
+.angular/

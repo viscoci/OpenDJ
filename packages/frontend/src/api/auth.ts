@@ -48,6 +48,28 @@ export class AuthApi {
   }
 
   /**
+   * Request a password-reset email. Always resolves — the backend never
+   * reveals whether the email maps to an account.
+   */
+  requestPasswordReset(email: string): Promise<void> {
+    return this.http.request<void>('/api/v1/auth/email/request-reset', {
+      method: 'POST',
+      body: { email },
+    });
+  }
+
+  /**
+   * Complete a password reset with the token from the emailed link. On
+   * success the backend revokes every existing session for the user.
+   */
+  resetPassword(token: string, newPassword: string): Promise<void> {
+    return this.http.request<void>('/api/v1/auth/email/reset', {
+      method: 'POST',
+      body: { token, newPassword },
+    });
+  }
+
+  /**
    * Build the redirect URL the browser should follow to start an OAuth login
    * flow. The user's browser must navigate to this URL — the backend issues a
    * 302 to the provider's authorize endpoint.
