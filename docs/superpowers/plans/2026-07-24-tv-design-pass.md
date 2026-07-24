@@ -353,8 +353,8 @@ import type { TvPalette } from './album-palette.js';
                 [style.background]="palette?.b ?? '#EC4899'"
               ></span>
             }
-            {{ word }}
-          </span>
+            {{ word }}</span
+          >
         }
       </span>
     } @else {
