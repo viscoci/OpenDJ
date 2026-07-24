@@ -21,6 +21,7 @@ function item(id: string, overrides: Partial<QueueItemSummary> = {}): QueueItemS
     skipVotes: 0,
     createdAtEpochMs: 0,
     decidedAtEpochMs: null,
+    karaokeClaims: [],
     ...overrides,
   };
 }
@@ -323,11 +324,104 @@ describe('applyEvent — skip / slots / lyrics / end', () => {
   });
 });
 
+describe('applyEvent — karaoke claims', () => {
+  const ana = { guestId: 'guest-1', displayName: 'Ana' };
+  const ben = { guestId: 'guest-2', displayName: 'Ben' };
+
+  it('karaoke.claim_added appends the claim to a queue item', () => {
+    let s = snapshot();
+    s = applyEvent(s, { type: 'queue.item_requested', item: item('a') });
+    s = applyEvent(s, { type: 'queue.item_approved', itemId: 'a' });
+    s = applyEvent(s, { type: 'karaoke.claim_added', itemId: 'a', claim: ana });
+    s = applyEvent(s, { type: 'karaoke.claim_added', itemId: 'a', claim: ben });
+    expect(s.queue[0]?.karaokeClaims).toEqual([ana, ben]);
+  });
+
+  it('karaoke.claim_added folds into PENDING items too (claims allowed under moderation)', () => {
+    let s = snapshot();
+    s = applyEvent(s, { type: 'queue.item_requested', item: item('a') });
+    s = applyEvent(s, { type: 'karaoke.claim_added', itemId: 'a', claim: ana });
+    expect(s.pending[0]?.karaokeClaims).toEqual([ana]);
+    expect(s.queue).toEqual([]);
+  });
+
+  it('karaoke.claim_added only touches the targeted item', () => {
+    let s = snapshot();
+    s = applyEvent(s, { type: 'queue.item_requested', item: item('a') });
+    s = applyEvent(s, { type: 'queue.item_requested', item: item('b') });
+    s = applyEvent(s, { type: 'karaoke.claim_added', itemId: 'a', claim: ana });
+    expect(s.pending.find((i) => i.id === 'a')?.karaokeClaims).toEqual([ana]);
+    expect(s.pending.find((i) => i.id === 'b')?.karaokeClaims).toEqual([]);
+  });
+
+  it('karaoke.claim_added for the same guest replaces instead of duplicating', () => {
+    let s = snapshot();
+    s = applyEvent(s, { type: 'queue.item_requested', item: item('a') });
+    s = applyEvent(s, { type: 'karaoke.claim_added', itemId: 'a', claim: ana });
+    s = applyEvent(s, {
+      type: 'karaoke.claim_added',
+      itemId: 'a',
+      claim: { guestId: 'guest-1', displayName: 'Ana B' },
+    });
+    expect(s.pending[0]?.karaokeClaims).toEqual([{ guestId: 'guest-1', displayName: 'Ana B' }]);
+  });
+
+  it('karaoke.claim_added is a no-op for unknown item ids', () => {
+    const s = snapshot();
+    const next = applyEvent(s, { type: 'karaoke.claim_added', itemId: 'nope', claim: ana });
+    expect(next).toBe(s);
+  });
+
+  it("karaoke.claim_removed removes only that guest's claim", () => {
+    let s = snapshot();
+    s = applyEvent(s, { type: 'queue.item_requested', item: item('a') });
+    s = applyEvent(s, { type: 'queue.item_approved', itemId: 'a' });
+    s = applyEvent(s, { type: 'karaoke.claim_added', itemId: 'a', claim: ana });
+    s = applyEvent(s, { type: 'karaoke.claim_added', itemId: 'a', claim: ben });
+    s = applyEvent(s, { type: 'karaoke.claim_removed', itemId: 'a', guestId: 'guest-1' });
+    expect(s.queue[0]?.karaokeClaims).toEqual([ben]);
+  });
+
+  it('karaoke.claim_removed on a pending item works too', () => {
+    let s = snapshot();
+    s = applyEvent(s, { type: 'queue.item_requested', item: item('a') });
+    s = applyEvent(s, { type: 'karaoke.claim_added', itemId: 'a', claim: ana });
+    s = applyEvent(s, { type: 'karaoke.claim_removed', itemId: 'a', guestId: 'guest-1' });
+    expect(s.pending[0]?.karaokeClaims).toEqual([]);
+  });
+
+  it('karaoke.claim_removed is a no-op for unknown item ids', () => {
+    const s = snapshot();
+    const next = applyEvent(s, { type: 'karaoke.claim_removed', itemId: 'nope', guestId: 'g' });
+    expect(next).toBe(s);
+  });
+
+  it('claims survive the pending → queue move on approval', () => {
+    let s = snapshot();
+    s = applyEvent(s, { type: 'queue.item_requested', item: item('a') });
+    s = applyEvent(s, { type: 'karaoke.claim_added', itemId: 'a', claim: ana });
+    s = applyEvent(s, { type: 'queue.item_approved', itemId: 'a' });
+    expect(s.queue[0]?.karaokeClaims).toEqual([ana]);
+  });
+});
+
 describe('applyEvent — purity', () => {
   it('does not mutate the input snapshot', () => {
     const s = snapshot();
     const before = JSON.stringify(s);
     applyEvent(s, { type: 'queue.item_requested', item: item('a') });
+    expect(JSON.stringify(s)).toBe(before);
+  });
+
+  it('does not mutate the input snapshot on karaoke claim events', () => {
+    let s = snapshot();
+    s = applyEvent(s, { type: 'queue.item_requested', item: item('a') });
+    const before = JSON.stringify(s);
+    applyEvent(s, {
+      type: 'karaoke.claim_added',
+      itemId: 'a',
+      claim: { guestId: 'g', displayName: 'N' },
+    });
     expect(JSON.stringify(s)).toBe(before);
   });
 });

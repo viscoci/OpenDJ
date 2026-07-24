@@ -1,6 +1,16 @@
 import type { QueueItem, QueueItemStatus } from '@opendj/core';
 
 /**
+ * Broadcast-safe karaoke mic claim attached to a queue item. Carries only
+ * what guest/TV views render — the singer's session-scoped guest id and
+ * their sanitized display name.
+ */
+export interface KaraokeClaimSummary {
+  guestId: string;
+  displayName: string;
+}
+
+/**
  * Compact, broadcast-safe queue item shape sent over the realtime channel.
  *
  * Excludes server-only fields (`decidedAt` is included for moderation UIs;
@@ -18,12 +28,18 @@ export interface QueueItemSummary {
   skipVotes: number;
   createdAtEpochMs: number;
   decidedAtEpochMs: number | null;
+  /** Mic claims on this item. Empty when none (never absent). */
+  karaokeClaims: KaraokeClaimSummary[];
 }
 
 /**
  * Lossy projection from the durable QueueItem to the realtime summary.
+ * `karaokeClaims` defaults to empty — callers with claim data attach it.
  */
-export function toQueueItemSummary(item: QueueItem): QueueItemSummary {
+export function toQueueItemSummary(
+  item: QueueItem,
+  karaokeClaims: KaraokeClaimSummary[] = [],
+): QueueItemSummary {
   return {
     id: item.id,
     guestId: item.guestId,
@@ -36,5 +52,6 @@ export function toQueueItemSummary(item: QueueItem): QueueItemSummary {
     skipVotes: item.skipVotes,
     createdAtEpochMs: item.createdAt.getTime(),
     decidedAtEpochMs: item.decidedAt?.getTime() ?? null,
+    karaokeClaims,
   };
 }

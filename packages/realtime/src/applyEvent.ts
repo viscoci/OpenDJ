@@ -8,7 +8,32 @@
  */
 
 import type { SessionEvent } from './types/event.js';
+import type { QueueItemSummary } from './types/queue-summary.js';
 import { RECENTLY_PLAYED_MAX, type SessionSnapshot } from './types/snapshot.js';
+
+/**
+ * Apply `update` to the item with `itemId` wherever it lives (pending or
+ * queue). Returns the input snapshot unchanged when the id is unknown.
+ */
+function updateItemById(
+  snapshot: SessionSnapshot,
+  itemId: string,
+  update: (item: QueueItemSummary) => QueueItemSummary,
+): SessionSnapshot {
+  const pendingIdx = snapshot.pending.findIndex((i) => i.id === itemId);
+  if (pendingIdx >= 0) {
+    const pending = [...snapshot.pending];
+    pending[pendingIdx] = update(pending[pendingIdx]!);
+    return { ...snapshot, pending };
+  }
+  const queueIdx = snapshot.queue.findIndex((i) => i.id === itemId);
+  if (queueIdx >= 0) {
+    const queue = [...snapshot.queue];
+    queue[queueIdx] = update(queue[queueIdx]!);
+    return { ...snapshot, queue };
+  }
+  return snapshot;
+}
 
 export function applyEvent(snapshot: SessionSnapshot, event: SessionEvent): SessionSnapshot {
   switch (event.type) {
@@ -124,6 +149,23 @@ export function applyEvent(snapshot: SessionSnapshot, event: SessionEvent): Sess
           [event.trackUri]: { count: event.count, threshold: event.threshold },
         },
       };
+
+    case 'karaoke.claim_added':
+      // Replace-then-append keeps the fold idempotent — re-delivery of the
+      // same claim (or a display-name change) never duplicates a singer.
+      return updateItemById(snapshot, event.itemId, (item) => ({
+        ...item,
+        karaokeClaims: [
+          ...item.karaokeClaims.filter((c) => c.guestId !== event.claim.guestId),
+          event.claim,
+        ],
+      }));
+
+    case 'karaoke.claim_removed':
+      return updateItemById(snapshot, event.itemId, (item) => ({
+        ...item,
+        karaokeClaims: item.karaokeClaims.filter((c) => c.guestId !== event.guestId),
+      }));
 
     case 'guest_slots.updated':
       return {

@@ -22,6 +22,7 @@ const queueEvents: SessionEvent[] = [
       skipVotes: 0,
       createdAtEpochMs: 0,
       decidedAtEpochMs: null,
+      karaokeClaims: [],
     },
   },
   { type: 'queue.item_approved', itemId: 'i' },
@@ -67,6 +68,13 @@ const lyricsEvents: SessionEvent[] = [
 const otherEvents: SessionEvent[] = [
   { type: 'guest_slots.updated', activeCount: 1, queuedCount: 0 },
   { type: 'session.ended' },
+  // Karaoke events are their own family — not part of the queue bucket.
+  {
+    type: 'karaoke.claim_added',
+    itemId: 'i',
+    claim: { guestId: 'g', displayName: 'Ana' },
+  },
+  { type: 'karaoke.claim_removed', itemId: 'i', guestId: 'g' },
 ];
 
 describe('isEventOfType — discriminated narrowing', () => {

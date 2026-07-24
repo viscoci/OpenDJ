@@ -138,6 +138,40 @@ export type QueueSkipVoteRow = typeof queueSkipVotes.$inferSelect;
 export type QueueSkipVoteInsert = typeof queueSkipVotes.$inferInsert;
 
 /**
+ * Karaoke mic claims: a guest's "I'm singing this one" on a queue item.
+ * Up to `sessions.karaoke_mic_count` claims per item; unique
+ * `(queue_item_id, guest_id)` — one mic per guest per song. Claims are
+ * open to any guest in the session (duets), not just the requester.
+ *
+ * `display_name` is the sanitized singer name (trimmed, control chars
+ * stripped, 1–40 chars) shown on TV/host/guest views.
+ */
+export const karaokeClaims = pgTable(
+  'karaoke_claims',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    sessionId: uuid('session_id')
+      .notNull()
+      .references(() => sessions.id, { onDelete: 'cascade' }),
+    queueItemId: uuid('queue_item_id')
+      .notNull()
+      .references(() => queueItems.id, { onDelete: 'cascade' }),
+    guestId: uuid('guest_id')
+      .notNull()
+      .references(() => guests.id, { onDelete: 'cascade' }),
+    displayName: text('display_name').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    itemGuest: unique('karaoke_claims_item_guest').on(table.queueItemId, table.guestId),
+    sessionIdx: index('karaoke_claims_session').on(table.sessionId),
+  }),
+);
+
+export type KaraokeClaimRow = typeof karaokeClaims.$inferSelect;
+export type KaraokeClaimInsert = typeof karaokeClaims.$inferInsert;
+
+/**
  * Append-only event stream for realtime replay/debugging. Payload is
  * public/session-safe only — no secrets, no PII.
  */
