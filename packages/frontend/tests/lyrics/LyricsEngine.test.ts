@@ -144,4 +144,47 @@ describe('LyricsEngine', () => {
     });
     expect(e.computeState().mode).toBe('none');
   });
+
+  it('interpolates word progress across the active line by char weight', () => {
+    // line l2: 'line two' — words ['line','two'], chars 4+3=7, window [5000,10000) => 5000ms
+    // 'line' occupies [5000, 5000+5000*4/7≈7857); 'two' the rest
+    const e = engineAt(1_000_000);
+    e.applyEvent({ type: 'playback.clock_sampled', sample: sample(6000) }); // in 'line'
+    e.applyEvent({ type: 'lyrics.loaded', trackUri: 'spotify:track:aaa', lyrics: doc() });
+    const wp = e.computeState().wordProgress!;
+    expect(wp.words).toEqual(['line', 'two']);
+    expect(wp.activeWordIndex).toBe(0);
+    expect(wp.activeWordFraction).toBeCloseTo((6000 - 5000) / (5000 * (4 / 7)), 2);
+  });
+
+  it('advances to the second word later in the window', () => {
+    const e = engineAt(1_003_000); // sample at 6000 taken t=1_000_000 → predicted 9000: inside 'two'
+    e.applyEvent({ type: 'playback.clock_sampled', sample: sample(6000) });
+    e.applyEvent({ type: 'lyrics.loaded', trackUri: 'spotify:track:aaa', lyrics: doc() });
+    const wp = e.computeState().wordProgress!;
+    expect(wp.activeWordIndex).toBe(1);
+    expect(wp.activeWordFraction).toBeGreaterThan(0);
+    expect(wp.activeWordFraction).toBeLessThanOrEqual(1);
+  });
+
+  it('setOffsetMs shifts line selection later', () => {
+    const e = engineAt(1_000_000);
+    e.applyEvent({ type: 'playback.clock_sampled', sample: sample(5200) }); // just inside l2
+    e.applyEvent({ type: 'lyrics.loaded', trackUri: 'spotify:track:aaa', lyrics: doc() });
+    expect(e.computeState().activeLine?.id).toBe('l2');
+    e.setOffsetMs(500); // lyrics later: effective 4700 → back in l1
+    expect(e.computeState().activeLine?.id).toBe('l1');
+    expect(e.computeState().normalizedProgress).toBeCloseTo(5200 / 200_000, 5); // unaffected
+  });
+
+  it('wordProgress is null in unsynced and none modes', () => {
+    const e = engineAt(1_000_000);
+    e.applyEvent({ type: 'playback.clock_sampled', sample: sample(1000) });
+    e.applyEvent({
+      type: 'lyrics.loaded',
+      trackUri: 'spotify:track:aaa',
+      lyrics: doc({ isSynced: false, lines: [], plainText: 'x' }),
+    });
+    expect(e.computeState().wordProgress).toBeNull();
+  });
 });
