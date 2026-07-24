@@ -1,6 +1,6 @@
 {
   "name": "@opendj/app-shell",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Platform-neutral app-shell interfaces and browser/Capacitor adapters for OpenDJ.",
   "license": "MIT",
   "type": "module",

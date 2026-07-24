@@ -1,6 +1,6 @@
 {
   "name": "@opendj/lyrics",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Lyrics lookup, LRC parsing, cache contracts, LRCLIB adapter, and feedback hooks for OpenDJ.",
   "license": "MIT",
   "type": "module",

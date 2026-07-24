@@ -1,6 +1,6 @@
 {
   "name": "@opendj/realtime",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Runtime-neutral realtime room contracts, events, and snapshots for OpenDJ.",
   "license": "MIT",
   "type": "module",
