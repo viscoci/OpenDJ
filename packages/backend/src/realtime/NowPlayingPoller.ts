@@ -47,6 +47,7 @@ import {
   type NowPlayingTrack,
   type Track,
 } from '@opendj/core';
+import { createPlaybackClockSample } from '@opendj/sync';
 import {
   ProviderConnectionNotFoundError,
   StreamingRouter,
@@ -95,6 +96,8 @@ export interface NowPlayingPollerOptions {
   idleGraceMs?: number;
   /** Backoff cap when the provider returns 429. Default 60000 ms. */
   maxBackoffMs?: number;
+  /** Injectable clock for tests. Default Date.now. */
+  nowEpochMs?: () => number;
   /** Optional log sink. Defaults to `console`. */
   logger?: { warn(msg: string, meta?: unknown): void };
 }
@@ -126,6 +129,7 @@ export class NowPlayingPoller {
   private readonly driftThresholdMs: number;
   private readonly idleGraceMs: number;
   private readonly maxBackoffMs: number;
+  private readonly nowEpochMs: () => number;
   private readonly logger: { warn(msg: string, meta?: unknown): void };
   private readonly state = new Map<string, PerSession>();
 
@@ -137,6 +141,7 @@ export class NowPlayingPoller {
     this.driftThresholdMs = options.driftThresholdMs ?? 4000;
     this.idleGraceMs = options.idleGraceMs ?? 30_000;
     this.maxBackoffMs = options.maxBackoffMs ?? 60_000;
+    this.nowEpochMs = options.nowEpochMs ?? Date.now;
     this.logger = options.logger ?? console;
   }
 
@@ -281,6 +286,16 @@ export class NowPlayingPoller {
 
       if (this.shouldPublish(prev, next)) {
         await room.publish({ type: 'now_playing.updated', track: next });
+      }
+
+      // Sync layer: broadcast a clock sample each tick so clients can
+      // interpolate playback position locally (spec: no high-frequency
+      // progress broadcasts — samples at poll cadence only).
+      if (next) {
+        await room.publish({
+          type: 'playback.clock_sampled',
+          sample: createPlaybackClockSample(next, this.nowEpochMs()),
+        });
       }
 
       // Auto-skip rejected provider-queue URIs the moment they reach the
