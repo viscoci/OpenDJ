@@ -5,6 +5,7 @@ export * from './auth.js';
 export * from './sessions.js';
 export * from './queue.js';
 export * from './guest.js';
+export * from './karaoke.js';
 export * from './lyrics.js';
 export * from './playback.js';
 export * from './devices.js';

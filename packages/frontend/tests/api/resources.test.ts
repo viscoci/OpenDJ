@@ -140,6 +140,57 @@ describe('QueueApi', () => {
   });
 });
 
+describe('KaraokeApi', () => {
+  it('claim POSTs /karaoke/claims with body + Bearer slot token and unwraps {claim}', async () => {
+    const { client, captures } = makeClient({
+      body: { claim: { queueItemId: 'q1', guestId: 'g1', displayName: 'Ana' } },
+    });
+    const claim = await client.karaoke.claim('sess-1', 'slt_abc', {
+      queueItemId: 'q1',
+      displayName: 'Ana',
+    });
+    expect(captures[0]?.url).toBe('https://api.test/api/v1/sessions/sess-1/karaoke/claims');
+    expect(captures[0]?.init?.method).toBe('POST');
+    expect(captures[0]?.init?.body).toBe('{"queueItemId":"q1","displayName":"Ana"}');
+    const headers = captures[0]?.init?.headers as Record<string, string>;
+    expect(headers['authorization']).toBe('Bearer slt_abc');
+    expect(claim).toEqual({ queueItemId: 'q1', guestId: 'g1', displayName: 'Ana' });
+  });
+
+  it('removeClaim DELETEs /karaoke/claims/:itemId with Bearer slot token', async () => {
+    const { client, captures } = makeClient({ body: { ok: true } });
+    await client.karaoke.removeClaim('sess-1', 'q1', 'slt_abc');
+    expect(captures[0]?.url).toBe('https://api.test/api/v1/sessions/sess-1/karaoke/claims/q1');
+    expect(captures[0]?.init?.method).toBe('DELETE');
+    const headers = captures[0]?.init?.headers as Record<string, string>;
+    expect(headers['authorization']).toBe('Bearer slt_abc');
+  });
+
+  it('hostRemoveClaim DELETEs with guestId query and no slot token', async () => {
+    const { client, captures } = makeClient({ body: { ok: true } });
+    await client.karaoke.hostRemoveClaim('sess-1', 'q1', 'g1');
+    expect(captures[0]?.url).toBe(
+      'https://api.test/api/v1/sessions/sess-1/karaoke/claims/q1?guestId=g1',
+    );
+    expect(captures[0]?.init?.method).toBe('DELETE');
+    const headers = captures[0]?.init?.headers as Record<string, string>;
+    expect(headers['authorization']).toBeUndefined();
+  });
+
+  it('request accepts the karaoke displayName extension on the queue body', async () => {
+    const { client, captures } = makeClient({ body: { item: { id: 'q-new' } } });
+    await client.queue.request('sess-1', 'slt_abc', {
+      uri: 'spotify:track:1',
+      name: 'X',
+      artist: 'Y',
+      albumArt: null,
+      durationMs: 200_000,
+      karaoke: { displayName: 'Ana' },
+    });
+    expect(captures[0]?.init?.body).toContain('"karaoke":{"displayName":"Ana"}');
+  });
+});
+
 describe('GuestApi', () => {
   it('identity POSTs /guest/identity with fingerprintHash + eventSlug', async () => {
     const { client, captures } = makeClient({

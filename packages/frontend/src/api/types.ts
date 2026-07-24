@@ -44,6 +44,12 @@ export interface SessionWire {
   endedAt: string | null;
 }
 
+/** Mic claim attached to a queue item — singer identity for guest/TV views. */
+export interface KaraokeClaimWire {
+  guestId: string;
+  displayName: string;
+}
+
 export interface QueueItemSummaryWire {
   id: string;
   sessionId: string;
@@ -57,6 +63,8 @@ export interface QueueItemSummaryWire {
   skipVotes: number;
   createdAt: string;
   decidedAt: string | null;
+  /** Karaoke mic claims on this item. Empty array when none. */
+  karaokeClaims: ReadonlyArray<KaraokeClaimWire>;
 }
 
 export interface UserWire {
@@ -134,6 +142,12 @@ export interface RequestTrackBody {
   artist: string;
   albumArt: string | null;
   durationMs: number;
+  /**
+   * Optional mic claim bundled with the request. Required by the server
+   * when the session's `karaokeMode` is `'required'` (else the request is
+   * rejected with `karaoke_claim_required`).
+   */
+  karaoke?: { displayName: string };
 }
 
 export interface ModerateQueueItemBody {
