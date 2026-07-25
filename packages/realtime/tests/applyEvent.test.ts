@@ -322,6 +322,28 @@ describe('applyEvent — skip / slots / lyrics / end', () => {
     const event: SessionEvent = { type: 'session.ended' };
     expect(applyEvent(s, event)).toBe(s);
   });
+
+  it('session.settings_updated does not mutate the snapshot (pages own session state)', () => {
+    const s = snapshot();
+    const event: SessionEvent = {
+      type: 'session.settings_updated',
+      settings: {
+        name: 'Party',
+        guestCapOverride: null,
+        songsPerGuestCap: 3,
+        maxConsecutivePerGuest: null,
+        allowDuplicates: false,
+        moderationEnabled: false,
+        voteSkipMode: 'fixed',
+        voteSkipThreshold: 5,
+        karaokeMode: 'optional',
+        karaokeMicCount: 2,
+        karaokePauseMode: 'manual',
+        karaokePauseTimeoutSec: 30,
+      },
+    };
+    expect(applyEvent(s, event)).toBe(s);
+  });
 });
 
 describe('applyEvent — karaoke claims', () => {

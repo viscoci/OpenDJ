@@ -240,5 +240,10 @@ export function applyEvent(snapshot: SessionSnapshot, event: SessionEvent): Sess
     case 'session.ended':
       // Snapshot kept as-is; consumers detect end via the event itself.
       return snapshot;
+
+    case 'session.settings_updated':
+      // Snapshot doesn't carry session settings — pages own their session
+      // object and update it from the event directly.
+      return snapshot;
   }
 }

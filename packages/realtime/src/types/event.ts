@@ -67,8 +67,33 @@ export type SessionEvent =
   | { type: 'lyrics.loaded'; trackUri: string; lyrics: LyricsDocument | null }
   | { type: 'lyrics.feedback_recorded'; trackUri: string; feedbackKind: LyricsFeedbackKind }
   | { type: 'sync.cue_window_updated'; trackUri: string; cues: SyncCue[] }
-  // Session lifecycle
-  | { type: 'session.ended' };
+  // Session lifecycle + settings
+  | { type: 'session.ended' }
+  // Host changed session settings (karaoke mode, caps, moderation, …).
+  // Carries the full mutable-settings block so guest/TV/host views can
+  // update their session state without a REST refetch. The reducer does
+  // NOT fold this into the snapshot — pages own their session object.
+  | { type: 'session.settings_updated'; settings: SessionSettingsSummary };
+
+/**
+ * The host-mutable settings slice of a session, as broadcast by
+ * `session.settings_updated`. Field semantics match the session wire
+ * shape returned by `GET /api/v1/sessions/:id`.
+ */
+export interface SessionSettingsSummary {
+  name: string;
+  guestCapOverride: number | null;
+  songsPerGuestCap: number;
+  maxConsecutivePerGuest: number | null;
+  allowDuplicates: boolean;
+  moderationEnabled: boolean;
+  voteSkipMode: 'fixed' | 'percentage' | 'host_approval';
+  voteSkipThreshold: number;
+  karaokeMode: 'off' | 'optional' | 'required';
+  karaokeMicCount: number;
+  karaokePauseMode: 'off' | 'manual' | 'auto';
+  karaokePauseTimeoutSec: number;
+}
 
 export type SessionEventType = SessionEvent['type'];
 
