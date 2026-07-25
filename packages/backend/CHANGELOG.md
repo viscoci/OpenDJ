@@ -1,5 +1,16 @@
 # @opendj/backend
 
+## 0.6.0
+
+### Minor Changes
+
+- [#23](https://github.com/viscoci/OpenDJ/pull/23) [`70b40e9`](https://github.com/viscoci/OpenDJ/commit/70b40e9e2e43f2370b5ae704bcda668dfa38d64c) Thanks [@viscoci](https://github.com/viscoci)! - Live session-settings propagation: new `session.settings_updated` realtime event (with `SessionSettingsSummary` payload) broadcast by `PATCH /api/v1/sessions/:id` when the room is live, so guest/TV/host views pick up karaoke mode, caps, and moderation changes without a reload. The snapshot reducer passes it through unchanged — pages own their session state.
+
+### Patch Changes
+
+- Updated dependencies [[`70b40e9`](https://github.com/viscoci/OpenDJ/commit/70b40e9e2e43f2370b5ae704bcda668dfa38d64c)]:
+  - @opendj/realtime@0.3.0
+
 ## 0.5.0
 
 ### Minor Changes

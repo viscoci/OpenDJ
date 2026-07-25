@@ -1,6 +1,6 @@
 {
   "name": "@opendj/frontend",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Reusable Angular components and services for the OpenDJ host + guest flows.",
   "license": "MIT",
   "type": "module",
