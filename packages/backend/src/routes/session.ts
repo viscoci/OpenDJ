@@ -294,6 +294,36 @@ export function sessionRoutes(deps: SessionRouteDeps): Hono<{ Variables: AuthVar
   });
 
   /**
+   * POST /:id/reopen — host reopens an ended session (clears endedAt) so
+   * the original slug/QR works again. 409 `qr_slug_taken` when a different
+   * active session claimed the slug in the meantime. Idempotent on an
+   * already-active session.
+   */
+  app.post('/:id/reopen', requireClaim(deps.authService, 'session:update'), async (c) => {
+    const auth = c.get('auth') as AuthContext;
+    if (!auth.currentAccountId) return c.json({ error: 'no_active_account' }, 400);
+    const id = c.req.param('id') ?? '';
+    if (!UUID_RE.test(id)) return c.json({ error: 'session_not_found' }, 404);
+    try {
+      const session = await deps.sessionService.reopen(id, auth.currentAccountId);
+      void deps.audit?.record({
+        sessionId: id,
+        actorKind: 'host',
+        actorId: auth.userId ?? null,
+        actorLabel: 'Host',
+        action: 'session.reopened',
+      });
+      return c.json({ session });
+    } catch (err) {
+      if (err instanceof SessionServiceError) {
+        const { status, payload } = mapErrorToStatus(err.code);
+        return c.json(payload, status as 400 | 403 | 404 | 409);
+      }
+      throw err;
+    }
+  });
+
+  /**
    * GET /:id/audit-log — host-facing audit log of every interesting
    * mutation against the session. Cookie session + `session:read`
    * claim. Newest-first; supports `?limit=` (max 500) and

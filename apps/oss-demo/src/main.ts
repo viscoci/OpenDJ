@@ -117,7 +117,9 @@ async function main(): Promise<void> {
     // for deep links (`/u/:slug`, `/host`, etc.).
     app.notFound(async (c) => {
       if (c.req.path.startsWith('/api/')) return c.json({ error: 'not_found' }, 404);
-      if (c.req.method !== 'GET') return c.notFound();
+      // NOTE: must NOT call c.notFound() here — that re-invokes this very
+      // handler and recurses until the stack blows.
+      if (c.req.method !== 'GET') return c.text('Not Found', 404);
       try {
         const html = await readFile(indexHtmlPath, 'utf8');
         return c.html(html);

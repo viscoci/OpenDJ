@@ -73,8 +73,10 @@ export class SessionService {
 
   async create(input: CreateSessionInput): Promise<SessionRecord> {
     const qrSlug = input.qrSlug ?? this.defaultQrSlug();
+    // Only an ACTIVE session blocks the slug — ended sessions release
+    // theirs so the same QR code can host next week's party.
     const existing = await this.deps.sessions.findByQrSlug(qrSlug);
-    if (existing)
+    if (existing && existing.endedAt === null)
       throw new SessionServiceError('qr_slug_taken', `QR slug "${qrSlug}" is already in use.`);
     return this.deps.sessions.create({
       accountId: input.accountId,
@@ -128,6 +130,27 @@ export class SessionService {
     const ended = await this.deps.sessions.end(id, new Date(nowEpochMs ?? Date.now()));
     if (!ended) throw new SessionServiceError('session_not_found', 'Session disappeared.');
     return ended;
+  }
+
+  /**
+   * Reopen an ended session — clears `endedAt` so guests can rejoin via the
+   * original slug/QR. Idempotent on an already-active session. Fails with
+   * `qr_slug_taken` when a DIFFERENT active session now holds the slug
+   * (the host recreated it under the same QR after ending this one).
+   */
+  async reopen(id: string, accountId: string): Promise<SessionRecord> {
+    const session = await this.getById(id, accountId);
+    if (session.endedAt === null) return session;
+    const slugHolder = await this.deps.sessions.findByQrSlug(session.qrSlug);
+    if (slugHolder && slugHolder.endedAt === null && slugHolder.id !== id) {
+      throw new SessionServiceError(
+        'qr_slug_taken',
+        `QR slug "${session.qrSlug}" is now used by an active session.`,
+      );
+    }
+    const reopened = await this.deps.sessions.reopen(id);
+    if (!reopened) throw new SessionServiceError('session_not_found', 'Session disappeared.');
+    return reopened;
   }
 
   async listForAccount(accountId: string): Promise<SessionRecord[]> {

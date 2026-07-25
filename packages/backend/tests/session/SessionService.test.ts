@@ -48,6 +48,15 @@ describe('SessionService.create', () => {
     ).rejects.toMatchObject({ code: 'qr_slug_taken' });
   });
 
+  it('allows reusing the slug of an ENDED session', async () => {
+    const { service } = setup();
+    const first = await service.create({ accountId: ACCOUNT_ID, name: 'A', qrSlug: 'party' });
+    await service.end(first.id, ACCOUNT_ID);
+    const second = await service.create({ accountId: ACCOUNT_ID, name: 'B', qrSlug: 'party' });
+    expect(second.qrSlug).toBe('party');
+    expect(second.id).not.toBe(first.id);
+  });
+
   it('respects per-create overrides', async () => {
     const { service } = setup();
     const session = await service.create({
@@ -191,6 +200,62 @@ describe('SessionService.end', () => {
     await expect(service.end(created.id, 'other')).rejects.toMatchObject({
       code: 'account_mismatch',
     });
+  });
+});
+
+describe('SessionService.reopen', () => {
+  it('clears endedAt on an ended session', async () => {
+    const { service } = setup();
+    const created = await service.create({ accountId: ACCOUNT_ID, name: 'X' });
+    await service.end(created.id, ACCOUNT_ID);
+    const reopened = await service.reopen(created.id, ACCOUNT_ID);
+    expect(reopened.endedAt).toBeNull();
+  });
+
+  it('is idempotent on an already-active session', async () => {
+    const { service } = setup();
+    const created = await service.create({ accountId: ACCOUNT_ID, name: 'X' });
+    const reopened = await service.reopen(created.id, ACCOUNT_ID);
+    expect(reopened.id).toBe(created.id);
+    expect(reopened.endedAt).toBeNull();
+  });
+
+  it('throws qr_slug_taken when a different active session holds the slug', async () => {
+    const { service } = setup();
+    const first = await service.create({ accountId: ACCOUNT_ID, name: 'A', qrSlug: 'party' });
+    await service.end(first.id, ACCOUNT_ID);
+    await service.create({ accountId: ACCOUNT_ID, name: 'B', qrSlug: 'party' });
+    await expect(service.reopen(first.id, ACCOUNT_ID)).rejects.toMatchObject({
+      code: 'qr_slug_taken',
+    });
+  });
+
+  it('refuses cross-account reopen', async () => {
+    const { service } = setup();
+    const created = await service.create({ accountId: ACCOUNT_ID, name: 'X' });
+    await service.end(created.id, ACCOUNT_ID);
+    await expect(service.reopen(created.id, 'other')).rejects.toMatchObject({
+      code: 'account_mismatch',
+    });
+  });
+});
+
+describe('SessionService slug resolution after reuse', () => {
+  it('getBySlug resolves the ACTIVE session when an ended one shares the slug', async () => {
+    const { service } = setup();
+    const first = await service.create({ accountId: ACCOUNT_ID, name: 'Old', qrSlug: 'party' });
+    await service.end(first.id, ACCOUNT_ID);
+    const second = await service.create({ accountId: ACCOUNT_ID, name: 'New', qrSlug: 'party' });
+    const resolved = await service.getBySlug('party');
+    expect(resolved.id).toBe(second.id);
+  });
+
+  it('getBySlug still resolves an ended session when no active one exists', async () => {
+    const { service } = setup();
+    const first = await service.create({ accountId: ACCOUNT_ID, name: 'Old', qrSlug: 'party' });
+    await service.end(first.id, ACCOUNT_ID);
+    const resolved = await service.getBySlug('party');
+    expect(resolved.id).toBe(first.id);
   });
 });
 

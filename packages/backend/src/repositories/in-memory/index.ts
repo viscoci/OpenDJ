@@ -600,10 +600,15 @@ export class InMemorySessionRepository implements SessionRepository {
   }
 
   async findByQrSlug(qrSlug: string): Promise<SessionRecord | null> {
+    // Active session wins; else the most recently started ended one —
+    // mirrors DrizzleSessionRepository.findByQrSlug.
+    let best: SessionRecord | null = null;
     for (const row of this.rows.values()) {
-      if (row.qrSlug === qrSlug) return row;
+      if (row.qrSlug !== qrSlug) continue;
+      if (row.endedAt === null) return row;
+      if (!best || row.startedAt.getTime() > best.startedAt.getTime()) best = row;
     }
-    return null;
+    return best;
   }
 
   async findByAccount(accountId: string): Promise<SessionRecord[]> {
@@ -692,6 +697,13 @@ export class InMemorySessionRepository implements SessionRepository {
     const row = this.rows.get(id);
     if (!row) return null;
     if (row.endedAt === null) row.endedAt = endedAt;
+    return row;
+  }
+
+  async reopen(id: string): Promise<SessionRecord | null> {
+    const row = this.rows.get(id);
+    if (!row) return null;
+    row.endedAt = null;
     return row;
   }
 

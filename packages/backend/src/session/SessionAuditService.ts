@@ -46,6 +46,7 @@ export type SessionAuditAction =
   // Session lifecycle + settings
   | 'session.created'
   | 'session.ended'
+  | 'session.reopened'
   | 'session.settings_updated'
   // System / auto actions
   | 'system.auto_skip_rejected'

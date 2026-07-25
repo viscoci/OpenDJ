@@ -102,6 +102,19 @@ export class SessionsApi {
   }
 
   /**
+   * Reopen an ended session — clears `endedAt` so the original slug/QR
+   * works again. Backend: `POST /:id/reopen`. Fails with 409
+   * `qr_slug_taken` when a different active session holds the slug.
+   */
+  reopen(sessionId: string): Promise<SessionWire> {
+    return this.http
+      .request<
+        SessionEnvelope<SessionWire>
+      >(`/api/v1/sessions/${encodeURIComponent(sessionId)}/reopen`, { method: 'POST' })
+      .then((r) => r.session);
+  }
+
+  /**
    * One-shot read of the public casting state for `qrSlug`. Pulls the
    * realtime snapshot (when a room is materialized) merged with repo
    * fallbacks. Used by the `/tv/:slug` page so it can render a full first

@@ -50,6 +50,13 @@
       "when": 1784930019335,
       "tag": "0006_ordinary_chamber",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1784996513175,
+      "tag": "0007_peaceful_the_enforcers",
+      "breakpoints": true
     }
   ]
 }

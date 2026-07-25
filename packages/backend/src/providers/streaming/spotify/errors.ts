@@ -20,13 +20,20 @@ export class NoActiveDeviceError extends OpenDjError {
 /**
  * Generic Spotify Web API failure. Carries HTTP status and the response body
  * text so route handlers can surface meaningful errors.
+ *
+ * `retryAfterSec` is set on 429 responses when Spotify sent a `Retry-After`
+ * header. Extended rate-limit penalties report values in the tens of minutes
+ * — callers that poll MUST honor it instead of retrying on their own
+ * schedule, or the penalty window keeps sliding.
  */
 export class SpotifyApiError extends OpenDjError {
   readonly status: number;
   readonly responseBody: string;
-  constructor(status: number, responseBody: string) {
+  readonly retryAfterSec: number | null;
+  constructor(status: number, responseBody: string, retryAfterSec: number | null = null) {
     super(`Spotify Web API returned ${status}: ${responseBody}`);
     this.status = status;
     this.responseBody = responseBody;
+    this.retryAfterSec = retryAfterSec;
   }
 }

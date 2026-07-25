@@ -98,6 +98,16 @@ describe('SessionsApi', () => {
     expect(captures[0]?.url).toBe('https://api.test/api/v1/sessions/sess-3');
     expect(captures[0]?.init?.method).toBe('DELETE');
   });
+
+  it('reopen POSTs /api/v1/sessions/:id/reopen and unwraps the response', async () => {
+    const { client, captures } = makeClient({
+      body: { session: { id: 'sess-4', endedAt: null } },
+    });
+    const session = await client.sessions.reopen('sess-4');
+    expect(captures[0]?.url).toBe('https://api.test/api/v1/sessions/sess-4/reopen');
+    expect(captures[0]?.init?.method).toBe('POST');
+    expect(session.endedAt).toBeNull();
+  });
 });
 
 describe('QueueApi', () => {
