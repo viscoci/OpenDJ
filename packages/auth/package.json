@@ -1,6 +1,6 @@
 {
   "name": "@opendj/auth",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "OAuth/OIDC login providers, email/password fallback, sessions, and claims for OpenDJ.",
   "license": "MIT",
   "type": "module",

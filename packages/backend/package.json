@@ -1,6 +1,6 @@
 {
   "name": "@opendj/backend",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Hono routes and services for OpenDJ, runnable from Node and Cloudflare Workers.",
   "license": "MIT",
   "type": "module",
