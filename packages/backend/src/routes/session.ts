@@ -259,6 +259,28 @@ export function sessionRoutes(deps: SessionRouteDeps): Hono<{ Variables: AuthVar
         action: 'session.settings_updated',
         details: { changes: parsed.output },
       });
+      // Push the new settings to connected guest/TV/host clients so they
+      // don't need a reload to see karaoke mode, caps, etc. change.
+      const room = deps.rooms?.forSession(id);
+      if (room) {
+        await room.publish({
+          type: 'session.settings_updated',
+          settings: {
+            name: session.name,
+            guestCapOverride: session.guestCapOverride,
+            songsPerGuestCap: session.songsPerGuestCap,
+            maxConsecutivePerGuest: session.maxConsecutivePerGuest,
+            allowDuplicates: session.allowDuplicates,
+            moderationEnabled: session.moderationEnabled,
+            voteSkipMode: session.voteSkipMode,
+            voteSkipThreshold: session.voteSkipThreshold,
+            karaokeMode: session.karaokeMode,
+            karaokeMicCount: session.karaokeMicCount,
+            karaokePauseMode: session.karaokePauseMode,
+            karaokePauseTimeoutSec: session.karaokePauseTimeoutSec,
+          },
+        });
+      }
       return c.json({ session });
     } catch (err) {
       if (err instanceof SessionServiceError) {

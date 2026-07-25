@@ -31,6 +31,24 @@ const queueEvents: SessionEvent[] = [
   { type: 'skip_vote.updated', itemId: 'i', votes: 1, threshold: 5 },
 ];
 
+const settingsEvent: SessionEvent = {
+  type: 'session.settings_updated',
+  settings: {
+    name: 'Party',
+    guestCapOverride: null,
+    songsPerGuestCap: 3,
+    maxConsecutivePerGuest: null,
+    allowDuplicates: false,
+    moderationEnabled: false,
+    voteSkipMode: 'fixed',
+    voteSkipThreshold: 5,
+    karaokeMode: 'optional',
+    karaokeMicCount: 2,
+    karaokePauseMode: 'manual',
+    karaokePauseTimeoutSec: 30,
+  },
+};
+
 const playbackEvents: SessionEvent[] = [
   { type: 'now_playing.updated', track: null },
   {
@@ -75,6 +93,7 @@ const otherEvents: SessionEvent[] = [
     claim: { guestId: 'g', displayName: 'Ana' },
   },
   { type: 'karaoke.claim_removed', itemId: 'i', guestId: 'g' },
+  settingsEvent,
 ];
 
 describe('isEventOfType — discriminated narrowing', () => {
