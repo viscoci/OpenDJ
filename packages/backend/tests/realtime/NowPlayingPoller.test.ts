@@ -43,13 +43,21 @@ interface StubControl {
   setNowPlaying(t: NowPlayingTrack | null): void;
   setError(err: Error | null): void;
   callCount(): number;
+  /** While set, getNowPlaying blocks on this promise — lets tests hold a tick in flight. */
+  setGate(gate: Promise<void> | null): void;
+  skipCount(): number;
 }
 
 function makeStubProvider(): { provider: IStreamingProvider; control: StubControl } {
   let current: NowPlayingTrack | null = null;
   let error: Error | null = null;
   let calls = 0;
-  const provider: IStreamingProvider & { getNowPlaying: () => Promise<NowPlayingTrack | null> } = {
+  let skips = 0;
+  let gate: Promise<void> | null = null;
+  const provider: IStreamingProvider & {
+    getNowPlaying: () => Promise<NowPlayingTrack | null>;
+    skipTrack: () => Promise<void>;
+  } = {
     providerId: 'spotify',
     displayName: 'Spotify',
     async connect() {},
@@ -68,12 +76,22 @@ function makeStubProvider(): { provider: IStreamingProvider; control: StubContro
           access: 'host',
           reliability: 'native',
         },
+        [PROVIDER_FEATURES.SkipTrack]: {
+          id: PROVIDER_FEATURES.SkipTrack,
+          supported: true,
+          access: 'host',
+          reliability: 'native',
+        },
       });
     },
     async getNowPlaying() {
       calls += 1;
+      if (gate) await gate;
       if (error) throw error;
       return current;
+    },
+    async skipTrack() {
+      skips += 1;
     },
   };
   return {
@@ -86,12 +104,26 @@ function makeStubProvider(): { provider: IStreamingProvider; control: StubContro
         error = err;
       },
       callCount: () => calls,
+      setGate: (g) => {
+        gate = g;
+      },
+      skipCount: () => skips,
     },
   };
 }
 
 async function setup(
-  opts: { intervalMs?: number; idleGraceMs?: number; driftThresholdMs?: number } = {},
+  opts: {
+    intervalMs?: number;
+    idleGraceMs?: number;
+    driftThresholdMs?: number;
+    /**
+     * When set, wires a providerQueueRejections stub whose registry always
+     * reports these URIs as rejected (consume is a no-op) — the poller's
+     * settle guard is what must prevent repeat skips.
+     */
+    rejectedUris?: ReadonlySet<string>;
+  } = {},
 ) {
   const sessions = new InMemorySessionRepository();
   const providerConnections = new InMemoryProviderConnectionRepository({
@@ -141,6 +173,14 @@ async function setup(
       providerConnections,
       streamingRouter,
       roomManager,
+      ...(opts.rejectedUris
+        ? {
+            providerQueueRejections: {
+              getRejectedProviderUris: () => opts.rejectedUris!,
+              consumeProviderRejection: () => true,
+            },
+          }
+        : {}),
     },
     {
       intervalMs: opts.intervalMs ?? 5000,
@@ -344,6 +384,61 @@ describe('NowPlayingPoller — lifecycle', () => {
     control.setNowPlaying(track('b'));
     await vi.advanceTimersByTimeAsync(60_000);
     expect(poller.size()).toBe(1);
+  });
+
+  it('start() during an in-flight tick does not fork a second tick chain', async () => {
+    const { poller, sessionId, control } = await setup({ intervalMs: 5000 });
+    control.setNowPlaying(track('a'));
+    let release!: () => void;
+    control.setGate(
+      new Promise<void>((r) => {
+        release = r;
+      }),
+    );
+    poller.start(sessionId);
+    await vi.advanceTimersByTimeAsync(0); // tick starts, parks on the gate
+    expect(control.callCount()).toBe(1);
+
+    // Guest reload → WS resubscribe spams start() while the tick is in
+    // flight. Without the ticking flag these forked extra tick chains.
+    poller.start(sessionId);
+    poller.start(sessionId);
+    poller.start(sessionId);
+
+    release();
+    control.setGate(null);
+    await vi.advanceTimersByTimeAsync(0); // tick completes, reschedules once
+    expect(control.callCount()).toBe(1);
+
+    // One interval later: exactly one more poll — not four.
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(control.callCount()).toBe(2);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(control.callCount()).toBe(3);
+  });
+
+  it('suppresses repeat auto-skips inside the skip-settle window', async () => {
+    const { poller, sessionId, control } = await setup({
+      intervalMs: 5000,
+      rejectedUris: new Set(['spotify:track:rejected']),
+    });
+    // The rejected track is "playing" and (stub registry) never consumed —
+    // mimics Spotify still reporting the just-skipped track while the skip
+    // settles.
+    control.setNowPlaying(track('spotify:track:rejected'));
+    poller.start(sessionId);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(control.skipCount()).toBe(1);
+
+    // Fast follow-up tick lands 750ms after a dispatched skip — inside the
+    // settle window. Must NOT skip again (this ate innocent songs live).
+    await vi.advanceTimersByTimeAsync(750);
+    expect(control.skipCount()).toBe(1);
+
+    // Past the settle window the track is STILL reported playing + still
+    // rejected — a genuine re-skip is allowed again.
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(control.skipCount()).toBe(2);
   });
 
   it('honors Retry-After on 429 when longer than the exponential backoff', async () => {
