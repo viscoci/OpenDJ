@@ -18,10 +18,11 @@
  */
 
 import { Hono } from 'hono';
-import { toQueueItemSummary, type SessionEvent } from '@opendj/realtime';
+import { toQueueItemSummary, type KaraokeClaimSummary, type SessionEvent } from '@opendj/realtime';
+import { groupClaimSummaries } from '../karaoke/claimSummaries.js';
 import type { NowPlayingPoller } from '../realtime/NowPlayingPoller.js';
 import type { RealtimeRoomManager } from '../realtime/RoomRegistryImpl.js';
-import type { QueueItemRepository } from '../repositories/types.js';
+import type { KaraokeClaimRepository, QueueItemRepository } from '../repositories/types.js';
 
 export interface RealtimeRouteDeps {
   rooms: RealtimeRoomManager;
@@ -39,6 +40,11 @@ export interface RealtimeRouteDeps {
    * though they're still in the DB.
    */
   queueItems?: QueueItemRepository;
+  /**
+   * Optional. When supplied alongside `queueItems`, hydrated items carry
+   * their karaoke mic claims instead of the empty default.
+   */
+  karaokeClaims?: KaraokeClaimRepository;
 }
 
 /**
@@ -109,6 +115,9 @@ export function realtimeRoutes(deps: RealtimeRouteDeps, upgradeWebSocket: Upgrad
           if (!hydratedSessions.has(sessionId) && deps.queueItems) {
             try {
               const items = await deps.queueItems.findAllForSession(sessionId);
+              const claimsByItem = deps.karaokeClaims
+                ? groupClaimSummaries(await deps.karaokeClaims.findAllForSession(sessionId))
+                : new Map<string, KaraokeClaimSummary[]>();
               const current = await room.getSnapshot();
               const pending = [...current.pending];
               const queue = [...current.queue];
@@ -118,20 +127,23 @@ export function realtimeRoutes(deps: RealtimeRouteDeps, upgradeWebSocket: Upgrad
               ]);
               for (const item of items) {
                 if (seenIds.has(item.id)) continue;
-                const summary = toQueueItemSummary({
-                  id: item.id,
-                  sessionId: item.sessionId,
-                  guestId: item.guestId,
-                  trackUri: item.trackUri,
-                  trackName: item.trackName,
-                  artistName: item.artistName,
-                  albumArtUrl: item.albumArtUrl,
-                  durationMs: item.durationMs,
-                  status: item.status,
-                  skipVotes: item.skipVotes,
-                  createdAt: item.createdAt,
-                  decidedAt: item.decidedAt,
-                });
+                const summary = toQueueItemSummary(
+                  {
+                    id: item.id,
+                    sessionId: item.sessionId,
+                    guestId: item.guestId,
+                    trackUri: item.trackUri,
+                    trackName: item.trackName,
+                    artistName: item.artistName,
+                    albumArtUrl: item.albumArtUrl,
+                    durationMs: item.durationMs,
+                    status: item.status,
+                    skipVotes: item.skipVotes,
+                    createdAt: item.createdAt,
+                    decidedAt: item.decidedAt,
+                  },
+                  claimsByItem.get(item.id) ?? [],
+                );
                 if (item.status === 'pending') pending.push(summary);
                 else if (
                   item.status === 'approved' ||

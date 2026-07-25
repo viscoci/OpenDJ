@@ -88,6 +88,10 @@ export interface SessionRecord {
   moderationEnabled: boolean;
   voteSkipMode: 'fixed' | 'percentage' | 'host_approval';
   voteSkipThreshold: number;
+  karaokeMode: 'off' | 'optional' | 'required';
+  karaokeMicCount: number;
+  karaokePauseMode: 'off' | 'manual' | 'auto';
+  karaokePauseTimeoutSec: number;
   startedAt: Date;
   endedAt: Date | null;
 }
@@ -107,6 +111,10 @@ export interface SessionRepository {
     moderationEnabled?: boolean;
     voteSkipMode?: 'fixed' | 'percentage' | 'host_approval';
     voteSkipThreshold?: number;
+    karaokeMode?: 'off' | 'optional' | 'required';
+    karaokeMicCount?: number;
+    karaokePauseMode?: 'off' | 'manual' | 'auto';
+    karaokePauseTimeoutSec?: number;
   }): Promise<SessionRecord>;
   update(input: {
     id: string;
@@ -117,6 +125,10 @@ export interface SessionRepository {
     moderationEnabled?: boolean;
     voteSkipMode?: 'fixed' | 'percentage' | 'host_approval';
     voteSkipThreshold?: number;
+    karaokeMode?: 'off' | 'optional' | 'required';
+    karaokeMicCount?: number;
+    karaokePauseMode?: 'off' | 'manual' | 'auto';
+    karaokePauseTimeoutSec?: number;
     name?: string;
   }): Promise<SessionRecord | null>;
   /** Mark a session as ended. Idempotent — if already ended, returns the existing row. */
@@ -226,6 +238,36 @@ export interface QueueItemRepository {
   delete(id: string): Promise<void>;
   /** Atomically increment skip-vote count and return the new value. */
   incrementSkipVotes(id: string): Promise<number>;
+}
+
+export interface KaraokeClaimRecord {
+  id: string;
+  sessionId: string;
+  queueItemId: string;
+  guestId: string;
+  /** Sanitized singer name (trimmed, control chars stripped, 1–40 chars). */
+  displayName: string;
+  createdAt: Date;
+}
+
+export interface KaraokeClaimRepository {
+  /** Claims on one item, oldest first (claim order = singer order). */
+  findAllForItem(queueItemId: string): Promise<KaraokeClaimRecord[]>;
+  /** Every claim in the session, oldest first. Used to decorate queue summaries. */
+  findAllForSession(sessionId: string): Promise<KaraokeClaimRecord[]>;
+  findByItemAndGuest(queueItemId: string, guestId: string): Promise<KaraokeClaimRecord | null>;
+  /**
+   * Insert a claim. The `(queueItemId, guestId)` pair is unique — callers
+   * run `canClaimMic` first, so a conflict here is a lost race; repositories
+   * may surface it as a thrown error.
+   */
+  create(input: {
+    sessionId: string;
+    queueItemId: string;
+    guestId: string;
+    displayName: string;
+  }): Promise<KaraokeClaimRecord>;
+  delete(id: string): Promise<void>;
 }
 
 export interface QueueSkipVoteRepository {
@@ -671,6 +713,7 @@ export interface Repositories {
   fingerprintPriority: FingerprintPriorityRepository;
   queueItems: QueueItemRepository;
   queueSkipVotes: QueueSkipVoteRepository;
+  karaokeClaims: KaraokeClaimRepository;
   sessionAuditEvents: SessionAuditEventRepository;
   lyricsCache: LyricsCacheRepository;
   lyricsFeedback: LyricsFeedbackRepository;

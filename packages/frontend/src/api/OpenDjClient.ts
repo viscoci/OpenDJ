@@ -17,6 +17,7 @@ import { AuthApi } from './auth.js';
 import { DevicesApi } from './devices.js';
 import { GuestApi } from './guest.js';
 import { HttpClient, type HttpClientOptions } from './http.js';
+import { KaraokeApi } from './karaoke.js';
 import { LyricsApi } from './lyrics.js';
 import { PlaybackApi } from './playback.js';
 import { ProviderConnectionsApi } from './providerConnections.js';
@@ -30,6 +31,7 @@ export class OpenDjClient {
   readonly sessions: SessionsApi;
   readonly queue: QueueApi;
   readonly guest: GuestApi;
+  readonly karaoke: KaraokeApi;
   readonly lyrics: LyricsApi;
   readonly providerConnections: ProviderConnectionsApi;
   readonly publicConfig: PublicConfigApi;
@@ -42,6 +44,7 @@ export class OpenDjClient {
     this.sessions = new SessionsApi(this.http);
     this.queue = new QueueApi(this.http);
     this.guest = new GuestApi(this.http);
+    this.karaoke = new KaraokeApi(this.http);
     this.lyrics = new LyricsApi(this.http);
     this.providerConnections = new ProviderConnectionsApi(this.http);
     this.publicConfig = new PublicConfigApi(this.http);

@@ -14,6 +14,8 @@ import type {
   GuestRow,
   GuestSlotInsert,
   GuestSlotRow,
+  KaraokeClaimInsert,
+  KaraokeClaimRow,
   LyricsCacheInsert,
   LyricsCacheRow,
   LyricsFeedbackInsert,
@@ -108,6 +110,18 @@ describe('sessions, guests, queue_items, session_events, outbox_events, guest_sl
     expectTypeOf<SessionEventInsert>().toHaveProperty('payload');
     expectTypeOf<OutboxEventInsert>().toHaveProperty('kind');
     expectTypeOf<GuestSlotInsert>().toHaveProperty('fingerprintHash');
+  });
+});
+
+describe('karaoke_claims', () => {
+  it('row + insert types include the claim identity fields', () => {
+    expectTypeOf<KaraokeClaimRow>().toHaveProperty('id').toEqualTypeOf<string>();
+    expectTypeOf<KaraokeClaimRow>().toHaveProperty('sessionId').toEqualTypeOf<string>();
+    expectTypeOf<KaraokeClaimRow>().toHaveProperty('queueItemId').toEqualTypeOf<string>();
+    expectTypeOf<KaraokeClaimRow>().toHaveProperty('guestId').toEqualTypeOf<string>();
+    expectTypeOf<KaraokeClaimRow>().toHaveProperty('displayName').toEqualTypeOf<string>();
+    expectTypeOf<KaraokeClaimInsert>().toHaveProperty('queueItemId');
+    expectTypeOf<KaraokeClaimInsert>().toHaveProperty('displayName');
   });
 });
 

@@ -15,11 +15,18 @@ import type { AuthContext } from '@opendj/auth';
 import type { AuthService } from '../auth/AuthService.js';
 import { requireClaim, type AuthVariables } from '../auth/middleware.js';
 import { QueueService, QueueServiceError } from '../queue/QueueService.js';
-import { toQueueItemSummary } from '@opendj/realtime';
+import { toQueueItemSummary, type KaraokeClaimSummary } from '@opendj/realtime';
+import { groupClaimSummaries, toKaraokeClaimSummary } from '../karaoke/claimSummaries.js';
+import type { KaraokeClaimRepository } from '../repositories/types.js';
 
 export interface QueueRouteDeps {
   authService: AuthService;
   queueService: QueueService;
+  /**
+   * Optional — when supplied, queue responses decorate each item with its
+   * karaoke mic claims (`karaokeClaims`, empty array otherwise).
+   */
+  karaokeClaims?: KaraokeClaimRepository;
 }
 
 const TrackBody = v.object({
@@ -28,6 +35,8 @@ const TrackBody = v.object({
   artist: v.pipe(v.string(), v.nonEmpty()),
   albumArt: v.union([v.pipe(v.string(), v.url()), v.null()]),
   durationMs: v.pipe(v.number(), v.integer(), v.minValue(0)),
+  /** Optional mic claim bundled with the request (karaoke sessions). */
+  karaoke: v.optional(v.object({ displayName: v.string() })),
 });
 
 function bearerFromAuthHeader(header: string | undefined): string | null {
@@ -57,6 +66,9 @@ function mapErrorToStatus(code: string): { status: number; payload: { error: str
     case 'no_room':
     case 'no_track_playing':
     case 'track_not_in_queue':
+    case 'karaoke_claim_required':
+    case 'karaoke_off':
+    case 'invalid_display_name':
       return { status: 400, payload: { error: code } };
     case 'not_owner':
       return { status: 403, payload: { error: code } };
@@ -68,11 +80,23 @@ function mapErrorToStatus(code: string): { status: number; payload: { error: str
 export function queueRoutes(deps: QueueRouteDeps): Hono<{ Variables: AuthVariables }> {
   const app = new Hono<{ Variables: AuthVariables }>();
 
+  /** Mic claims for a single item — empty when the repo isn't wired. */
+  async function claimsForItem(queueItemId: string): Promise<KaraokeClaimSummary[]> {
+    if (!deps.karaokeClaims) return [];
+    const claims = await deps.karaokeClaims.findAllForItem(queueItemId);
+    return claims.map(toKaraokeClaimSummary);
+  }
+
   /** GET /api/v1/sessions/:id/queue — full queue (guest + host visible). */
   app.get('/', async (c) => {
     const sessionId = c.req.param('id') ?? '';
     const items = await deps.queueService.listForSession(sessionId);
-    return c.json({ items: items.map((i) => toQueueItemSummary(i)) });
+    const claimsByItem = deps.karaokeClaims
+      ? groupClaimSummaries(await deps.karaokeClaims.findAllForSession(sessionId))
+      : new Map<string, KaraokeClaimSummary[]>();
+    return c.json({
+      items: items.map((i) => toQueueItemSummary(i, claimsByItem.get(i.id) ?? [])),
+    });
   });
 
   /** POST /queue — guest requests a track via slot token. */
@@ -92,12 +116,14 @@ export function queueRoutes(deps: QueueRouteDeps): Hono<{ Variables: AuthVariabl
       return c.json({ error: 'invalid_body', issues: parsed.issues.map((i) => i.message) }, 400);
     }
     try {
+      const { karaoke, ...track } = parsed.output;
       const created = await deps.queueService.requestTrack({
         sessionId,
         slotToken,
-        track: parsed.output,
+        track,
+        ...(karaoke !== undefined && { karaoke }),
       });
-      return c.json({ item: toQueueItemSummary(created) }, 201);
+      return c.json({ item: toQueueItemSummary(created, await claimsForItem(created.id)) }, 201);
     } catch (err) {
       if (err instanceof QueueServiceError) {
         const { status, payload } = mapErrorToStatus(err.code);
@@ -132,7 +158,7 @@ export function queueRoutes(deps: QueueRouteDeps): Hono<{ Variables: AuthVariabl
         decision: parsed.output.decision,
         ...(auth.userId && { actor: { userId: auth.userId } }),
       });
-      return c.json({ item: toQueueItemSummary(updated) });
+      return c.json({ item: toQueueItemSummary(updated, await claimsForItem(updated.id)) });
     } catch (err) {
       if (err instanceof QueueServiceError) {
         const { status, payload } = mapErrorToStatus(err.code);

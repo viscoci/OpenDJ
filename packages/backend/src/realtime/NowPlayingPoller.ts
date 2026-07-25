@@ -95,6 +95,25 @@ export interface NowPlayingPollerDeps {
       providerTrackUri?: string;
     }): Promise<LyricsDocument | null>;
   };
+  /**
+   * Karaoke spotlight + pause integration (KaraokeService). When supplied,
+   * the poller reconciles pause state every tick (host-resume detection +
+   * the auto-resume deadline) and re-derives the spotlight on track change
+   * — same per-session bookkeeping shape as the lyrics lookup above.
+   * Failures are logged and never affect playback polling.
+   */
+  karaoke?: {
+    handleTrackChange(input: {
+      sessionId: string;
+      trackUri: string | null;
+      nowEpochMs?: number;
+    }): Promise<void>;
+    reconcilePlayback(input: {
+      sessionId: string;
+      isPlaying: boolean;
+      nowEpochMs?: number;
+    }): Promise<void>;
+  };
 }
 
 export interface NowPlayingPollerOptions {
@@ -140,6 +159,12 @@ interface PerSession {
    * every tick while it's still playing.
    */
   lastLyricsUri: string | null;
+  /**
+   * Provider URI last handed to the karaoke spotlight detector (`null`
+   * when playback was stopped). Spotlight re-derivation only runs when
+   * this changes — the same track playing on doesn't re-query claims.
+   */
+  lastKaraokeUri: string | null;
 }
 
 const SPOTIFY_PROVIDER_ID = 'spotify';
@@ -181,6 +206,7 @@ export class NowPlayingPoller {
         backoffMs: null,
         lastPushedAt: new Map(),
         lastLyricsUri: null,
+        lastKaraokeUri: null,
       };
       this.state.set(sessionId, entry);
     }
@@ -350,6 +376,35 @@ export class NowPlayingPoller {
           .catch(() => {
             /* publish failed (room torn down) — lyrics never block playback */
           });
+      }
+
+      // Karaoke: reconcile pause state every tick (host-resume detection +
+      // auto-resume deadline), then re-derive the spotlight on track change
+      // (same per-session bookkeeping shape as the lyrics lookup above).
+      // Reconcile runs FIRST so this tick's pre-pause isPlaying sample can
+      // never clear a pause the track-change handler is about to set.
+      if (this.deps.karaoke) {
+        try {
+          await this.deps.karaoke.reconcilePlayback({
+            sessionId,
+            isPlaying: next?.isPlaying ?? false,
+            nowEpochMs: this.nowEpochMs(),
+          });
+          const karaokeUri = next?.uri ?? null;
+          if (karaokeUri !== entry.lastKaraokeUri) {
+            entry.lastKaraokeUri = karaokeUri;
+            await this.deps.karaoke.handleTrackChange({
+              sessionId,
+              trackUri: karaokeUri,
+              nowEpochMs: this.nowEpochMs(),
+            });
+          }
+        } catch (err) {
+          this.logger.warn('[NowPlayingPoller] karaoke sync failed, continuing', {
+            sessionId,
+            error: (err as Error).message,
+          });
+        }
       }
 
       // Auto-skip rejected provider-queue URIs the moment they reach the

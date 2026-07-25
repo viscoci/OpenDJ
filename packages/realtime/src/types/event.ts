@@ -1,7 +1,7 @@
 import type { NowPlayingTrack, Track } from '@opendj/core';
 import type { LyricsDocument, LyricsFeedbackKind } from '@opendj/lyrics';
 import type { PlaybackClockSample, PredictedPlaybackPosition, SyncCue } from '@opendj/sync';
-import type { QueueItemSummary } from './queue-summary.js';
+import type { KaraokeClaimSummary, QueueItemSummary } from './queue-summary.js';
 
 /**
  * Discriminated union of every realtime event broadcast by a SessionRoom /
@@ -45,6 +45,19 @@ export type SessionEvent =
       count: number;
       threshold: number;
     }
+  // Karaoke mic claims — folded into the matching queue/pending item's
+  // `karaokeClaims` array by the reducer.
+  | { type: 'karaoke.claim_added'; itemId: string; claim: KaraokeClaimSummary }
+  | { type: 'karaoke.claim_removed'; itemId: string; guestId: string }
+  // Karaoke spotlight + pause lifecycle (snapshot.karaoke slice).
+  // `spotlight` fires when the playing track lands on (or leaves) a claimed
+  // queue item — `itemId: null` clears it; `claims` snapshots the singers so
+  // late joiners render names without replaying claim deltas. `paused` /
+  // `resumed` bracket a karaoke playback hold; `untilEpochMs` is the
+  // wall-clock auto-resume deadline.
+  | { type: 'karaoke.spotlight'; itemId: string | null; claims: KaraokeClaimSummary[] }
+  | { type: 'karaoke.paused'; itemId: string; untilEpochMs: number }
+  | { type: 'karaoke.resumed'; itemId: string }
   // Guest slots
   | { type: 'guest_slots.updated'; activeCount: number; queuedCount: number }
   // Playback clock + correction (sync layer)

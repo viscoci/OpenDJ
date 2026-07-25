@@ -9,6 +9,7 @@ export * from './account.js';
 export * from './session.js';
 export * from './guest.js';
 export * from './queue.js';
+export * from './karaoke.js';
 
 /**
  * A track from any streaming provider, identified by its provider-native URI.

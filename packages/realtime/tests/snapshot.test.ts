@@ -18,6 +18,7 @@ describe('createEmptySnapshot', () => {
       providerQueueSkipVotes: {},
       activeGuestCount: 0,
       queuedGuestCount: 0,
+      karaoke: { spotlightItemId: null, paused: false, pausedUntilEpochMs: null },
       snapshotAtEpochMs: 1_700_000_000_000,
     });
   });
@@ -29,5 +30,6 @@ describe('createEmptySnapshot', () => {
     expect(a.pending).not.toBe(b.pending);
     expect(a.activeLyricsWindow).not.toBe(b.activeLyricsWindow);
     expect(a.recentlyPlayed).not.toBe(b.recentlyPlayed);
+    expect(a.karaoke).not.toBe(b.karaoke);
   });
 });

@@ -5,3 +5,5 @@ export * from './dedupeQueue.js';
 export * from './applyModerationDecision.js';
 export * from './canSkip.js';
 export * from './canEnqueue.js';
+export * from './canClaimMic.js';
+export * from './canRemoveClaim.js';

@@ -31,6 +31,8 @@ import type {
   GuestSlotRecord,
   GuestSlotRepository,
   GuestSlotStatus,
+  KaraokeClaimRecord,
+  KaraokeClaimRepository,
   LyricsCacheRecord,
   LyricsCacheRepository,
   LyricsFeedbackRecord,
@@ -623,6 +625,10 @@ export class InMemorySessionRepository implements SessionRepository {
     moderationEnabled?: boolean;
     voteSkipMode?: 'fixed' | 'percentage' | 'host_approval';
     voteSkipThreshold?: number;
+    karaokeMode?: 'off' | 'optional' | 'required';
+    karaokeMicCount?: number;
+    karaokePauseMode?: 'off' | 'manual' | 'auto';
+    karaokePauseTimeoutSec?: number;
   }): Promise<SessionRecord> {
     const id = crypto.randomUUID();
     const row: SessionRecord = {
@@ -637,6 +643,10 @@ export class InMemorySessionRepository implements SessionRepository {
       moderationEnabled: input.moderationEnabled ?? false,
       voteSkipMode: input.voteSkipMode ?? 'fixed',
       voteSkipThreshold: input.voteSkipThreshold ?? 5,
+      karaokeMode: input.karaokeMode ?? 'off',
+      karaokeMicCount: input.karaokeMicCount ?? 1,
+      karaokePauseMode: input.karaokePauseMode ?? 'manual',
+      karaokePauseTimeoutSec: input.karaokePauseTimeoutSec ?? 30,
       startedAt: this.clock.now(),
       endedAt: null,
     };
@@ -653,6 +663,10 @@ export class InMemorySessionRepository implements SessionRepository {
     moderationEnabled?: boolean;
     voteSkipMode?: 'fixed' | 'percentage' | 'host_approval';
     voteSkipThreshold?: number;
+    karaokeMode?: 'off' | 'optional' | 'required';
+    karaokeMicCount?: number;
+    karaokePauseMode?: 'off' | 'manual' | 'auto';
+    karaokePauseTimeoutSec?: number;
     name?: string;
   }): Promise<SessionRecord | null> {
     const row = this.rows.get(input.id);
@@ -665,6 +679,11 @@ export class InMemorySessionRepository implements SessionRepository {
     if (input.moderationEnabled !== undefined) row.moderationEnabled = input.moderationEnabled;
     if (input.voteSkipMode !== undefined) row.voteSkipMode = input.voteSkipMode;
     if (input.voteSkipThreshold !== undefined) row.voteSkipThreshold = input.voteSkipThreshold;
+    if (input.karaokeMode !== undefined) row.karaokeMode = input.karaokeMode;
+    if (input.karaokeMicCount !== undefined) row.karaokeMicCount = input.karaokeMicCount;
+    if (input.karaokePauseMode !== undefined) row.karaokePauseMode = input.karaokePauseMode;
+    if (input.karaokePauseTimeoutSec !== undefined)
+      row.karaokePauseTimeoutSec = input.karaokePauseTimeoutSec;
     if (input.name !== undefined) row.name = input.name;
     return row;
   }
@@ -946,6 +965,68 @@ export class InMemoryQueueSkipVoteRepository implements QueueSkipVoteRepository 
 
   async hasVoted(input: { queueItemId: string; guestId: string }): Promise<boolean> {
     return this.rows.has(`${input.queueItemId}:${input.guestId}`);
+  }
+}
+
+export class InMemoryKaraokeClaimRepository implements KaraokeClaimRepository {
+  readonly rows = new Map<string, KaraokeClaimRecord>();
+  constructor(private readonly clock: InMemoryClock = systemClock) {}
+
+  private sortByCreation(records: KaraokeClaimRecord[]): KaraokeClaimRecord[] {
+    return records.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+  }
+
+  async findAllForItem(queueItemId: string): Promise<KaraokeClaimRecord[]> {
+    const out: KaraokeClaimRecord[] = [];
+    for (const row of this.rows.values()) {
+      if (row.queueItemId === queueItemId) out.push(row);
+    }
+    return this.sortByCreation(out);
+  }
+
+  async findAllForSession(sessionId: string): Promise<KaraokeClaimRecord[]> {
+    const out: KaraokeClaimRecord[] = [];
+    for (const row of this.rows.values()) {
+      if (row.sessionId === sessionId) out.push(row);
+    }
+    return this.sortByCreation(out);
+  }
+
+  async findByItemAndGuest(
+    queueItemId: string,
+    guestId: string,
+  ): Promise<KaraokeClaimRecord | null> {
+    for (const row of this.rows.values()) {
+      if (row.queueItemId === queueItemId && row.guestId === guestId) return row;
+    }
+    return null;
+  }
+
+  async create(input: {
+    sessionId: string;
+    queueItemId: string;
+    guestId: string;
+    displayName: string;
+  }): Promise<KaraokeClaimRecord> {
+    if (await this.findByItemAndGuest(input.queueItemId, input.guestId)) {
+      // Mirrors the unique (queue_item_id, guest_id) constraint.
+      throw new Error('karaoke claim already exists for this (item, guest)');
+    }
+    const id = crypto.randomUUID();
+    const row: KaraokeClaimRecord = {
+      id,
+      sessionId: input.sessionId,
+      queueItemId: input.queueItemId,
+      guestId: input.guestId,
+      displayName: input.displayName,
+      createdAt: this.clock.now(),
+    };
+    this.rows.set(id, row);
+    return row;
+  }
+
+  async delete(id: string): Promise<void> {
+    this.rows.delete(id);
   }
 }
 
@@ -1238,6 +1319,7 @@ export function createInMemoryRepositories(clock: InMemoryClock = systemClock): 
     fingerprintPriority: new InMemoryFingerprintPriorityRepository(clock),
     queueItems,
     queueSkipVotes: new InMemoryQueueSkipVoteRepository(queueItems, clock),
+    karaokeClaims: new InMemoryKaraokeClaimRepository(clock),
     sessionAuditEvents: new InMemorySessionAuditEventRepository(clock),
     lyricsCache: new InMemoryLyricsCacheRepository(clock),
     lyricsFeedback: new InMemoryLyricsFeedbackRepository(clock),

@@ -27,11 +27,13 @@ import type {
   ProviderConnectionRepository,
   GuestRepository,
   GuestSlotRepository,
+  KaraokeClaimRepository,
   QueueItemRecord,
   QueueItemRepository,
   QueueSkipVoteRepository,
   SessionRepository,
 } from '../repositories/types.js';
+import { sanitizeKaraokeDisplayName } from '../karaoke/displayName.js';
 import type { StreamingRouter } from '../providers/streaming/StreamingRouter.js';
 import {
   guestLabelFromFingerprint,
@@ -54,6 +56,12 @@ export interface QueueServiceDeps {
   queueItems: QueueItemRepository;
   /** Persistent (cross-instance) skip-vote dedupe + counter. */
   queueSkipVotes: QueueSkipVoteRepository;
+  /**
+   * Karaoke mic claims. `requestTrack` writes here when the guest bundles a
+   * `karaoke: { displayName }` claim with the request (spec §3 —
+   * request+claim atomically).
+   */
+  karaokeClaims: KaraokeClaimRepository;
   /** Optional room — when provided, mutations broadcast events. */
   rooms?: RealtimeRoomRegistry;
   /**
@@ -82,6 +90,14 @@ export interface RequestTrackInput {
   /** Slot token from the guest's session — looked up to find the guest row. */
   slotToken: string;
   track: Track;
+  /**
+   * Optional mic claim bundled with the request. When the session's
+   * `karaokeMode` is `required`, its absence rejects the WHOLE request with
+   * `karaoke_claim_required` before any insert. When present, the claim is
+   * created right after the item insert and broadcast as
+   * `karaoke.claim_added`.
+   */
+  karaoke?: { displayName: string };
 }
 
 function recordToDomain(record: QueueItemRecord): QueueItem {
@@ -145,6 +161,28 @@ export class QueueService {
       throw new QueueServiceError(decision.reason, `canEnqueue rejected: ${decision.reason}`);
     }
 
+    // Karaoke gate — ALL checks run BEFORE the item insert so a rejected
+    // claim never strands a claimless item in `required` mode.
+    let karaokeDisplayName: string | null = null;
+    if (session.karaokeMode === 'required' && !input.karaoke) {
+      throw new QueueServiceError(
+        'karaoke_claim_required',
+        'This session requires a mic claim with every request.',
+      );
+    }
+    if (input.karaoke) {
+      if (session.karaokeMode === 'off') {
+        throw new QueueServiceError('karaoke_off', 'Karaoke is disabled for this session.');
+      }
+      karaokeDisplayName = sanitizeKaraokeDisplayName(input.karaoke.displayName);
+      if (karaokeDisplayName === null) {
+        throw new QueueServiceError(
+          'invalid_display_name',
+          'Display name must be 1-40 characters after trimming.',
+        );
+      }
+    }
+
     const initialStatus = session.moderationEnabled ? 'pending' : 'approved';
     const created = await this.deps.queueItems.create({
       sessionId: input.sessionId,
@@ -157,10 +195,32 @@ export class QueueService {
       status: initialStatus,
     });
 
+    // Claim insert directly after the item insert (sequential is acceptable
+    // per spec §3). The item is the guest's own fresh row with zero claims,
+    // so canClaimMic cannot reject it — the pre-insert gate above already
+    // covered mode + name validity.
+    const karaokeClaims: Array<{ guestId: string; displayName: string }> = [];
+    if (karaokeDisplayName !== null) {
+      await this.deps.karaokeClaims.create({
+        sessionId: input.sessionId,
+        queueItemId: created.id,
+        guestId: guest.id,
+        displayName: karaokeDisplayName,
+      });
+      karaokeClaims.push({ guestId: guest.id, displayName: karaokeDisplayName });
+    }
+
     await this.publishToRoom(input.sessionId, {
       type: 'queue.item_requested',
-      item: toQueueItemSummary(recordToDomain(created)),
+      item: toQueueItemSummary(recordToDomain(created), karaokeClaims),
     });
+    if (karaokeClaims[0]) {
+      await this.publishToRoom(input.sessionId, {
+        type: 'karaoke.claim_added',
+        itemId: created.id,
+        claim: karaokeClaims[0],
+      });
+    }
     if (initialStatus === 'approved') {
       await this.publishToRoom(input.sessionId, {
         type: 'queue.item_approved',
@@ -181,6 +241,7 @@ export class QueueService {
         trackName: input.track.name,
         artistName: input.track.artist,
         moderation: session.moderationEnabled ? 'pending' : 'auto_approved',
+        ...(karaokeDisplayName !== null && { karaokeDisplayName }),
       },
     });
 
@@ -913,6 +974,10 @@ function sessionToDomain(record: {
   moderationEnabled: boolean;
   voteSkipMode: 'fixed' | 'percentage' | 'host_approval';
   voteSkipThreshold: number;
+  karaokeMode: 'off' | 'optional' | 'required';
+  karaokeMicCount: number;
+  karaokePauseMode: 'off' | 'manual' | 'auto';
+  karaokePauseTimeoutSec: number;
   startedAt: Date;
   endedAt: Date | null;
 }): Session {
@@ -928,6 +993,10 @@ function sessionToDomain(record: {
     moderationEnabled: record.moderationEnabled,
     voteSkipMode: record.voteSkipMode,
     voteSkipThreshold: record.voteSkipThreshold,
+    karaokeMode: record.karaokeMode,
+    karaokeMicCount: record.karaokeMicCount,
+    karaokePauseMode: record.karaokePauseMode,
+    karaokePauseTimeoutSec: record.karaokePauseTimeoutSec,
     startedAt: record.startedAt,
     endedAt: record.endedAt,
   };

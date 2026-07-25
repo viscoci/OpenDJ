@@ -42,6 +42,10 @@ function setup(opts: { plan?: 'free' | 'oss' | 'paid_monthly'; cap?: number | nu
     moderationEnabled: false,
     voteSkipMode: 'fixed',
     voteSkipThreshold: 5,
+    karaokeMode: 'off',
+    karaokeMicCount: 1,
+    karaokePauseMode: 'manual',
+    karaokePauseTimeoutSec: 30,
     startedAt: new Date(NOW),
     endedAt: null,
   });

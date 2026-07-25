@@ -8,7 +8,36 @@
  */
 
 import type { SessionEvent } from './types/event.js';
-import { RECENTLY_PLAYED_MAX, type SessionSnapshot } from './types/snapshot.js';
+import type { QueueItemSummary } from './types/queue-summary.js';
+import {
+  createEmptyKaraokeState,
+  RECENTLY_PLAYED_MAX,
+  type SessionSnapshot,
+} from './types/snapshot.js';
+
+/**
+ * Apply `update` to the item with `itemId` wherever it lives (pending or
+ * queue). Returns the input snapshot unchanged when the id is unknown.
+ */
+function updateItemById(
+  snapshot: SessionSnapshot,
+  itemId: string,
+  update: (item: QueueItemSummary) => QueueItemSummary,
+): SessionSnapshot {
+  const pendingIdx = snapshot.pending.findIndex((i) => i.id === itemId);
+  if (pendingIdx >= 0) {
+    const pending = [...snapshot.pending];
+    pending[pendingIdx] = update(pending[pendingIdx]!);
+    return { ...snapshot, pending };
+  }
+  const queueIdx = snapshot.queue.findIndex((i) => i.id === itemId);
+  if (queueIdx >= 0) {
+    const queue = [...snapshot.queue];
+    queue[queueIdx] = update(queue[queueIdx]!);
+    return { ...snapshot, queue };
+  }
+  return snapshot;
+}
 
 export function applyEvent(snapshot: SessionSnapshot, event: SessionEvent): SessionSnapshot {
   switch (event.type) {
@@ -124,6 +153,62 @@ export function applyEvent(snapshot: SessionSnapshot, event: SessionEvent): Sess
           [event.trackUri]: { count: event.count, threshold: event.threshold },
         },
       };
+
+    case 'karaoke.claim_added':
+      // Replace-then-append keeps the fold idempotent — re-delivery of the
+      // same claim (or a display-name change) never duplicates a singer.
+      return updateItemById(snapshot, event.itemId, (item) => ({
+        ...item,
+        karaokeClaims: [
+          ...item.karaokeClaims.filter((c) => c.guestId !== event.claim.guestId),
+          event.claim,
+        ],
+      }));
+
+    case 'karaoke.claim_removed':
+      return updateItemById(snapshot, event.itemId, (item) => ({
+        ...item,
+        karaokeClaims: item.karaokeClaims.filter((c) => c.guestId !== event.guestId),
+      }));
+
+    case 'karaoke.spotlight': {
+      // `?? createEmptyKaraokeState()` tolerates snapshots serialized by
+      // older servers that predate the karaoke slice.
+      const prev = snapshot.karaoke ?? createEmptyKaraokeState();
+      const changed = prev.spotlightItemId !== event.itemId;
+      const karaoke = {
+        spotlightItemId: event.itemId,
+        // A pause is bound to its spotlight item — a NEW (or cleared)
+        // spotlight drops any stale hold. Same-item re-broadcast keeps it.
+        paused: changed ? false : prev.paused,
+        pausedUntilEpochMs: changed ? null : prev.pausedUntilEpochMs,
+      };
+      // Refresh the spotlighted item's singer list from the event so a
+      // client that missed claim deltas still renders the right names.
+      const next =
+        event.itemId === null
+          ? snapshot
+          : updateItemById(snapshot, event.itemId, (item) => ({
+              ...item,
+              karaokeClaims: [...event.claims],
+            }));
+      return { ...next, karaoke };
+    }
+
+    case 'karaoke.paused':
+      return {
+        ...snapshot,
+        karaoke: {
+          spotlightItemId: event.itemId,
+          paused: true,
+          pausedUntilEpochMs: event.untilEpochMs,
+        },
+      };
+
+    case 'karaoke.resumed': {
+      const prev = snapshot.karaoke ?? createEmptyKaraokeState();
+      return { ...snapshot, karaoke: { ...prev, paused: false, pausedUntilEpochMs: null } };
+    }
 
     case 'guest_slots.updated':
       return {

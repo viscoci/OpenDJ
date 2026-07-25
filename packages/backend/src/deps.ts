@@ -33,6 +33,7 @@ import {
   type EmailAdapter,
 } from './email/index.js';
 import { GuestIdentityService } from './guest/GuestIdentityService.js';
+import { KaraokeService } from './karaoke/KaraokeService.js';
 import { LyricsLookupService } from './lyrics/LyricsLookupService.js';
 import { AppleMusicProvider } from './providers/streaming/AppleMusicProvider.js';
 import {
@@ -60,6 +61,7 @@ export interface AppDeps {
   guestIdentityService: GuestIdentityService;
   sessionService: SessionService;
   queueService: QueueService;
+  karaokeService: KaraokeService;
   sessionAuditService: SessionAuditService;
   streamingRouter: StreamingRouter;
   streamingProviderOAuthConfigs: StreamingProviderOAuthRegistry;
@@ -215,10 +217,25 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
     guestSlots: repositories.guestSlots,
     queueItems: repositories.queueItems,
     queueSkipVotes: repositories.queueSkipVotes,
+    karaokeClaims: repositories.karaokeClaims,
     rooms,
     streamingRouter,
     providerConnections: repositories.providerConnections,
     audit: sessionAuditService,
+  });
+
+  const karaokeService = new KaraokeService({
+    sessions: repositories.sessions,
+    guests: repositories.guests,
+    guestSlots: repositories.guestSlots,
+    queueItems: repositories.queueItems,
+    karaokeClaims: repositories.karaokeClaims,
+    rooms,
+    audit: sessionAuditService,
+    // Spotlight/pause transitions drive the host's provider playback
+    // (pause on spotlight in auto mode, resume on ready/deadline).
+    streamingRouter,
+    providerConnections: repositories.providerConnections,
   });
 
   const lyricsProvider = options.lyricsProvider ?? new LrclibAdapter({ fetchImpl });
@@ -237,6 +254,7 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
       queueItems: repositories.queueItems,
       providerQueueRejections: queueService,
       lyricsLookup: lyricsLookupService,
+      karaoke: karaokeService,
     });
   }
 
@@ -305,6 +323,7 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
     guestIdentityService,
     sessionService,
     queueService,
+    karaokeService,
     sessionAuditService,
     streamingRouter,
     streamingProviderOAuthConfigs:

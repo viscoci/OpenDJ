@@ -7,7 +7,13 @@
  * `string` so callers parse them when needed.
  */
 
-import type { Plan, QueueItemStatus, VoteSkipMode } from '@opendj/core';
+import type {
+  KaraokeMode,
+  KaraokePauseMode,
+  Plan,
+  QueueItemStatus,
+  VoteSkipMode,
+} from '@opendj/core';
 
 export interface SessionWire {
   id: string;
@@ -26,8 +32,22 @@ export interface SessionWire {
   moderationEnabled: boolean;
   voteSkipMode: VoteSkipMode;
   voteSkipThreshold: number;
+  /** `off`: mic claims disabled. See `KaraokeMode` for `optional`/`required`. */
+  karaokeMode: KaraokeMode;
+  /** Mics available per song; each song can carry up to this many claims. 1-8. */
+  karaokeMicCount: number;
+  /** See `KaraokePauseMode`. */
+  karaokePauseMode: KaraokePauseMode;
+  /** Auto-resume deadline (seconds) for any karaoke pause. 5-180. */
+  karaokePauseTimeoutSec: number;
   startedAt: string;
   endedAt: string | null;
+}
+
+/** Mic claim attached to a queue item — singer identity for guest/TV views. */
+export interface KaraokeClaimWire {
+  guestId: string;
+  displayName: string;
 }
 
 export interface QueueItemSummaryWire {
@@ -43,6 +63,8 @@ export interface QueueItemSummaryWire {
   skipVotes: number;
   createdAt: string;
   decidedAt: string | null;
+  /** Karaoke mic claims on this item. Empty array when none. */
+  karaokeClaims: ReadonlyArray<KaraokeClaimWire>;
 }
 
 export interface UserWire {
@@ -102,6 +124,10 @@ export interface CreateSessionRequest {
   moderationEnabled?: boolean;
   voteSkipMode?: VoteSkipMode;
   voteSkipThreshold?: number;
+  karaokeMode?: KaraokeMode;
+  karaokeMicCount?: number;
+  karaokePauseMode?: KaraokePauseMode;
+  karaokePauseTimeoutSec?: number;
 }
 
 /**
@@ -116,6 +142,12 @@ export interface RequestTrackBody {
   artist: string;
   albumArt: string | null;
   durationMs: number;
+  /**
+   * Optional mic claim bundled with the request. Required by the server
+   * when the session's `karaokeMode` is `'required'` (else the request is
+   * rejected with `karaoke_claim_required`).
+   */
+  karaoke?: { displayName: string };
 }
 
 export interface ModerateQueueItemBody {

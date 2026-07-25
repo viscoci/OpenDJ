@@ -24,6 +24,10 @@ describe('SessionService.create', () => {
     expect(session.moderationEnabled).toBe(false);
     expect(session.voteSkipMode).toBe('fixed');
     expect(session.voteSkipThreshold).toBe(5);
+    expect(session.karaokeMode).toBe('off');
+    expect(session.karaokeMicCount).toBe(1);
+    expect(session.karaokePauseMode).toBe('manual');
+    expect(session.karaokePauseTimeoutSec).toBe(30);
   });
 
   it('respects an explicit qrSlug', async () => {
@@ -55,6 +59,10 @@ describe('SessionService.create', () => {
       moderationEnabled: true,
       voteSkipMode: 'percentage',
       voteSkipThreshold: 60,
+      karaokeMode: 'required',
+      karaokeMicCount: 4,
+      karaokePauseMode: 'auto',
+      karaokePauseTimeoutSec: 90,
     });
     expect(session).toMatchObject({
       guestCapOverride: 50,
@@ -63,6 +71,10 @@ describe('SessionService.create', () => {
       moderationEnabled: true,
       voteSkipMode: 'percentage',
       voteSkipThreshold: 60,
+      karaokeMode: 'required',
+      karaokeMicCount: 4,
+      karaokePauseMode: 'auto',
+      karaokePauseTimeoutSec: 90,
     });
   });
 });
@@ -103,6 +115,7 @@ describe('SessionService.update', () => {
     // Untouched fields remain
     expect(updated.songsPerGuestCap).toBe(3);
     expect(updated.maxConsecutivePerGuest).toBeNull();
+    expect(updated.karaokeMode).toBe('off');
   });
 
   it('updates maxConsecutivePerGuest independently', async () => {
@@ -116,6 +129,26 @@ describe('SessionService.update', () => {
     expect(updated.maxConsecutivePerGuest).toBe(2);
     // Untouched fields remain
     expect(updated.songsPerGuestCap).toBe(3);
+  });
+
+  it('updates the four karaoke settings independently', async () => {
+    const { service } = setup();
+    const created = await service.create({ accountId: ACCOUNT_ID, name: 'X' });
+    const updated = await service.update({
+      id: created.id,
+      accountId: ACCOUNT_ID,
+      karaokeMode: 'optional',
+      karaokeMicCount: 3,
+      karaokePauseMode: 'off',
+      karaokePauseTimeoutSec: 120,
+    });
+    expect(updated.karaokeMode).toBe('optional');
+    expect(updated.karaokeMicCount).toBe(3);
+    expect(updated.karaokePauseMode).toBe('off');
+    expect(updated.karaokePauseTimeoutSec).toBe(120);
+    // Untouched fields remain
+    expect(updated.songsPerGuestCap).toBe(3);
+    expect(updated.voteSkipMode).toBe('fixed');
   });
 
   it('refuses cross-account updates', async () => {

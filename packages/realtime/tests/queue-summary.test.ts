@@ -35,7 +35,22 @@ describe('toQueueItemSummary', () => {
       skipVotes: 0,
       createdAtEpochMs: new Date('2026-04-30T12:00:00Z').getTime(),
       decidedAtEpochMs: null,
+      karaokeClaims: [],
     });
+  });
+
+  it('defaults karaokeClaims to an empty array', () => {
+    const summary = toQueueItemSummary(item());
+    expect(summary.karaokeClaims).toEqual([]);
+  });
+
+  it('attaches the provided karaoke claims', () => {
+    const claims = [
+      { guestId: 'guest-1', displayName: 'Ana' },
+      { guestId: 'guest-2', displayName: 'Ben' },
+    ];
+    const summary = toQueueItemSummary(item(), claims);
+    expect(summary.karaokeClaims).toEqual(claims);
   });
 
   it('converts decidedAt Date to epoch ms', () => {

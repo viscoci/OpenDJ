@@ -17,6 +17,7 @@ import { emailAuthRoutes } from './routes/emailAuth.js';
 import { loginAuthRoutes } from './routes/loginAuth.js';
 import { guestRoutes } from './routes/guest.js';
 import { healthRoutes } from './routes/health.js';
+import { karaokeRoutes } from './routes/karaoke.js';
 import { lyricsRoutes, sessionLyricsRoutes } from './routes/lyrics.js';
 import { deviceRoutes } from './routes/devices.js';
 import { playbackRoutes } from './routes/playback.js';
@@ -92,12 +93,21 @@ export function createApp(options: AppOptions): Hono<{ Variables: AuthVariables 
       rooms: deps.rooms,
       queueItems: deps.repositories.queueItems,
       guestSlots: deps.repositories.guestSlots,
+      karaokeClaims: deps.repositories.karaokeClaims,
       audit: deps.sessionAuditService,
     }),
   );
   v1.route(
     '/sessions/:id/queue',
-    queueRoutes({ authService: deps.authService, queueService: deps.queueService }),
+    queueRoutes({
+      authService: deps.authService,
+      queueService: deps.queueService,
+      karaokeClaims: deps.repositories.karaokeClaims,
+    }),
+  );
+  v1.route(
+    '/sessions/:id/karaoke',
+    karaokeRoutes({ authService: deps.authService, karaokeService: deps.karaokeService }),
   );
   v1.route(
     '/sessions/:id/search',
@@ -165,6 +175,7 @@ export function createApp(options: AppOptions): Hono<{ Variables: AuthVariables 
           rooms: deps.roomManager,
           nowPlayingPoller: deps.nowPlayingPoller,
           queueItems: deps.repositories.queueItems,
+          karaokeClaims: deps.repositories.karaokeClaims,
         },
         options.upgradeWebSocket,
       ),

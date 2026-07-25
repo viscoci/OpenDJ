@@ -65,8 +65,33 @@ export interface SessionSnapshot {
   activeGuestCount: number;
   /** Number of guest slots currently waiting for a free slot. */
   queuedGuestCount: number;
+  /**
+   * Karaoke spotlight + pause state (spec §4/§5). The spotlight is the
+   * queue item whose claimed track is currently playing; `paused` is true
+   * while playback is karaoke-held (guest pause or `auto` pause mode) and
+   * `pausedUntilEpochMs` is the wall-clock auto-resume deadline.
+   *
+   * Older servers may broadcast snapshots without this field — consumers
+   * (and `applyEvent`) treat absence as the empty state below.
+   */
+  karaoke: KaraokeSnapshotState;
   /** Wall-clock time at which this snapshot was assembled. Used for staleness checks. */
   snapshotAtEpochMs: number;
+}
+
+/** Karaoke spotlight + pause slice of the session snapshot. */
+export interface KaraokeSnapshotState {
+  /** Queue item currently in the karaoke spotlight; null when none. */
+  spotlightItemId: string | null;
+  /** True while playback is karaoke-paused. */
+  paused: boolean;
+  /** Auto-resume deadline (wall clock) while paused; null otherwise. */
+  pausedUntilEpochMs: number | null;
+}
+
+/** Default karaoke state — no spotlight, not paused. Fresh object per call. */
+export function createEmptyKaraokeState(): KaraokeSnapshotState {
+  return { spotlightItemId: null, paused: false, pausedUntilEpochMs: null };
 }
 
 /** Cap on `SessionSnapshot.recentlyPlayed` length. Older entries fall off. */
@@ -88,6 +113,7 @@ export function createEmptySnapshot(sessionId: string, nowEpochMs: number): Sess
     providerQueueSkipVotes: {},
     activeGuestCount: 0,
     queuedGuestCount: 0,
+    karaoke: createEmptyKaraokeState(),
     snapshotAtEpochMs: nowEpochMs,
   };
 }

@@ -1,5 +1,6 @@
 import type { Account, Plan } from '../../src/types/account.js';
 import type { Guest } from '../../src/types/guest.js';
+import type { KaraokeClaim } from '../../src/types/karaoke.js';
 import type { QueueItem, QueueItemStatus } from '../../src/types/queue.js';
 import type { Session, VoteSkipMode } from '../../src/types/session.js';
 
@@ -26,6 +27,10 @@ export function makeSession(overrides: Partial<Session> = {}): Session {
     moderationEnabled: false,
     voteSkipMode: 'fixed' satisfies VoteSkipMode,
     voteSkipThreshold: 5,
+    karaokeMode: 'off',
+    karaokeMicCount: 1,
+    karaokePauseMode: 'manual',
+    karaokePauseTimeoutSec: 30,
     startedAt: new Date('2026-01-01T00:00:00Z'),
     endedAt: null,
     ...overrides,
@@ -39,6 +44,18 @@ export function makeGuest(overrides: Partial<Guest> = {}): Guest {
     userId: null,
     fingerprint: 'fp-1',
     name: null,
+    createdAt: new Date('2026-01-01T00:00:00Z'),
+    ...overrides,
+  };
+}
+
+export function makeClaim(overrides: Partial<KaraokeClaim> = {}): KaraokeClaim {
+  return {
+    id: 'claim-1',
+    sessionId: 'sess-1',
+    queueItemId: 'item-1',
+    guestId: 'guest-1',
+    displayName: 'Ana',
     createdAt: new Date('2026-01-01T00:00:00Z'),
     ...overrides,
   };
