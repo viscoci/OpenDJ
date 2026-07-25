@@ -190,6 +190,22 @@ describe('SpotifyProvider.queueTrack', () => {
       }),
     ).rejects.toBeInstanceOf(SpotifyApiError);
   });
+
+  it('parses Retry-After seconds into SpotifyApiError.retryAfterSec on 429', async () => {
+    const { provider } = await connected(
+      () => new Response('rate limited', { status: 429, headers: { 'retry-after': '2023' } }),
+    );
+    const err = await provider.getNowPlaying().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SpotifyApiError);
+    expect((err as SpotifyApiError).retryAfterSec).toBe(2023);
+    expect((err as SpotifyApiError).status).toBe(429);
+  });
+
+  it('leaves retryAfterSec null when the header is absent', async () => {
+    const { provider } = await connected(() => new Response('rate limited', { status: 429 }));
+    const err = await provider.getNowPlaying().catch((e: unknown) => e);
+    expect((err as SpotifyApiError).retryAfterSec).toBeNull();
+  });
 });
 
 describe('SpotifyProvider.getNowPlaying', () => {

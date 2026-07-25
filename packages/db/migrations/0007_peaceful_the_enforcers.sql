@@ -1,0 +1,2 @@
+ALTER TABLE "sessions" DROP CONSTRAINT "sessions_qr_slug_unique";--> statement-breakpoint
+CREATE UNIQUE INDEX "sessions_qr_slug_active_unique" ON "sessions" USING btree ("qr_slug") WHERE "sessions"."ended_at" is null;

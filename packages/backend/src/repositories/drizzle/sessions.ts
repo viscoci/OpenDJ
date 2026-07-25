@@ -1,6 +1,6 @@
 import type { Database } from '@opendj/db';
 import { schema } from '@opendj/db';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 import type { SessionRecord, SessionRepository } from '../types.js';
 
 function mapSession(row: typeof schema.sessions.$inferSelect): SessionRecord {
@@ -38,10 +38,13 @@ export class DrizzleSessionRepository implements SessionRepository {
   }
 
   async findByQrSlug(qrSlug: string): Promise<SessionRecord | null> {
+    // Active session first (endedAt null sorts ahead), else the most
+    // recently started ended one — see SessionRepository.findByQrSlug.
     const rows = await this.db
       .select()
       .from(schema.sessions)
       .where(eq(schema.sessions.qrSlug, qrSlug))
+      .orderBy(sql`${schema.sessions.endedAt} is null desc`, desc(schema.sessions.startedAt))
       .limit(1);
     return rows[0] ? mapSession(rows[0]) : null;
   }
@@ -142,5 +145,14 @@ export class DrizzleSessionRepository implements SessionRepository {
       .returning();
     if (rows[0]) return mapSession(rows[0]);
     return this.findById(id);
+  }
+
+  async reopen(id: string): Promise<SessionRecord | null> {
+    const rows = await this.db
+      .update(schema.sessions)
+      .set({ endedAt: null })
+      .where(eq(schema.sessions.id, id))
+      .returning();
+    return rows[0] ? mapSession(rows[0]) : null;
   }
 }

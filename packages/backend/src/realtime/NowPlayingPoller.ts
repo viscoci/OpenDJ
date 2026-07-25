@@ -487,11 +487,20 @@ export class NowPlayingPoller {
       if (status === 429) {
         const current = entry.backoffMs ?? this.intervalMs;
         const nextBackoff = Math.min(this.maxBackoffMs, current * 2);
+        // Honor the provider's Retry-After when it's LONGER than our own
+        // exponential backoff. Spotify's extended-penalty windows run tens
+        // of minutes; retrying every `maxBackoffMs` inside the window keeps
+        // the app rate-limited indefinitely. +1s of slack so the first
+        // retry lands after the window actually closes.
+        const retryAfterSec = (err as { retryAfterSec?: number | null })?.retryAfterSec;
+        const retryAfterMs =
+          typeof retryAfterSec === 'number' && retryAfterSec > 0 ? retryAfterSec * 1000 + 1000 : 0;
         entry.backoffMs = nextBackoff;
-        nextDelayMs = nextBackoff;
+        nextDelayMs = Math.max(nextBackoff, retryAfterMs);
         this.logger.warn('[NowPlayingPoller] 429 from provider, backing off', {
           sessionId,
-          delayMs: nextBackoff,
+          delayMs: nextDelayMs,
+          retryAfterSec: retryAfterSec ?? null,
         });
       } else {
         // Transient — just keep the schedule.

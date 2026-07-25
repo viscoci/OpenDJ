@@ -346,6 +346,36 @@ describe('NowPlayingPoller — lifecycle', () => {
     expect(poller.size()).toBe(1);
   });
 
+  it('honors Retry-After on 429 when longer than the exponential backoff', async () => {
+    const { poller, sessionId, control, logger } = await setup({ intervalMs: 5000 });
+    control.setNowPlaying(track('a'));
+    poller.start(sessionId);
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Spotify extended penalty: Retry-After of 30 minutes. Our own backoff
+    // would retry after 10s (2×interval) — the poller must wait the header
+    // out instead (+1s slack).
+    const err = Object.assign(new Error('rate limited'), { status: 429, retryAfterSec: 1800 });
+    control.setError(err);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('429'),
+      expect.objectContaining({ sessionId, delayMs: 1_801_000, retryAfterSec: 1800 }),
+    );
+
+    // Well before the Retry-After elapses: no further provider calls.
+    control.setError(null);
+    control.setNowPlaying(track('b'));
+    const callsBefore = control.callCount();
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(control.callCount()).toBe(callsBefore);
+
+    // After the full window the poller resumes.
+    await vi.advanceTimersByTimeAsync(1_201_001);
+    expect(control.callCount()).toBeGreaterThan(callsBefore);
+    expect(poller.size()).toBe(1);
+  });
+
   it('continues at base interval on transient errors', async () => {
     const { poller, sessionId, control, logger } = await setup({ intervalMs: 5000 });
     control.setNowPlaying(track('a'));

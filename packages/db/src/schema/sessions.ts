@@ -10,6 +10,7 @@ import {
   text,
   timestamp,
   unique,
+  uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
 import { accounts } from './accounts.js';
@@ -22,27 +23,40 @@ import { users } from './users.js';
  * `karaokeMode`: 'off' | 'optional' | 'required'
  * `karaokePauseMode`: 'off' | 'manual' | 'auto'
  */
-export const sessions = pgTable('sessions', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  accountId: uuid('account_id')
-    .notNull()
-    .references(() => accounts.id, { onDelete: 'cascade' }),
-  name: text('name').notNull(),
-  qrSlug: text('qr_slug').notNull().unique(),
-  guestCapOverride: integer('guest_cap_override'),
-  songsPerGuestCap: integer('songs_per_guest_cap').notNull().default(3),
-  maxConsecutivePerGuest: integer('max_consecutive_per_guest'),
-  allowDuplicates: boolean('allow_duplicates').notNull().default(false),
-  moderationEnabled: boolean('moderation_enabled').notNull().default(false),
-  voteSkipMode: text('vote_skip_mode').notNull().default('fixed'),
-  voteSkipThreshold: integer('vote_skip_threshold').notNull().default(5),
-  karaokeMode: text('karaoke_mode').notNull().default('off'),
-  karaokeMicCount: integer('karaoke_mic_count').notNull().default(1),
-  karaokePauseMode: text('karaoke_pause_mode').notNull().default('manual'),
-  karaokePauseTimeoutSec: integer('karaoke_pause_timeout_sec').notNull().default(30),
-  startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
-  endedAt: timestamp('ended_at', { withTimezone: true }),
-});
+export const sessions = pgTable(
+  'sessions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    /**
+     * Slug uniqueness is scoped to ACTIVE sessions (partial index below):
+     * an ended session releases its slug so the host can spin up next
+     * week's party with the same QR code.
+     */
+    qrSlug: text('qr_slug').notNull(),
+    guestCapOverride: integer('guest_cap_override'),
+    songsPerGuestCap: integer('songs_per_guest_cap').notNull().default(3),
+    maxConsecutivePerGuest: integer('max_consecutive_per_guest'),
+    allowDuplicates: boolean('allow_duplicates').notNull().default(false),
+    moderationEnabled: boolean('moderation_enabled').notNull().default(false),
+    voteSkipMode: text('vote_skip_mode').notNull().default('fixed'),
+    voteSkipThreshold: integer('vote_skip_threshold').notNull().default(5),
+    karaokeMode: text('karaoke_mode').notNull().default('off'),
+    karaokeMicCount: integer('karaoke_mic_count').notNull().default(1),
+    karaokePauseMode: text('karaoke_pause_mode').notNull().default('manual'),
+    karaokePauseTimeoutSec: integer('karaoke_pause_timeout_sec').notNull().default(30),
+    startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
+    endedAt: timestamp('ended_at', { withTimezone: true }),
+  },
+  (table) => ({
+    qrSlugActiveUnique: uniqueIndex('sessions_qr_slug_active_unique')
+      .on(table.qrSlug)
+      .where(sql`${table.endedAt} is null`),
+  }),
+);
 
 export type SessionRow = typeof sessions.$inferSelect;
 export type SessionInsert = typeof sessions.$inferInsert;

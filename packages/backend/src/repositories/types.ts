@@ -98,6 +98,12 @@ export interface SessionRecord {
 
 export interface SessionRepository {
   findById(id: string): Promise<SessionRecord | null>;
+  /**
+   * Resolve by slug. Slugs are only unique among ACTIVE sessions — an ended
+   * session releases its slug for reuse. Resolution order: the active
+   * session when one exists, else the most recently started ended one (so
+   * a TV/guest page for a just-ended session still resolves).
+   */
   findByQrSlug(qrSlug: string): Promise<SessionRecord | null>;
   findByAccount(accountId: string): Promise<SessionRecord[]>;
   create(input: {
@@ -133,6 +139,13 @@ export interface SessionRepository {
   }): Promise<SessionRecord | null>;
   /** Mark a session as ended. Idempotent — if already ended, returns the existing row. */
   end(id: string, endedAt: Date): Promise<SessionRecord | null>;
+  /**
+   * Clear `endedAt` so an ended session becomes active again. Idempotent —
+   * reopening an active session returns it unchanged. Callers must first
+   * verify no OTHER active session holds the same slug (the partial unique
+   * index rejects the write otherwise).
+   */
+  reopen(id: string): Promise<SessionRecord | null>;
 }
 
 export interface GuestRecord {

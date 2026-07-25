@@ -119,7 +119,7 @@ export class SpotifyClient {
         throw new NoActiveDeviceError();
       }
     }
-    throw new SpotifyApiError(response.status, text);
+    throw new SpotifyApiError(response.status, text, parseRetryAfterSec(response));
   }
 
   private canRefresh(): boolean {
@@ -178,6 +178,17 @@ export class SpotifyClient {
     })();
     return this.refreshInFlight;
   }
+}
+
+/**
+ * Seconds from a `Retry-After` header, or null when absent/unparsable.
+ * Spotify only sends the delta-seconds form (never HTTP-date).
+ */
+function parseRetryAfterSec(response: Response): number | null {
+  const raw = response.headers?.get?.('retry-after');
+  if (!raw) return null;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }
 
 function safeParse<T>(text: string): T | null {
