@@ -1,5 +1,11 @@
 # @opendj/core
 
+## 0.3.0
+
+### Minor Changes
+
+- [#19](https://github.com/viscoci/OpenDJ/pull/19) [`7584380`](https://github.com/viscoci/OpenDJ/commit/758438077f38e0d8e2822cc0fbacc891e8878d96) Thanks [@viscoci](https://github.com/viscoci)! - Karaoke mic queue: hosts configure karaoke mode (off/optional/required), mic count, and pause behavior per session; guests claim mics on queued songs (open to any guest, atomic request+claim, `required` mode enforces a claim); the now-playing poller spotlights the earliest claimed matching item and drives auto/manual pause with a wall-clock auto-resume deadline; new `karaoke.*` realtime events plus `karaokeClaims` on queue item summaries and a `karaoke` snapshot slice; `KaraokeApi` client (claim/removeClaim/pause/ready).
+
 ## 0.2.0
 
 ### Minor Changes
