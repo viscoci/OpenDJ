@@ -1,5 +1,11 @@
 # @opendj/backend
 
+## 0.6.2
+
+### Patch Changes
+
+- [#27](https://github.com/viscoci/OpenDJ/pull/27) [`d73defd`](https://github.com/viscoci/OpenDJ/commit/d73defdf264f9364a3a3e96ea74ce182d68b6d14) Thanks [@viscoci](https://github.com/viscoci)! - SpotifyProvider.resume recovers from NO_ACTIVE_DEVICE: after a pause (karaoke hold, host pause) Spotify often drops the playback device from its active set, so a bare `play` call 404s and playback stays stuck until someone taps play inside Spotify. Resume now falls back to `transferPlayback(deviceId, { play: true })` targeting the active device if any, else the first unrestricted one — fixing guest Ready, the auto-resume deadline, and the host Resume-now button in one place.
+
 ## 0.6.1
 
 ### Patch Changes
