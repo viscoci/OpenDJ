@@ -42,6 +42,7 @@ import {
   type Track,
 } from '@opendj/core';
 import { SpotifyClient } from './client.js';
+import { NoActiveDeviceError } from './errors.js';
 
 const SYNTHETIC_DEFAULT_ZONE_ID = 'default';
 
@@ -369,7 +370,22 @@ export class SpotifyProvider
   }
 
   async resume(_zoneId?: string): Promise<void> {
-    await this.requireClient().request('PUT', '/v1/me/player/play');
+    try {
+      await this.requireClient().request('PUT', '/v1/me/player/play');
+    } catch (err) {
+      if (!(err instanceof NoActiveDeviceError)) throw err;
+      // After a pause (karaoke hold, host pause), Spotify frequently drops
+      // the playback device out of its active set — a bare `play` then
+      // 404s NO_ACTIVE_DEVICE even though the device is still listed and
+      // reachable. Recover by transferring playback (with play:true) to
+      // the best candidate: the still-active device if any, else the
+      // first unrestricted one.
+      const devices = await this.getDevices();
+      const target =
+        devices.find((d) => d.isActive && d.id) ?? devices.find((d) => !d.isRestricted && d.id);
+      if (!target?.id) throw err;
+      await this.transferPlayback(target.id, { play: true });
+    }
   }
 
   // ─── Volume ──────────────────────────────────────────────────────────
