@@ -138,6 +138,24 @@ export interface NowPlayingPollerOptions {
 interface PerSession {
   /** Outstanding tick timer. */
   timer: ReturnType<typeof setTimeout> | null;
+  /**
+   * True while a tick body is executing. `tick()` nulls `timer` on entry,
+   * so without this flag a `start()` call landing mid-tick (guest page
+   * reload → WS resubscribe) would see "no timer" and schedule a SECOND
+   * concurrent tick chain. Chains multiply poll rate and, worse, race the
+   * auto-skip paths — parallel ticks each saw the same rejected track and
+   * each dispatched a skip, eating innocent songs (observed live:
+   * 3 skips for one URI within 155ms).
+   */
+  ticking: boolean;
+  /**
+   * Wall clock of the last auto-skip THIS session dispatched. Spotify
+   * needs ~500ms to settle a skip and keeps reporting the old track
+   * meanwhile — any tick in that window would re-match the rejected URI
+   * and skip again. All auto-skip paths are suppressed within
+   * `SKIP_SETTLE_MS` of the last dispatch.
+   */
+  lastSkipAtMs: number;
   /** Outstanding idle-grace teardown timer. */
   idleTimer: ReturnType<typeof setTimeout> | null;
   /** Cached account + provider (avoid hammering repos every 5s). */
@@ -168,6 +186,14 @@ interface PerSession {
 }
 
 const SPOTIFY_PROVIDER_ID = 'spotify';
+
+/**
+ * Suppress further auto-skips for this long after dispatching one. Covers
+ * Spotify's ~500ms skip-settle latency (during which it still reports the
+ * old track) with comfortable slack; one poll interval later the reported
+ * now-playing is trustworthy again.
+ */
+const SKIP_SETTLE_MS = 1500;
 
 export class NowPlayingPoller {
   private readonly intervalMs: number;
@@ -200,6 +226,8 @@ export class NowPlayingPoller {
     if (!entry) {
       entry = {
         timer: null,
+        ticking: false,
+        lastSkipAtMs: 0,
         idleTimer: null,
         cachedAccountId: null,
         cachedProviderId: null,
@@ -214,7 +242,9 @@ export class NowPlayingPoller {
       clearTimeout(entry.idleTimer);
       entry.idleTimer = null;
     }
-    if (entry.timer) return;
+    // `ticking` matters as much as `timer`: a tick in flight has no timer
+    // set, and scheduling here would fork a second concurrent tick chain.
+    if (entry.timer || entry.ticking) return;
     this.scheduleNext(sessionId, 0);
   }
 
@@ -254,6 +284,9 @@ export class NowPlayingPoller {
   private scheduleNext(sessionId: string, delayMs: number): void {
     const entry = this.state.get(sessionId);
     if (!entry) return;
+    // Never orphan a pending timer — an overwritten-but-live timeout would
+    // fire its own tick chain alongside the new one.
+    if (entry.timer) clearTimeout(entry.timer);
     entry.timer = setTimeout(() => {
       void this.tick(sessionId);
     }, delayMs);
@@ -263,6 +296,7 @@ export class NowPlayingPoller {
     const entry = this.state.get(sessionId);
     if (!entry) return;
     entry.timer = null;
+    entry.ticking = true;
 
     let nextDelayMs: number = this.intervalMs;
     /**
@@ -410,12 +444,17 @@ export class NowPlayingPoller {
       // Auto-skip rejected provider-queue URIs the moment they reach the
       // now-playing slot. Cheaper than the post-fetch reconcile loop and
       // gets the skip out before we even fan the snapshot to clients.
-      if (next && this.deps.providerQueueRejections) {
+      // Settle guard: within SKIP_SETTLE_MS of a dispatched skip, `next`
+      // may still be the track we just skipped — re-skipping would eat the
+      // song AFTER it.
+      const skipSettling = this.nowEpochMs() - entry.lastSkipAtMs < SKIP_SETTLE_MS;
+      if (next && this.deps.providerQueueRejections && !skipSettling) {
         const rejectedSet = this.deps.providerQueueRejections.getRejectedProviderUris(sessionId);
         if (rejectedSet.has(next.uri)) {
           try {
             if (supportsSkipTrack(provider)) {
               await provider.skipTrack();
+              entry.lastSkipAtMs = this.nowEpochMs();
               this.deps.providerQueueRejections.consumeProviderRejection(sessionId, next.uri);
               skipDispatched = true;
               this.logger.warn('[NowPlayingPoller] auto-skipped vote-rejected provider track', {
@@ -510,6 +549,7 @@ export class NowPlayingPoller {
         });
       }
     } finally {
+      entry.ticking = false;
       // Reschedule iff the room still has subscribers AND we're not in the
       // middle of an idle-grace teardown.
       const stillTracked = this.state.get(sessionId);
@@ -628,7 +668,12 @@ export class NowPlayingPoller {
     //   2. After we successfully dispatch a skip, flip the rejected row
     //      to 'played' so a future re-queue of the same URI doesn't hit
     //      this match again.
-    if (nowPlaying) {
+    // Settle guard mirrors the tick's early skip path: after ANY skip this
+    // session dispatched, `nowPlaying` is unreliable for SKIP_SETTLE_MS —
+    // skipping again here would eat the following track.
+    const skipSettling =
+      sessionState !== undefined && this.nowEpochMs() - sessionState.lastSkipAtMs < SKIP_SETTLE_MS;
+    if (nowPlaying && !skipSettling) {
       const rejectedHit = items.find(
         (i) => i.status === 'rejected' && i.trackUri === nowPlaying.uri,
       );
@@ -647,6 +692,7 @@ export class NowPlayingPoller {
             );
             if (supportsSkipTrack(provider)) {
               await provider.skipTrack();
+              if (sessionState) sessionState.lastSkipAtMs = this.nowEpochMs();
               skipDispatched = true;
               // Tombstone the rejected row so this match doesn't re-fire
               // on the same URI later. Status 'played' is semantically
