@@ -41,15 +41,15 @@
     "@opendj/lyrics": "workspace:*",
     "@opendj/realtime": "workspace:*",
     "@opendj/sync": "workspace:*",
-    "drizzle-orm": "^0.36.0",
-    "hono": "^4.6.0",
+    "drizzle-orm": "^0.45.2",
+    "hono": "^4.12.32",
     "valibot": "^0.42.0"
   },
   "optionalDependencies": {
-    "argon2": "^0.41.0"
+    "argon2": "^0.45.1"
   },
   "devDependencies": {
-    "argon2": "^0.41.0",
+    "argon2": "^0.45.1",
     "typescript": "^5.7.0",
     "vitest": "^2.1.0"
   },
