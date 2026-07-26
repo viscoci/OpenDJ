@@ -208,6 +208,55 @@ describe('SpotifyProvider.queueTrack', () => {
   });
 });
 
+describe('SpotifyProvider.resume — NO_ACTIVE_DEVICE recovery', () => {
+  const noActiveDevice = () =>
+    new Response(JSON.stringify({ error: { status: 404, reason: 'NO_ACTIVE_DEVICE' } }), {
+      status: 404,
+      headers: { 'content-type': 'application/json' },
+    });
+
+  it('falls back to transferPlayback(play:true) when play 404s NO_ACTIVE_DEVICE', async () => {
+    const calls: Array<{ url: string; method: string; body: string | null }> = [];
+    const { provider } = await connected((url, init) => {
+      calls.push({
+        url,
+        method: init?.method ?? 'GET',
+        body: typeof init?.body === 'string' ? init.body : null,
+      });
+      if (url.includes('/v1/me/player/play')) return noActiveDevice();
+      if (url.includes('/v1/me/player/devices')) {
+        return jsonResponse({
+          devices: [
+            {
+              id: 'dev-1',
+              name: 'Living Room TV',
+              type: 'TV',
+              is_active: false,
+              volume_percent: 60,
+              is_restricted: false,
+            },
+          ],
+        });
+      }
+      return new Response(null, { status: 204 });
+    });
+
+    await provider.resume();
+    const transfer = calls.find((c) => c.method === 'PUT' && c.url.endsWith('/v1/me/player'));
+    expect(transfer).toBeDefined();
+    expect(JSON.parse(transfer!.body!)).toEqual({ device_ids: ['dev-1'], play: true });
+  });
+
+  it('rethrows NoActiveDeviceError when no usable device exists', async () => {
+    const { provider } = await connected((url) => {
+      if (url.includes('/v1/me/player/play')) return noActiveDevice();
+      if (url.includes('/v1/me/player/devices')) return jsonResponse({ devices: [] });
+      return new Response(null, { status: 204 });
+    });
+    await expect(provider.resume()).rejects.toBeInstanceOf(NoActiveDeviceError);
+  });
+});
+
 describe('SpotifyProvider.getNowPlaying', () => {
   it('returns null on 204 (nothing playing)', async () => {
     const { provider } = await connected(() => new Response(null, { status: 204 }));
