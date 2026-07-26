@@ -14,7 +14,7 @@
     "db:migrate": "pnpm --filter @opendj/db db:migrate"
   },
   "dependencies": {
-    "@hono/node-server": "^1.13.0",
+    "@hono/node-server": "^2.0.8",
     "@hono/node-ws": "^1.0.0",
     "@opendj/backend": "workspace:*",
     "@opendj/db": "workspace:*",
