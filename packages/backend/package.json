@@ -43,7 +43,7 @@
     "@opendj/sync": "workspace:*",
     "drizzle-orm": "^0.36.0",
     "hono": "^4.6.0",
-    "valibot": "^0.42.0"
+    "valibot": "^1.4.2"
   },
   "optionalDependencies": {
     "argon2": "^0.41.0"
