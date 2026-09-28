@@ -525,3 +525,40 @@ describe('applyEvent — purity', () => {
     expect(JSON.stringify(s)).toBe(before);
   });
 });
+
+describe('applyEvent — provider status', () => {
+  it('a fresh snapshot reports the provider as ok', () => {
+    expect(snapshot().providerStatus).toEqual({ state: 'ok' });
+  });
+
+  it('provider.status_updated records a rate-limit window', () => {
+    const next = applyEvent(snapshot(), {
+      type: 'provider.status_updated',
+      status: { state: 'rate_limited', providerId: 'spotify', untilEpochMs: 1_700_000_900_000 },
+    });
+    expect(next.providerStatus).toEqual({
+      state: 'rate_limited',
+      providerId: 'spotify',
+      untilEpochMs: 1_700_000_900_000,
+    });
+  });
+
+  it('provider.status_updated back to ok clears the rate-limit window', () => {
+    let s = applyEvent(snapshot(), {
+      type: 'provider.status_updated',
+      status: { state: 'rate_limited', providerId: 'spotify', untilEpochMs: 1 },
+    });
+    s = applyEvent(s, { type: 'provider.status_updated', status: { state: 'ok' } });
+    expect(s.providerStatus).toEqual({ state: 'ok' });
+  });
+
+  it('treats a snapshot from an older server (no providerStatus) as ok-compatible', () => {
+    const legacy = { ...snapshot() } as Partial<ReturnType<typeof snapshot>>;
+    delete legacy.providerStatus;
+    const next = applyEvent(legacy as ReturnType<typeof snapshot>, {
+      type: 'provider.status_updated',
+      status: { state: 'ok' },
+    });
+    expect(next.providerStatus).toEqual({ state: 'ok' });
+  });
+});

@@ -75,6 +75,15 @@ export interface SessionSnapshot {
    * (and `applyEvent`) treat absence as the empty state below.
    */
   karaoke: KaraokeSnapshotState;
+  /**
+   * Health of the host's streaming provider as seen by the server. Flips to
+   * `rate_limited` when the provider (e.g. Spotify) throttles the account,
+   * so guest/host/TV views can say so instead of failing silently.
+   *
+   * Older servers may broadcast snapshots without this field — consumers
+   * treat absence as `{ state: 'ok' }`.
+   */
+  providerStatus: ProviderStatus;
   /** Wall-clock time at which this snapshot was assembled. Used for staleness checks. */
   snapshotAtEpochMs: number;
 }
@@ -88,6 +97,14 @@ export interface KaraokeSnapshotState {
   /** Auto-resume deadline (wall clock) while paused; null otherwise. */
   pausedUntilEpochMs: number | null;
 }
+
+/**
+ * Streaming-provider health slice. `untilEpochMs` is the wall-clock time the
+ * provider said it will accept calls again (from its `Retry-After`).
+ */
+export type ProviderStatus =
+  | { state: 'ok' }
+  | { state: 'rate_limited'; providerId: string; untilEpochMs: number };
 
 /** Default karaoke state — no spotlight, not paused. Fresh object per call. */
 export function createEmptyKaraokeState(): KaraokeSnapshotState {
@@ -114,6 +131,7 @@ export function createEmptySnapshot(sessionId: string, nowEpochMs: number): Sess
     activeGuestCount: 0,
     queuedGuestCount: 0,
     karaoke: createEmptyKaraokeState(),
+    providerStatus: { state: 'ok' },
     snapshotAtEpochMs: nowEpochMs,
   };
 }

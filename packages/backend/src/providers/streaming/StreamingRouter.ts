@@ -22,6 +22,7 @@ import {
   type ProviderCredentials,
 } from '@opendj/core';
 import type { ProviderConnectionRepository } from '../../repositories/types.js';
+import type { ProviderCooldowns } from './ProviderCooldowns.js';
 import type { ProviderContext, ProviderRegistry } from './providerRegistry.js';
 
 export class ProviderConnectionNotFoundError extends Error {
@@ -48,6 +49,12 @@ export interface StreamingRouterDeps {
   providerConnections: ProviderConnectionRepository;
   registry: ProviderRegistry;
   context: ProviderContext;
+  /**
+   * Shared per-account rate-limit cooldowns. When supplied, every provider
+   * gets a `fetch` that fails fast while its account is cooling down and
+   * opens a cooldown on any 429 — see `ProviderCooldowns`.
+   */
+  cooldowns?: ProviderCooldowns;
 }
 
 export class StreamingRouter {
@@ -75,7 +82,13 @@ export class StreamingRouter {
       throw new InvalidProviderCredentialsError(providerId, 'No access token stored.');
     }
 
-    const provider = factory(this.deps.context);
+    const context: ProviderContext = this.deps.cooldowns
+      ? {
+          ...this.deps.context,
+          fetch: this.deps.cooldowns.guardFetch(accountId, providerId, this.deps.context.fetch),
+        }
+      : this.deps.context;
+    const provider = factory(context);
     const credentials: ProviderCredentials = { accessToken: connection.accessToken };
     if (connection.refreshToken) credentials['refreshToken'] = connection.refreshToken;
     if (connection.providerAccountId) credentials['accountId'] = connection.providerAccountId;
@@ -111,6 +124,14 @@ export class StreamingRouter {
 
     await provider.connect(credentials);
     return provider;
+  }
+
+  /**
+   * End of the open rate-limit cooldown for this account's provider, or
+   * null when calls are allowed (or no cooldown registry is wired).
+   */
+  rateLimitedUntil(accountId: string, providerId: string): number | null {
+    return this.deps.cooldowns?.untilEpochMs(accountId, providerId) ?? null;
   }
 
   /**
