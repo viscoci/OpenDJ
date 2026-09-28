@@ -9,7 +9,7 @@
  * See docs/agent-brief.md §"API Routes" → Queue.
  */
 
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import * as v from 'valibot';
 import type { AuthContext } from '@opendj/auth';
 import type { AuthService } from '../auth/AuthService.js';
@@ -77,6 +77,20 @@ function mapErrorToStatus(code: string): { status: number; payload: { error: str
   }
 }
 
+/**
+ * JSON error response for a QueueServiceError. `provider_rate_limited` is a
+ * 503 carrying `retryAfterSec` (+ `Retry-After`) so clients can tell guests
+ * when to try again; everything else goes through `mapErrorToStatus`.
+ */
+function queueErrorResponse(c: Context, err: QueueServiceError): Response {
+  if (err.code === 'provider_rate_limited') {
+    if (err.retryAfterSec !== null) c.header('Retry-After', String(err.retryAfterSec));
+    return c.json({ error: err.code, retryAfterSec: err.retryAfterSec }, 503);
+  }
+  const { status, payload } = mapErrorToStatus(err.code);
+  return c.json(payload, status as 400 | 401 | 403 | 404);
+}
+
 export function queueRoutes(deps: QueueRouteDeps): Hono<{ Variables: AuthVariables }> {
   const app = new Hono<{ Variables: AuthVariables }>();
 
@@ -126,8 +140,7 @@ export function queueRoutes(deps: QueueRouteDeps): Hono<{ Variables: AuthVariabl
       return c.json({ item: toQueueItemSummary(created, await claimsForItem(created.id)) }, 201);
     } catch (err) {
       if (err instanceof QueueServiceError) {
-        const { status, payload } = mapErrorToStatus(err.code);
-        return c.json(payload, status as 400 | 401 | 403 | 404);
+        return queueErrorResponse(c, err);
       }
       throw err;
     }
@@ -161,8 +174,7 @@ export function queueRoutes(deps: QueueRouteDeps): Hono<{ Variables: AuthVariabl
       return c.json({ item: toQueueItemSummary(updated, await claimsForItem(updated.id)) });
     } catch (err) {
       if (err instanceof QueueServiceError) {
-        const { status, payload } = mapErrorToStatus(err.code);
-        return c.json(payload, status as 400 | 401 | 403 | 404);
+        return queueErrorResponse(c, err);
       }
       throw err;
     }
@@ -179,8 +191,7 @@ export function queueRoutes(deps: QueueRouteDeps): Hono<{ Variables: AuthVariabl
       return c.json({ ok: true });
     } catch (err) {
       if (err instanceof QueueServiceError) {
-        const { status, payload } = mapErrorToStatus(err.code);
-        return c.json(payload, status as 400 | 401 | 403 | 404);
+        return queueErrorResponse(c, err);
       }
       throw err;
     }
@@ -218,8 +229,7 @@ export function queueRoutes(deps: QueueRouteDeps): Hono<{ Variables: AuthVariabl
       return c.json(result);
     } catch (err) {
       if (err instanceof QueueServiceError) {
-        const { status, payload } = mapErrorToStatus(err.code);
-        return c.json(payload, status as 400 | 401 | 403 | 404);
+        return queueErrorResponse(c, err);
       }
       throw err;
     }
@@ -253,8 +263,7 @@ export function queueRoutes(deps: QueueRouteDeps): Hono<{ Variables: AuthVariabl
       return c.json(result);
     } catch (err) {
       if (err instanceof QueueServiceError) {
-        const { status, payload } = mapErrorToStatus(err.code);
-        return c.json(payload, status as 400 | 401 | 403 | 404);
+        return queueErrorResponse(c, err);
       }
       throw err;
     }
@@ -275,8 +284,7 @@ export function queueRoutes(deps: QueueRouteDeps): Hono<{ Variables: AuthVariabl
       return c.json(result);
     } catch (err) {
       if (err instanceof QueueServiceError) {
-        const { status, payload } = mapErrorToStatus(err.code);
-        return c.json(payload, status as 400 | 401 | 403 | 404);
+        return queueErrorResponse(c, err);
       }
       throw err;
     }

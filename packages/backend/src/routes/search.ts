@@ -12,6 +12,13 @@
  * - 501 `search_not_supported` — provider connected, but doesn't implement search
  *   (e.g. AppleMusic stub) — type guard prevents the call from happening
  * - 502 `provider_error` — search failed at the provider edge
+ * - 503 `provider_rate_limited` — the provider is throttling the host's
+ *   account; body carries `retryAfterSec` (also sent as `Retry-After`)
+ *
+ * Results are cached per (account, provider, query, limit) for
+ * `SEARCH_CACHE_TTL_MS`, and identical in-flight queries share one provider
+ * call — guests at the same party type the same song names, and every
+ * provider call counts against the host's Spotify quota.
  */
 
 import { Hono } from 'hono';
@@ -35,6 +42,16 @@ const QuerySchema = v.object({
   limit: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(50))),
 });
 
+/** How long a successful search result is reused. */
+const SEARCH_CACHE_TTL_MS = 60_000;
+/** Upper bound on cached queries; oldest entries are evicted first. */
+const SEARCH_CACHE_MAX_ENTRIES = 500;
+
+interface CachedSearch {
+  expiresAtEpochMs: number;
+  tracks: Promise<Track[]>;
+}
+
 export interface SearchResultDto {
   trackUri: string;
   trackName: string;
@@ -55,6 +72,32 @@ function toDto(track: Track): SearchResultDto {
 
 export function searchRoutes(deps: SearchRouteDeps): Hono {
   const app = new Hono();
+  const cache = new Map<string, CachedSearch>();
+
+  /**
+   * Run `search` once per cache key per TTL. The promise itself is cached so
+   * concurrent identical queries share a single provider call; rejected
+   * promises are evicted so failures are never served from cache.
+   */
+  function cachedSearch(key: string, search: () => Promise<Track[]>): Promise<Track[]> {
+    const now = Date.now();
+    const hit = cache.get(key);
+    if (hit && hit.expiresAtEpochMs > now) return hit.tracks;
+    if (hit) cache.delete(key);
+
+    const tracks = search();
+    const entry: CachedSearch = { expiresAtEpochMs: now + SEARCH_CACHE_TTL_MS, tracks };
+    cache.set(key, entry);
+    tracks.catch(() => {
+      if (cache.get(key) === entry) cache.delete(key);
+    });
+    while (cache.size > SEARCH_CACHE_MAX_ENTRIES) {
+      const oldest = cache.keys().next().value;
+      if (oldest === undefined) break;
+      cache.delete(oldest);
+    }
+    return tracks;
+  }
 
   app.get('/', async (c) => {
     const sessionId = c.req.param('id') ?? '';
@@ -97,13 +140,37 @@ export function searchRoutes(deps: SearchRouteDeps): Hono {
       return c.json({ error: 'search_not_supported', providerId: connection.providerId }, 501);
     }
 
+    const query = parsed.output.q;
+    const limit = parsed.output.limit ?? 20;
+    const cacheKey = [
+      session.accountId,
+      connection.providerId,
+      limit,
+      query.trim().replace(/\s+/g, ' ').toLowerCase(),
+    ].join('\u0000');
     try {
-      const tracks = await provider.search(parsed.output.q, parsed.output.limit ?? 20);
+      const tracks = await cachedSearch(cacheKey, () => provider.search(query, limit));
       return c.json({
         results: tracks.map(toDto),
         providerId: connection.providerId,
       });
     } catch (err) {
+      const rateLimit = err as { status?: number; retryAfterSec?: number | null };
+      if (rateLimit?.status === 429) {
+        const retryAfterSec =
+          typeof rateLimit.retryAfterSec === 'number' && rateLimit.retryAfterSec > 0
+            ? rateLimit.retryAfterSec
+            : null;
+        if (retryAfterSec !== null) c.header('Retry-After', String(retryAfterSec));
+        return c.json(
+          {
+            error: 'provider_rate_limited',
+            providerId: connection.providerId,
+            retryAfterSec,
+          },
+          503,
+        );
+      }
       return c.json(
         {
           error: 'provider_error',

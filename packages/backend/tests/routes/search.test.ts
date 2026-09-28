@@ -6,7 +6,7 @@
  */
 
 import { Hono } from 'hono';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   defineCapabilities,
   PROVIDER_FEATURES,
@@ -21,6 +21,7 @@ import {
   InMemorySessionRepository,
 } from '../../src/repositories/in-memory/index.js';
 import { searchRoutes } from '../../src/routes/search.js';
+import { ProviderRateLimitedError } from '../../src/providers/streaming/ProviderCooldowns.js';
 import { StreamingRouter } from '../../src/providers/streaming/StreamingRouter.js';
 import type { ProviderRegistry } from '../../src/providers/streaming/providerRegistry.js';
 
@@ -30,6 +31,10 @@ class MockSearchProvider implements IStreamingProvider, ISupportsSearch {
   private connected = false;
   private lastQuery: string | null = null;
   private resultsToReturn: Track[] = [];
+  /** Number of search calls that reached the provider. */
+  calls = 0;
+  /** When set, the next search calls reject with this error. */
+  failWith: Error | null = null;
 
   async connect(_credentials: ProviderCredentials): Promise<void> {
     this.connected = true;
@@ -54,6 +59,8 @@ class MockSearchProvider implements IStreamingProvider, ISupportsSearch {
     });
   }
   async search(query: string, limit = 20): Promise<Track[]> {
+    this.calls += 1;
+    if (this.failWith) throw this.failWith;
     this.lastQuery = query;
     return this.resultsToReturn.slice(0, limit);
   }
@@ -223,5 +230,92 @@ describe('GET /sessions/:id/search', () => {
     expect(res.status).toBe(501);
     const body = (await res.json()) as { error: string };
     expect(body.error).toBe('search_not_supported');
+  });
+});
+
+describe('GET /sessions/:id/search — provider rate limits', () => {
+  it('returns 503 provider_rate_limited with Retry-After while the account is cooling down', async () => {
+    const { app, sessionId, mockProvider } = buildHarness();
+    const now = Date.now();
+    mockProvider.failWith = new ProviderRateLimitedError('mock-streamer', now + 120_000, now);
+
+    const res = await app.request(`http://x/sessions/${sessionId}/search?q=abc`);
+
+    expect(res.status).toBe(503);
+    expect(res.headers.get('retry-after')).toBe('120');
+    expect(await res.json()).toEqual({
+      error: 'provider_rate_limited',
+      providerId: 'mock-streamer',
+      retryAfterSec: 120,
+    });
+  });
+
+  it('maps a raw provider 429 the same way', async () => {
+    const { app, sessionId, mockProvider } = buildHarness();
+    mockProvider.failWith = Object.assign(new Error('Spotify Web API returned 429'), {
+      status: 429,
+      retryAfterSec: 56029,
+    });
+
+    const res = await app.request(`http://x/sessions/${sessionId}/search?q=abc`);
+
+    expect(res.status).toBe(503);
+    expect(await res.json()).toMatchObject({
+      error: 'provider_rate_limited',
+      retryAfterSec: 56029,
+    });
+  });
+});
+
+describe('GET /sessions/:id/search — result cache', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('serves a repeated query from cache (case + whitespace insensitive)', async () => {
+    const { app, sessionId, mockProvider } = buildHarness();
+
+    const a = await app.request(`http://x/sessions/${sessionId}/search?q=Velvet%20Leash`);
+    const b = await app.request(`http://x/sessions/${sessionId}/search?q=%20velvet%20leash%20`);
+
+    expect(a.status).toBe(200);
+    expect(await b.json()).toEqual(await a.json());
+    expect(mockProvider.calls).toBe(1);
+  });
+
+  it('collapses concurrent identical queries into one provider call', async () => {
+    const { app, sessionId, mockProvider } = buildHarness();
+
+    await Promise.all([
+      app.request(`http://x/sessions/${sessionId}/search?q=ashes`),
+      app.request(`http://x/sessions/${sessionId}/search?q=ashes`),
+      app.request(`http://x/sessions/${sessionId}/search?q=ashes`),
+    ]);
+
+    expect(mockProvider.calls).toBe(1);
+  });
+
+  it('asks the provider again once the cached entry is a minute old', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const { app, sessionId, mockProvider } = buildHarness();
+
+    await app.request(`http://x/sessions/${sessionId}/search?q=ashes`);
+    vi.setSystemTime(Date.now() + 60_001);
+    await app.request(`http://x/sessions/${sessionId}/search?q=ashes`);
+
+    expect(mockProvider.calls).toBe(2);
+  });
+
+  it('does not cache failures', async () => {
+    const { app, sessionId, mockProvider } = buildHarness();
+    mockProvider.failWith = new Error('boom');
+    const failed = await app.request(`http://x/sessions/${sessionId}/search?q=ashes`);
+    expect(failed.status).toBe(502);
+
+    mockProvider.failWith = null;
+    const ok = await app.request(`http://x/sessions/${sessionId}/search?q=ashes`);
+
+    expect(ok.status).toBe(200);
+    expect(mockProvider.calls).toBe(2);
   });
 });
