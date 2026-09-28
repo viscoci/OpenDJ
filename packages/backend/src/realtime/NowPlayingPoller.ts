@@ -33,7 +33,15 @@
  *   - `ProviderConnectionNotFoundError` / `InvalidProviderCredentialsError`
  *     → log once, stop polling this session. The host's next reconnect will
  *     trigger a fresh `start`.
- *   - 429 (Spotify rate limit) → exponential backoff capped at `maxBackoffMs`.
+ *   - 429 (Spotify rate limit, or the shared ProviderCooldowns refusing the
+ *     call) → wait out the Retry-After window and publish
+ *     `provider.status_updated` so clients can say Spotify is throttling us.
+ *     The first successful tick afterwards publishes `{ state: 'ok' }`.
+ *
+ * Call budget: Spotify quotas are per app, so every tick counts. The
+ * provider queue is re-read only when the track changes, every
+ * `queueRefreshMs`, or while a fresh request is waiting to sync; and the
+ * cadence drops to `idleIntervalMs` while nothing is playing.
  *   - Other errors → log + continue at the base interval.
  */
 
@@ -48,6 +56,7 @@ import {
   type Track,
 } from '@opendj/core';
 import type { LyricsDocument } from '@opendj/lyrics';
+import type { ProviderStatus } from '@opendj/realtime';
 import { createPlaybackClockSample } from '@opendj/sync';
 import {
   ProviderConnectionNotFoundError,
@@ -56,9 +65,11 @@ import {
 import type { RealtimeRoomManager } from './RoomRegistryImpl.js';
 import type {
   ProviderConnectionRepository,
+  QueueItemRecord,
   QueueItemRepository,
   SessionRepository,
 } from '../repositories/types.js';
+import type { RateLimitedEvent } from '../providers/streaming/ProviderCooldowns.js';
 
 export interface NowPlayingPollerDeps {
   sessions: SessionRepository;
@@ -117,8 +128,20 @@ export interface NowPlayingPollerDeps {
 }
 
 export interface NowPlayingPollerOptions {
-  /** Base poll interval. Default 5000 ms. */
+  /** Base poll interval while a track is playing. Default 5000 ms. */
   intervalMs?: number;
+  /**
+   * Poll interval while nothing is playing (stopped or paused, outside a
+   * karaoke hold). Default 15000 ms — a TV page left open overnight
+   * shouldn't burn the Spotify quota.
+   */
+  idleIntervalMs?: number;
+  /**
+   * Re-read the provider queue at least this often while the track is
+   * unchanged. Track changes and fresh requests force an earlier read.
+   * Default 30000 ms.
+   */
+  queueRefreshMs?: number;
   /**
    * Don't republish a `now_playing.updated` for the SAME track unless server
    * progress drifted from local prediction by more than this. Default 4000 ms.
@@ -183,6 +206,10 @@ interface PerSession {
    * this changes — the same track playing on doesn't re-query claims.
    */
   lastKaraokeUri: string | null;
+  /** Wall clock of the last successful provider-queue read; null = never. */
+  lastQueueReadAtMs: number | null;
+  /** Now-playing URI at the last provider-queue read (change forces a re-read). */
+  lastQueueTrackUri: string | null;
 }
 
 const SPOTIFY_PROVIDER_ID = 'spotify';
@@ -195,8 +222,17 @@ const SPOTIFY_PROVIDER_ID = 'spotify';
  */
 const SKIP_SETTLE_MS = 1500;
 
+/**
+ * Approved items younger than this are still "in flight" to the provider:
+ * the retry pump may re-push them, and anything older gets a terminal
+ * status from reconciliation.
+ */
+const RECONCILE_GRACE_MS = 30_000;
+
 export class NowPlayingPoller {
   private readonly intervalMs: number;
+  private readonly idleIntervalMs: number;
+  private readonly queueRefreshMs: number;
   private readonly driftThresholdMs: number;
   private readonly idleGraceMs: number;
   private readonly maxBackoffMs: number;
@@ -208,7 +244,9 @@ export class NowPlayingPoller {
     private readonly deps: NowPlayingPollerDeps,
     options: NowPlayingPollerOptions = {},
   ) {
-    this.intervalMs = options.intervalMs ?? 2500;
+    this.intervalMs = options.intervalMs ?? 5000;
+    this.idleIntervalMs = options.idleIntervalMs ?? 15_000;
+    this.queueRefreshMs = options.queueRefreshMs ?? 30_000;
     this.driftThresholdMs = options.driftThresholdMs ?? 4000;
     this.idleGraceMs = options.idleGraceMs ?? 30_000;
     this.maxBackoffMs = options.maxBackoffMs ?? 60_000;
@@ -235,6 +273,8 @@ export class NowPlayingPoller {
         lastPushedAt: new Map(),
         lastLyricsUri: null,
         lastKaraokeUri: null,
+        lastQueueReadAtMs: null,
+        lastQueueTrackUri: null,
       };
       this.state.set(sessionId, entry);
     }
@@ -264,6 +304,24 @@ export class NowPlayingPoller {
   stopAll(): void {
     for (const sessionId of this.state.keys()) {
       this.tearDown(sessionId);
+    }
+  }
+
+  /**
+   * Fan a freshly opened provider cooldown out to every polled session on
+   * that account, so clients learn about it immediately rather than on
+   * their next tick. Wired to `ProviderCooldowns.onRateLimited`.
+   */
+  async notifyRateLimited(event: RateLimitedEvent): Promise<void> {
+    const status: ProviderStatus = {
+      state: 'rate_limited',
+      providerId: event.providerId,
+      untilEpochMs: event.untilEpochMs,
+    };
+    for (const [sessionId, entry] of this.state) {
+      if (entry.cachedAccountId !== event.accountId) continue;
+      if (entry.cachedProviderId !== event.providerId) continue;
+      await this.publishStatus(sessionId, status);
     }
   }
 
@@ -364,6 +422,11 @@ export class NowPlayingPoller {
       }
       const snapshot = await room.getSnapshot();
       const prev = snapshot.nowPlaying;
+
+      // The provider answered, so any rate-limit window is over.
+      if (snapshot.providerStatus?.state === 'rate_limited') {
+        await room.publish({ type: 'provider.status_updated', status: { state: 'ok' } });
+      }
 
       if (this.shouldPublish(prev, next)) {
         await room.publish({ type: 'now_playing.updated', track: next });
@@ -472,14 +535,19 @@ export class NowPlayingPoller {
       }
 
       // Provider queue (e.g. Spotify queue) — fetch + diff alongside
-      // now-playing. Costs one extra Spotify API call per tick when the
-      // provider supports it; same auth as getNowPlaying so it shares
-      // the 401/429 paths below.
+      // now-playing, but only when it can have changed in a way we care
+      // about (see `shouldReadQueue`). Otherwise reconcile against the last
+      // known queue from the snapshot.
+      const items = this.deps.queueItems
+        ? await this.deps.queueItems.findAllForSession(sessionId)
+        : null;
       let providerQueue: ReadonlyArray<Track> = snapshot.providerQueue;
-      if (supportsQueueRead(provider)) {
+      if (supportsQueueRead(provider) && this.shouldReadQueue(entry, next, items)) {
         try {
           const queue = await provider.getQueue();
           providerQueue = queue;
+          entry.lastQueueReadAtMs = this.nowEpochMs();
+          entry.lastQueueTrackUri = next?.uri ?? null;
           if (this.providerQueueChanged(snapshot.providerQueue, queue)) {
             await room.publish({ type: 'provider_queue.updated', tracks: queue });
           }
@@ -500,8 +568,8 @@ export class NowPlayingPoller {
       // counting against the per-guest cap. 30s grace window prevents
       // racing newly-pushed items that haven't yet shown up on the next
       // queue read.
-      if (this.deps.queueItems) {
-        const reconcileSkipped = await this.reconcileQueue(sessionId, next, providerQueue);
+      if (items) {
+        const reconcileSkipped = await this.reconcileQueue(sessionId, next, providerQueue, items);
         if (reconcileSkipped) skipDispatched = true;
       }
 
@@ -511,6 +579,11 @@ export class NowPlayingPoller {
       // still playing.
       if (skipDispatched) {
         nextDelayMs = 750;
+      } else if ((next === null || !next.isPlaying) && !snapshot.karaoke?.paused) {
+        // Nothing playing: slow down. A karaoke hold keeps the base
+        // cadence so host-resume detection + the auto-resume deadline
+        // stay responsive.
+        nextDelayMs = this.idleIntervalMs;
       }
 
       // Successful tick clears any backoff.
@@ -536,6 +609,13 @@ export class NowPlayingPoller {
           typeof retryAfterSec === 'number' && retryAfterSec > 0 ? retryAfterSec * 1000 + 1000 : 0;
         entry.backoffMs = nextBackoff;
         nextDelayMs = Math.max(nextBackoff, retryAfterMs);
+        const untilEpochMs =
+          (err as { untilEpochMs?: number })?.untilEpochMs ?? this.nowEpochMs() + nextDelayMs;
+        await this.publishStatus(sessionId, {
+          state: 'rate_limited',
+          providerId: entry.cachedProviderId ?? SPOTIFY_PROVIDER_ID,
+          untilEpochMs,
+        });
         this.logger.warn('[NowPlayingPoller] 429 from provider, backing off', {
           sessionId,
           delayMs: nextDelayMs,
@@ -583,6 +663,42 @@ export class NowPlayingPoller {
   }
 
   /**
+   * Whether this tick needs a fresh provider-queue read. Each read is a
+   * Spotify call, so only read when the answer can matter: first tick,
+   * track changed (items rolled over), periodic refresh, or an approved
+   * request still inside the grace window (the retry pump must not
+   * re-push based on a stale queue — that duplicates tracks).
+   */
+  private shouldReadQueue(
+    entry: PerSession,
+    next: NowPlayingTrack | null,
+    items: ReadonlyArray<QueueItemRecord> | null,
+  ): boolean {
+    const now = this.nowEpochMs();
+    if (entry.lastQueueReadAtMs === null) return true;
+    if ((next?.uri ?? null) !== entry.lastQueueTrackUri) return true;
+    if (now - entry.lastQueueReadAtMs >= this.queueRefreshMs) return true;
+    return (
+      items?.some(
+        (item) => item.status === 'approved' && now - item.createdAt.getTime() < RECONCILE_GRACE_MS,
+      ) ?? false
+    );
+  }
+
+  /** Publish a provider-status change to the session's room (no-op if unchanged). */
+  private async publishStatus(sessionId: string, status: ProviderStatus): Promise<void> {
+    const room = this.deps.roomManager.forSession(sessionId);
+    if (!room) return;
+    try {
+      const current = (await room.getSnapshot()).providerStatus;
+      if (JSON.stringify(current) === JSON.stringify(status)) return;
+      await room.publish({ type: 'provider.status_updated', status });
+    } catch {
+      // Status is advisory — never let it break the poll loop.
+    }
+  }
+
+  /**
    * True iff the provider's queue ordering changed. Compares URIs in order
    * — anything else (length, content, position) reduces to a URI-list diff.
    * Exposed for tests.
@@ -614,9 +730,9 @@ export class NowPlayingPoller {
     sessionId: string,
     nowPlaying: NowPlayingTrack | null,
     providerQueue: ReadonlyArray<Track>,
+    items: ReadonlyArray<QueueItemRecord>,
   ): Promise<boolean> {
     const repo = this.deps.queueItems!;
-    const RECONCILE_GRACE_MS = 30_000;
     /**
      * Spotify's queue-read endpoint lags the queue-write by several
      * seconds: a track posted to /me/player/queue might not surface
@@ -630,8 +746,6 @@ export class NowPlayingPoller {
     let skipDispatched = false;
     const sessionState = this.state.get(sessionId);
     const lastPushedAt = sessionState?.lastPushedAt;
-
-    const items = await repo.findAllForSession(sessionId);
 
     // Resolve the provider once for the retry pump (only if we'll need it).
     let providerForRetry: IStreamingProvider | null = null;

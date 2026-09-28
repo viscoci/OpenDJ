@@ -15,6 +15,10 @@ import {
   StreamingRouter,
   UnknownProviderError,
 } from '../../../src/providers/streaming/StreamingRouter.js';
+import {
+  ProviderCooldowns,
+  ProviderRateLimitedError,
+} from '../../../src/providers/streaming/ProviderCooldowns.js';
 import type {
   ProviderContext,
   ProviderRegistry,
@@ -169,5 +173,52 @@ describe('StreamingRouter.switchProvider', () => {
     await expect(router.switchProvider('acc-1', 'stub', {})).rejects.toBeInstanceOf(
       InvalidProviderCredentialsError,
     );
+  });
+});
+
+describe('StreamingRouter rate-limit cooldowns', () => {
+  async function setupWithCooldowns() {
+    const providerConnections = new InMemoryProviderConnectionRepository();
+    const contexts: ProviderContext[] = [];
+    const registry: ProviderRegistry = {
+      stub: (ctx) => {
+        contexts.push(ctx);
+        return makeStubProvider();
+      },
+    };
+    const innerFetch = vi.fn(async () => new Response('{}', { status: 200 }));
+    const cooldowns = new ProviderCooldowns();
+    const router = new StreamingRouter({
+      providerConnections,
+      registry,
+      context: { fetch: innerFetch as unknown as typeof fetch },
+      cooldowns,
+    });
+    await providerConnections.upsert({
+      accountId: 'acct-1',
+      providerId: 'stub',
+      accessToken: 'tok',
+    });
+    return { router, contexts, innerFetch, cooldowns };
+  }
+
+  it('hands providers a fetch that fails fast while the account is cooling down', async () => {
+    const { router, contexts, innerFetch, cooldowns } = await setupWithCooldowns();
+    cooldowns.record('acct-1', 'stub', 60);
+
+    await router.getProvider('acct-1', 'stub');
+    const err = await contexts[0]!.fetch('https://example.test').catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(ProviderRateLimitedError);
+    expect(innerFetch).not.toHaveBeenCalled();
+  });
+
+  it('reports the open cooldown via rateLimitedUntil', async () => {
+    const { router, cooldowns } = await setupWithCooldowns();
+    expect(router.rateLimitedUntil('acct-1', 'stub')).toBeNull();
+
+    const until = cooldowns.record('acct-1', 'stub', 60);
+
+    expect(router.rateLimitedUntil('acct-1', 'stub')).toBe(until);
   });
 });

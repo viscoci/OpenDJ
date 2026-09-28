@@ -46,6 +46,7 @@ import { SpotifyProvider } from './providers/streaming/spotify/SpotifyProvider.j
 import { StreamingRouter } from './providers/streaming/StreamingRouter.js';
 import { QueueService, type RealtimeRoomRegistry } from './queue/QueueService.js';
 import { NowPlayingPoller } from './realtime/NowPlayingPoller.js';
+import { ProviderCooldowns } from './providers/streaming/ProviderCooldowns.js';
 import { RoomRegistryImpl, type RealtimeRoomManager } from './realtime/RoomRegistryImpl.js';
 import { createDrizzleRepositories } from './repositories/drizzle/index.js';
 import type { Repositories } from './repositories/types.js';
@@ -64,6 +65,8 @@ export interface AppDeps {
   karaokeService: KaraokeService;
   sessionAuditService: SessionAuditService;
   streamingRouter: StreamingRouter;
+  /** Shared per-account provider rate-limit cooldowns (see ProviderCooldowns). */
+  providerCooldowns: ProviderCooldowns;
   streamingProviderOAuthConfigs: StreamingProviderOAuthRegistry;
   lyricsLookupService: LyricsLookupService;
   abuseModerationService: AbuseModerationService;
@@ -181,9 +184,11 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
   const providerRegistry: ProviderRegistry =
     options.providerRegistry ??
     ({
-      spotify: () =>
+      // `ctx.fetch` (not the outer fetchImpl): the StreamingRouter hands each
+      // provider a cooldown-guarded fetch scoped to its account.
+      spotify: (ctx) =>
         new SpotifyProvider({
-          fetchImpl,
+          fetchImpl: ctx.fetch,
           // Forward the app-level Spotify Developer credentials so the
           // client can refresh the user's access token on 401 instead of
           // throwing. Falls back to no-refresh when SPOTIFY_* aren't set.
@@ -198,10 +203,12 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
       'apple-music': () => new AppleMusicProvider(),
     } as ProviderRegistry);
 
+  const providerCooldowns = new ProviderCooldowns();
   const streamingRouter = new StreamingRouter({
     providerConnections: repositories.providerConnections,
     registry: providerRegistry,
     context: { fetch: fetchImpl },
+    cooldowns: providerCooldowns,
   });
 
   const sessionAuditService = new SessionAuditService({
@@ -255,6 +262,12 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
       providerQueueRejections: queueService,
       lyricsLookup: lyricsLookupService,
       karaoke: karaokeService,
+    });
+    // Tell connected clients the moment any caller trips a provider rate
+    // limit, not just on the poller's next tick.
+    const poller = nowPlayingPoller;
+    providerCooldowns.onRateLimited((event) => {
+      void poller.notifyRateLimited(event);
     });
   }
 
@@ -326,6 +339,7 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
     karaokeService,
     sessionAuditService,
     streamingRouter,
+    providerCooldowns,
     streamingProviderOAuthConfigs:
       options.streamingProviderOAuthConfigs ?? defaultStreamingProviderOAuthConfigs,
     lyricsLookupService,

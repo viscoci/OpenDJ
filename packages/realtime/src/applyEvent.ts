@@ -237,6 +237,9 @@ export function applyEvent(snapshot: SessionSnapshot, event: SessionEvent): Sess
       // the snapshot's window — the cue stream itself is broadcast directly.
       return snapshot;
 
+    case 'provider.status_updated':
+      return { ...snapshot, providerStatus: event.status };
+
     case 'session.ended':
       // Snapshot kept as-is; consumers detect end via the event itself.
       return snapshot;

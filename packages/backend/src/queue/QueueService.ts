@@ -42,11 +42,29 @@ import {
 
 export class QueueServiceError extends Error {
   readonly code: string;
-  constructor(code: string, message: string) {
+  /** Set on `provider_rate_limited`: seconds until the provider accepts calls again. */
+  readonly retryAfterSec: number | null;
+  constructor(code: string, message: string, options: { retryAfterSec?: number | null } = {}) {
     super(message);
     this.name = 'QueueServiceError';
     this.code = code;
+    this.retryAfterSec = options.retryAfterSec ?? null;
   }
+}
+
+/** Outcome of mirroring a track onto the host's provider queue. */
+type ProviderPushResult =
+  | { kind: 'pushed' }
+  | { kind: 'skipped' }
+  | { kind: 'failed' }
+  | { kind: 'rate_limited'; retryAfterSec: number | null };
+
+function rateLimitedError(retryAfterSec: number | null): QueueServiceError {
+  return new QueueServiceError(
+    'provider_rate_limited',
+    'The music provider is rate limiting this session; the request was not added.',
+    { retryAfterSec },
+  );
 }
 
 export interface QueueServiceDeps {
@@ -184,6 +202,12 @@ export class QueueService {
     }
 
     const initialStatus = session.moderationEnabled ? 'pending' : 'approved';
+    // An auto-approved request goes straight to the provider. If the
+    // provider is rate limiting the account, refuse now rather than accept
+    // a song that can't reach the host's player (and burn the guest's cap).
+    if (initialStatus === 'approved') {
+      await this.assertProviderNotRateLimited(session.accountId, now);
+    }
     const created = await this.deps.queueItems.create({
       sessionId: input.sessionId,
       guestId: guest.id,
@@ -226,7 +250,17 @@ export class QueueService {
         type: 'queue.item_approved',
         itemId: created.id,
       });
-      await this.pushToProviderQueue(session.accountId, input.track);
+      const pushed = await this.pushToProviderQueue(session.accountId, input.track);
+      if (pushed.kind === 'rate_limited') {
+        // The push tripped the provider's rate limit: roll the request back
+        // so the guest gets a real error and keeps their slot.
+        await this.deps.queueItems.delete(created.id);
+        await this.publishToRoom(input.sessionId, {
+          type: 'queue.item_removed',
+          itemId: created.id,
+        });
+        throw rateLimitedError(pushed.retryAfterSec);
+      }
     }
 
     void this.deps.audit?.record({
@@ -263,6 +297,10 @@ export class QueueService {
     if (!item) throw new QueueServiceError('item_not_found', 'Unknown queue item.');
     if (item.sessionId !== input.sessionId) {
       throw new QueueServiceError('item_session_mismatch', 'Item is not in this session.');
+    }
+    if (input.decision === 'approved') {
+      const session = await this.deps.sessions.findById(input.sessionId);
+      if (session) await this.assertProviderNotRateLimited(session.accountId, now);
     }
     const updatedDomain = applyModerationDecision(
       recordToDomain(item),
@@ -916,15 +954,31 @@ export class QueueService {
   }
 
   /**
-   * Push a track into the host's connected streaming-provider queue (e.g.
-   * Spotify queue) when the integration is wired. Failure is non-fatal —
-   * the OpenDJ queue item already exists, the host can still see it, and
-   * the next NowPlayingPoller tick will reconcile.
+   * Throw `provider_rate_limited` when the account's connected provider is
+   * inside a rate-limit cooldown (see ProviderCooldowns). No-op when the
+   * streaming integration isn't wired or nothing is connected.
    */
-  private async pushToProviderQueue(accountId: string, track: Track): Promise<void> {
+  private async assertProviderNotRateLimited(accountId: string, nowEpochMs: number): Promise<void> {
+    if (!this.deps.streamingRouter || !this.deps.providerConnections) return;
+    const conn = (await this.deps.providerConnections.findAllForAccount(accountId))[0];
+    if (!conn) return;
+    const until = this.deps.streamingRouter.rateLimitedUntil(accountId, conn.providerId);
+    if (until === null) return;
+    throw rateLimitedError(Math.max(1, Math.ceil((until - nowEpochMs) / 1000)));
+  }
+
+  /**
+   * Push a track into the host's connected streaming-provider queue (e.g.
+   * Spotify queue) when the integration is wired. Most failures are
+   * non-fatal — the OpenDJ queue item already exists, the host can still
+   * see it, and the NowPlayingPoller's retry pump re-pushes it. A rate
+   * limit is reported back (`rate_limited`) because nothing will reach the
+   * provider until the window closes.
+   */
+  private async pushToProviderQueue(accountId: string, track: Track): Promise<ProviderPushResult> {
     if (!this.deps.streamingRouter || !this.deps.providerConnections) {
       console.warn('[QueueService] pushToProviderQueue skipped: streaming router not wired');
-      return;
+      return { kind: 'skipped' };
     }
     const conns = await this.deps.providerConnections.findAllForAccount(accountId);
     const conn = conns[0];
@@ -932,7 +986,7 @@ export class QueueService {
       console.warn(
         `[QueueService] pushToProviderQueue skipped: no provider connection for account ${accountId}`,
       );
-      return;
+      return { kind: 'skipped' };
     }
     try {
       const provider = await this.deps.streamingRouter.getProvider(accountId, conn.providerId);
@@ -940,13 +994,14 @@ export class QueueService {
         console.warn(
           `[QueueService] pushToProviderQueue skipped: provider ${conn.providerId} does not support queueTrack`,
         );
-        return;
+        return { kind: 'skipped' };
       }
       await provider.queueTrack(track);
 
       console.log(
         `[QueueService] pushed "${track.name}" to ${conn.providerId} queue for account ${accountId}`,
       );
+      return { kind: 'pushed' };
     } catch (err) {
       // Swallow — host UI will still show the OpenDJ row, and the next
       // poller tick will reflect the truth on the provider side. Common
@@ -958,6 +1013,11 @@ export class QueueService {
       console.warn(
         `[QueueService] pushToProviderQueue failed: ${e.message}${e.status ? ` [HTTP ${e.status}]` : ''}${e.code ? ` [${e.code}]` : ''}`,
       );
+      if (e.status === 429) {
+        const retryAfterSec = (err as { retryAfterSec?: number | null }).retryAfterSec ?? null;
+        return { kind: 'rate_limited', retryAfterSec };
+      }
+      return { kind: 'failed' };
     }
   }
 }

@@ -2,6 +2,7 @@ import type { NowPlayingTrack, Track } from '@opendj/core';
 import type { LyricsDocument, LyricsFeedbackKind } from '@opendj/lyrics';
 import type { PlaybackClockSample, PredictedPlaybackPosition, SyncCue } from '@opendj/sync';
 import type { KaraokeClaimSummary, QueueItemSummary } from './queue-summary.js';
+import type { ProviderStatus } from './snapshot.js';
 
 /**
  * Discriminated union of every realtime event broadcast by a SessionRoom /
@@ -58,6 +59,9 @@ export type SessionEvent =
   | { type: 'karaoke.spotlight'; itemId: string | null; claims: KaraokeClaimSummary[] }
   | { type: 'karaoke.paused'; itemId: string; untilEpochMs: number }
   | { type: 'karaoke.resumed'; itemId: string }
+  // Streaming-provider health (rate limiting). Folded into
+  // `snapshot.providerStatus` so late joiners see it too.
+  | { type: 'provider.status_updated'; status: ProviderStatus }
   // Guest slots
   | { type: 'guest_slots.updated'; activeCount: number; queuedCount: number }
   // Playback clock + correction (sync layer)

@@ -19,6 +19,7 @@ describe('createEmptySnapshot', () => {
       activeGuestCount: 0,
       queuedGuestCount: 0,
       karaoke: { spotlightItemId: null, paused: false, pausedUntilEpochMs: null },
+      providerStatus: { state: 'ok' },
       snapshotAtEpochMs: 1_700_000_000_000,
     });
   });
