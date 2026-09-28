@@ -1,5 +1,13 @@
 # @opendj/frontend-template
 
+## 0.2.5
+
+### Patch Changes
+
+- Updated dependencies [[`b77ef09`](https://github.com/viscoci/OpenDJ/commit/b77ef09a496f5b1637b0fd375225648946cd0c60)]:
+  - @opendj/realtime@0.4.0
+  - @opendj/frontend@0.5.2
+
 ## 0.2.4
 
 ### Patch Changes
