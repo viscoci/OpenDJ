@@ -55,3 +55,18 @@ describe('createDeps — shared Spotify rate-limit cooldown', () => {
     expect(deps.streamingRouter.rateLimitedUntil('acct-1', 'spotify')).not.toBeNull();
   });
 });
+
+describe('createDeps — rate-limit notifications', () => {
+  it('tells the NowPlayingPoller whenever a provider cooldown opens', () => {
+    const deps = createDeps({ config: fakeConfig(), repositories: createInMemoryRepositories() });
+    const notify = vi.spyOn(deps.nowPlayingPoller!, 'notifyRateLimited').mockResolvedValue();
+
+    const until = deps.providerCooldowns.record('acct-1', 'spotify', 60);
+
+    expect(notify).toHaveBeenCalledWith({
+      accountId: 'acct-1',
+      providerId: 'spotify',
+      untilEpochMs: until,
+    });
+  });
+});

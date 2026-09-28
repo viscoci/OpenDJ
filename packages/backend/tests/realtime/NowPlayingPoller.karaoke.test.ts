@@ -387,7 +387,9 @@ describe('NowPlayingPoller karaoke wiring', () => {
     s.control.setNowPlaying(null); // device stopped
     await vi.advanceTimersByTimeAsync(5000);
     s.control.setNowPlaying(track('spotify:track:aaa'));
-    await vi.advanceTimersByTimeAsync(5000);
+    // Nothing was playing on the last tick, so the poller is on its idle
+    // cadence (idleIntervalMs, default 15s).
+    await vi.advanceTimersByTimeAsync(15_000);
 
     expect(s.eventsOfType('karaoke.spotlight')).toEqual([
       expect.objectContaining({ itemId: item.id }),

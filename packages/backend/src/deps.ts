@@ -263,6 +263,12 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
       lyricsLookup: lyricsLookupService,
       karaoke: karaokeService,
     });
+    // Tell connected clients the moment any caller trips a provider rate
+    // limit, not just on the poller's next tick.
+    const poller = nowPlayingPoller;
+    providerCooldowns.onRateLimited((event) => {
+      void poller.notifyRateLimited(event);
+    });
   }
 
   const abuseModerationService = new AbuseModerationService({
