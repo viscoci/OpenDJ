@@ -55,14 +55,14 @@
   },
   "dependencies": {
     "@opendj/core": "workspace:*",
-    "drizzle-orm": "^0.36.0",
+    "drizzle-orm": "^0.45.3",
     "postgres": "^3.4.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
     "cross-env": "^7.0.3",
-    "drizzle-kit": "^0.30.0",
-    "tsx": "^4.19.0",
+    "drizzle-kit": "^0.31.11",
+    "tsx": "^4.23.15",
     "typescript": "^5.7.0",
     "vitest": "^2.1.0"
   },
