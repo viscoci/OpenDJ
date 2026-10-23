@@ -58,6 +58,12 @@ const ConfigSchema = v.object({
   ),
   searchSlowDownDebounceMs: v.optional(PositiveInt),
   searchSlowDownTtlSec: v.optional(PositiveInt),
+  /**
+   * Cap on a provider rate-limit cooldown persisted to `provider_connections`
+   * (seconds), so a bogus `Retry-After` can't pause the provider for days.
+   * Optional for hand-built configs; defaults to `DEFAULT_PROVIDER_COOLDOWN_MAX_SEC`.
+   */
+  providerCooldownMaxSec: v.optional(PositiveInt),
 });
 
 export type Config = v.InferOutput<typeof ConfigSchema>;
@@ -88,6 +94,9 @@ export const DEFAULT_SEARCH_PACING: Readonly<SearchPacingConfig> = Object.freeze
   searchSlowDownDebounceMs: 1_200,
   searchSlowDownTtlSec: 30,
 });
+
+/** Default cap on a persisted provider cooldown: 24h. */
+export const DEFAULT_PROVIDER_COOLDOWN_MAX_SEC = 86_400;
 
 /** Search pacing from `config`, with defaults for any field it omits. */
 export function resolveSearchPacing(config: Partial<SearchPacingConfig>): SearchPacingConfig {
@@ -165,6 +174,10 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
     searchSlowDownTtlSec: parseInteger(
       env['SEARCH_SLOWDOWN_TTL_SEC'],
       DEFAULT_SEARCH_PACING.searchSlowDownTtlSec,
+    ),
+    providerCooldownMaxSec: parseInteger(
+      env['PROVIDER_COOLDOWN_MAX_SEC'],
+      DEFAULT_PROVIDER_COOLDOWN_MAX_SEC,
     ),
   };
   const valkey = env['VALKEY_URL'];

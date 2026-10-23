@@ -82,6 +82,12 @@ export class StreamingRouter {
       throw new InvalidProviderCredentialsError(providerId, 'No access token stored.');
     }
 
+    // Seed a cooldown persisted before a restart (KTD6) before building the
+    // guarded fetch, so this provider can't call out inside the window.
+    // Every guarded fetch is built here (switchProvider delegates to us).
+    if (this.deps.cooldowns && connection.rateLimitedUntil) {
+      this.deps.cooldowns.seed(accountId, providerId, connection.rateLimitedUntil.getTime());
+    }
     const context: ProviderContext = this.deps.cooldowns
       ? {
           ...this.deps.context,

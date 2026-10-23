@@ -25,7 +25,12 @@ import {
   createDefaultLoginProviderRegistry,
   type LoginProviderRegistry,
 } from './auth/loginProviders/index.js';
-import { resolveSearchPacing, type Config, type SearchPacingConfig } from './config.js';
+import {
+  DEFAULT_PROVIDER_COOLDOWN_MAX_SEC,
+  resolveSearchPacing,
+  type Config,
+  type SearchPacingConfig,
+} from './config.js';
 import {
   ConsoleEmailAdapter,
   EmailVerificationService,
@@ -221,6 +226,34 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
     } as ProviderRegistry);
 
   const providerCooldowns = new ProviderCooldowns();
+  // Persist every opened/extended cooldown so a restart mid-ban doesn't
+  // resume calling the provider (KTD6). Fire-and-forget: the provider call
+  // path never waits on, or fails because of, this write. The in-memory
+  // cooldown keeps the provider's full window; only the stored copy is
+  // clamped, so a bogus Retry-After can't pause the provider for days.
+  const cooldownMaxMs =
+    (options.config.providerCooldownMaxSec ?? DEFAULT_PROVIDER_COOLDOWN_MAX_SEC) * 1000;
+  const providerConnectionsRepo = repositories.providerConnections;
+  providerCooldowns.onRateLimited((event) => {
+    const until = new Date(Math.min(event.untilEpochMs, Date.now() + cooldownMaxMs));
+    void providerConnectionsRepo
+      .extendRateLimitedUntil(event.accountId, event.providerId, until)
+      .then((updated) => {
+        if (!updated) {
+          console.warn(
+            '[provider-cooldown] no connection row to persist the cooldown on;',
+            `provider=${event.providerId} account=${event.accountId}`,
+          );
+        }
+      })
+      .catch((err: unknown) => {
+        console.error(
+          '[provider-cooldown] failed to persist the cooldown;',
+          `provider=${event.providerId} account=${event.accountId}`,
+          err,
+        );
+      });
+  });
   const streamingRouter = new StreamingRouter({
     providerConnections: repositories.providerConnections,
     registry: providerRegistry,

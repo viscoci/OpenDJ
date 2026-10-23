@@ -18,6 +18,7 @@ function mapConnection(
     expiresAt: row.expiresAt,
     scopes: row.scopes,
     tokenType: row.tokenType,
+    rateLimitedUntil: row.rateLimitedUntil,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -115,6 +116,29 @@ export class DrizzleProviderConnectionRepository implements ProviderConnectionRe
       .update(schema.providerConnections)
       .set(set)
       .where(eq(schema.providerConnections.id, input.id));
+  }
+
+  async extendRateLimitedUntil(
+    accountId: string,
+    providerId: string,
+    until: Date,
+  ): Promise<boolean> {
+    // Update only (never inserts a token-less row); GREATEST so a late,
+    // shorter write can't cut a longer deadline. `updated_at` stays put:
+    // a cooldown is not a credential change. NULL is ignored by GREATEST.
+    const rows = await this.db
+      .update(schema.providerConnections)
+      .set({
+        rateLimitedUntil: sql`GREATEST(${schema.providerConnections.rateLimitedUntil}, ${until.toISOString()})`,
+      })
+      .where(
+        and(
+          eq(schema.providerConnections.accountId, accountId),
+          eq(schema.providerConnections.providerId, providerId),
+        ),
+      )
+      .returning({ id: schema.providerConnections.id });
+    return rows.length > 0;
   }
 
   async delete(id: string): Promise<void> {

@@ -610,6 +610,11 @@ export interface ProviderConnectionRecord {
   expiresAt: Date | null;
   scopes: string[] | null;
   tokenType: string | null;
+  /**
+   * End of the provider's persisted rate-limit cooldown (see
+   * `ProviderCooldowns`), or null. May be in the past: expired values stay.
+   */
+  rateLimitedUntil: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -674,6 +679,13 @@ export interface ProviderConnectionRepository {
     expiresAt?: Date | null;
     tokenType?: string | null;
   }): Promise<void>;
+  /**
+   * Raise the persisted rate-limit deadline to `until` — never lowers it
+   * (`GREATEST`), so out-of-order writes keep the later deadline. Update
+   * only: a missing row is not created and the call resolves `false`.
+   * Leaves `updatedAt` alone.
+   */
+  extendRateLimitedUntil(accountId: string, providerId: string, until: Date): Promise<boolean>;
   delete(id: string): Promise<void>;
 }
 

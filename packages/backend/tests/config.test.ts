@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   ConfigError,
+  DEFAULT_PROVIDER_COOLDOWN_MAX_SEC,
   DEFAULT_SEARCH_PACING,
   loadConfig,
   resolveSearchPacing,
@@ -176,6 +177,23 @@ describe('loadConfig', () => {
       ...DEFAULT_SEARCH_PACING,
       searchAnonLimit: 9,
     });
+  });
+
+  it('defaults the persisted provider cooldown cap to 24h', () => {
+    expect(DEFAULT_PROVIDER_COOLDOWN_MAX_SEC).toBe(86_400);
+    expect(loadConfig(minimalEnv).providerCooldownMaxSec).toBe(86_400);
+  });
+
+  it('parses PROVIDER_COOLDOWN_MAX_SEC and rejects non-positive values', () => {
+    expect(
+      loadConfig({ ...minimalEnv, PROVIDER_COOLDOWN_MAX_SEC: '3600' }).providerCooldownMaxSec,
+    ).toBe(3600);
+    expect(
+      loadConfig({ ...minimalEnv, PROVIDER_COOLDOWN_MAX_SEC: 'soon' }).providerCooldownMaxSec,
+    ).toBe(86_400);
+    expect(() => loadConfig({ ...minimalEnv, PROVIDER_COOLDOWN_MAX_SEC: '0' })).toThrow(
+      ConfigError,
+    );
   });
 
   it('attaches VALKEY_URL when provided', () => {

@@ -32,6 +32,12 @@ export const providerConnections = pgTable(
     tokenType: text('token_type'),
     rawProfile: jsonb('raw_profile'),
     rawTokenResponse: jsonb('raw_token_response'),
+    /**
+     * End of the provider's open rate-limit cooldown for this connection
+     * (from its 429 `Retry-After`), so the backoff survives a restart. Only
+     * ever raised (`GREATEST`); expired values are left in place on purpose.
+     */
+    rateLimitedUntil: timestamp('rate_limited_until', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },

@@ -1,0 +1,1 @@
+ALTER TABLE "provider_connections" ADD COLUMN "rate_limited_until" timestamp with time zone;

@@ -556,6 +556,8 @@ export class InMemoryProviderConnectionRepository implements ProviderConnectionR
       expiresAt: input.expiresAt ?? existing?.expiresAt ?? null,
       scopes: input.scopes ?? existing?.scopes ?? null,
       tokenType: input.tokenType ?? existing?.tokenType ?? null,
+      // Never set by upsert: a reconnect keeps an open cooldown.
+      rateLimitedUntil: existing?.rateLimitedUntil ?? null,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     };
@@ -579,6 +581,19 @@ export class InMemoryProviderConnectionRepository implements ProviderConnectionR
       row.updatedAt = this.clock.now();
       return;
     }
+  }
+
+  async extendRateLimitedUntil(
+    accountId: string,
+    providerId: string,
+    until: Date,
+  ): Promise<boolean> {
+    const row = this.rows.get(`${accountId}:${providerId}`);
+    if (!row) return false;
+    if (row.rateLimitedUntil === null || row.rateLimitedUntil.getTime() < until.getTime()) {
+      row.rateLimitedUntil = new Date(until.getTime());
+    }
+    return true;
   }
 
   async delete(id: string): Promise<void> {

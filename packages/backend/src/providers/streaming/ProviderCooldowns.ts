@@ -17,14 +17,30 @@
  *     with `ProviderRateLimitedError` — no request reaches the provider,
  *     so the penalty window is never extended by our own retries.
  *
- * In-memory: a process restart forgets open cooldowns, which costs exactly
- * one rejected call before the provider re-announces its `Retry-After`.
+ * Persistence: the in-memory map is the hot path, but it is not the only
+ * copy. `createDeps` writes every opened/extended cooldown through to
+ * `provider_connections.rate_limited_until` (clamped, fire-and-forget), and
+ * `StreamingRouter.getProvider` `seed`s it back from the connection row it
+ * already loads. A restart mid-ban therefore never resumes calling the
+ * provider before the announced window ends. Expired deadlines are left in
+ * the table on purpose: they are harmless and need no cleanup job.
+ *
+ * Observability: `guardFetch` logs every 429 with the body's `error.reason`
+ * (read from a clone) and its `Retry-After`, and counts the calls that reach
+ * the provider per (provider, URL path) — logged as one summary line every
+ * `callSummaryIntervalMs` whenever anything was called.
  */
 
 import { OpenDjError } from '@opendj/core';
 
 /** Window used when a 429 arrives without a usable `Retry-After`. */
 const DEFAULT_RETRY_AFTER_SEC = 30;
+
+/** How often the per-endpoint call summary is logged. */
+const DEFAULT_CALL_SUMMARY_INTERVAL_MS = 30_000;
+
+/** Longest 429 body excerpt logged when it carries no JSON `error.reason`. */
+const MAX_LOGGED_BODY_CHARS = 200;
 
 /**
  * Thrown instead of making a provider call while the account is cooling
@@ -52,18 +68,37 @@ export interface RateLimitedEvent {
   untilEpochMs: number;
 }
 
+export interface ProviderCooldownsLogger {
+  log(...args: unknown[]): void;
+  warn(...args: unknown[]): void;
+}
+
 export interface ProviderCooldownsOptions {
   /** Injectable clock for tests. Default Date.now. */
   now?: () => number;
+  /** Where 429 lines and call summaries go. Default `console`. */
+  logger?: ProviderCooldownsLogger;
+  /**
+   * Interval of the per-endpoint call summary log. The timer starts on the
+   * first counted call and is unref'd. `0` disables the timer (counts are
+   * still kept; call `flushCallCounts()` yourself). Default 30s.
+   */
+  callSummaryIntervalMs?: number;
 }
 
 export class ProviderCooldowns {
   private readonly now: () => number;
   private readonly until = new Map<string, number>();
   private readonly listeners: Array<(event: RateLimitedEvent) => void> = [];
+  private readonly logger: ProviderCooldownsLogger;
+  private readonly callSummaryIntervalMs: number;
+  private readonly calls = new Map<string, number>();
+  private summaryTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(options: ProviderCooldownsOptions = {}) {
     this.now = options.now ?? Date.now;
+    this.logger = options.logger ?? console;
+    this.callSummaryIntervalMs = options.callSummaryIntervalMs ?? DEFAULT_CALL_SUMMARY_INTERVAL_MS;
   }
 
   /** End of the open cooldown for this account, or null when calls are allowed. */
@@ -100,6 +135,20 @@ export class ProviderCooldowns {
     return candidate;
   }
 
+  /**
+   * Load a deadline persisted before a restart
+   * (`provider_connections.rate_limited_until`). Keeps the later of the
+   * in-memory and stored deadlines, ignores deadlines already past, and does
+   * NOT notify `onRateLimited` listeners: the value came from storage, so
+   * writing it back or re-announcing it would only be noise.
+   */
+  seed(accountId: string, providerId: string, untilEpochMs: number): void {
+    if (!Number.isFinite(untilEpochMs) || untilEpochMs <= this.now()) return;
+    const existing = this.untilEpochMs(accountId, providerId);
+    if (existing !== null && existing >= untilEpochMs) return;
+    this.until.set(cooldownKey(accountId, providerId), untilEpochMs);
+  }
+
   /** Subscribe to cooldowns opening or being extended. */
   onRateLimited(listener: (event: RateLimitedEvent) => void): void {
     this.listeners.push(listener);
@@ -113,17 +162,116 @@ export class ProviderCooldowns {
     return async (input, init) => {
       const until = this.untilEpochMs(accountId, providerId);
       if (until !== null) throw new ProviderRateLimitedError(providerId, until, this.now());
+      const path = requestPath(input);
+      this.countCall(providerId, path);
       const response = await fetchImpl(input, init);
       if (response.status === 429) {
-        this.record(accountId, providerId, parseRetryAfterSec(response));
+        const retryAfterSec = parseRetryAfterSec(response);
+        this.record(accountId, providerId, retryAfterSec);
+        await this.log429(providerId, path, retryAfterSec, response);
       }
       return response;
     };
+  }
+
+  /** Calls that reached a provider since the last summary, keyed `"<provider> <path>"`. */
+  callCounts(): Record<string, number> {
+    return Object.fromEntries(this.calls);
+  }
+
+  /** Log the call summary as one line (when non-empty) and reset the counts. */
+  flushCallCounts(): void {
+    if (this.calls.size === 0) return;
+    const parts = [...this.calls.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([key, count]) => `${key}=${count}`);
+    this.calls.clear();
+    try {
+      this.logger.log(
+        '[provider-calls]',
+        `last ${this.callSummaryIntervalMs}ms:`,
+        parts.join(', '),
+      );
+    } catch {
+      // Logging must never break the provider call path.
+    }
+  }
+
+  /** Stop the summary timer (tests, shutdown). Counting continues. */
+  stop(): void {
+    if (this.summaryTimer !== null) {
+      clearInterval(this.summaryTimer);
+      this.summaryTimer = null;
+    }
+  }
+
+  private countCall(providerId: string, path: string): void {
+    const key = `${providerId} ${path}`;
+    this.calls.set(key, (this.calls.get(key) ?? 0) + 1);
+    if (this.summaryTimer === null && this.callSummaryIntervalMs > 0) {
+      const timer = setInterval(() => this.flushCallCounts(), this.callSummaryIntervalMs);
+      // Never hold the process (or a test run) open just to log counts.
+      (timer as { unref?: () => void }).unref?.();
+      this.summaryTimer = timer;
+    }
+  }
+
+  /**
+   * Log a 429 with the provider's `error.reason` (Spotify: e.g.
+   * QUOTA_EXCEEDED), read from a clone so the caller still gets an unread
+   * body. Never throws.
+   */
+  private async log429(
+    providerId: string,
+    path: string,
+    retryAfterSec: number | null,
+    response: Response,
+  ): Promise<void> {
+    let reason = '-';
+    try {
+      reason = extractReason(await response.clone().text());
+    } catch {
+      // Unreadable or uncloneable body: log what we have.
+    }
+    try {
+      this.logger.warn(
+        '[provider-429]',
+        providerId,
+        path,
+        `retry-after=${retryAfterSec ?? '-'}`,
+        `reason=${reason}`,
+      );
+    } catch {
+      // Logging must never break the provider call path.
+    }
   }
 }
 
 function cooldownKey(accountId: string, providerId: string): string {
   return `${accountId}\u0000${providerId}`;
+}
+
+/** URL path without query or hash, for per-endpoint counts and logs. */
+function requestPath(input: RequestInfo | URL): string {
+  try {
+    const raw = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    return new URL(raw).pathname;
+  } catch {
+    return '<unknown>';
+  }
+}
+
+/** `error.reason` from a Spotify-style error body, else a short quoted excerpt. */
+function extractReason(text: string): string {
+  if (!text) return '-';
+  try {
+    const parsed = JSON.parse(text) as { error?: { reason?: unknown } } | null;
+    const reason = parsed?.error?.reason;
+    if (typeof reason === 'string' && reason !== '') return reason;
+  } catch {
+    // Not JSON: fall through to the excerpt.
+  }
+  return JSON.stringify(text.slice(0, MAX_LOGGED_BODY_CHARS));
 }
 
 function parseRetryAfterSec(response: Response): number | null {
