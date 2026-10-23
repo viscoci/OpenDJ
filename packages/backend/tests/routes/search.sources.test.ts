@@ -64,6 +64,7 @@ function buildHarness(
   opts: {
     order?: SearchSourceId[];
     deezer?: SourceTrack[] | 'unavailable';
+    sonovault?: SourceTrack[] | 'unavailable';
     pacing?: Partial<SearchPacingConfig>;
   } = {},
 ) {
@@ -110,6 +111,9 @@ function buildHarness(
   let deezerAnswer: SourceTrack[] | 'unavailable' = opts.deezer ?? DEEZER_TRACKS;
   const deezerSearch = vi.fn<SearchSource['search']>(async () => deezerAnswer);
   const deezer: SearchSource = { id: 'deezer', search: deezerSearch };
+  const sonovaultAnswer: SourceTrack[] | 'unavailable' = opts.sonovault ?? 'unavailable';
+  const sonovaultSearch = vi.fn<SearchSource['search']>(async () => sonovaultAnswer);
+  const sonovault: SearchSource = { id: 'sonovault', search: sonovaultSearch };
 
   const sessionId = 'sess-src-1';
   const accountId = 'acc-src-1';
@@ -150,7 +154,7 @@ function buildHarness(
       trackCatalog: catalog,
       jitterMs: () => 0,
       ...(opts.order && { searchSources: opts.order }),
-      externalSearchSources: { deezer },
+      externalSearchSources: { deezer, sonovault },
     }),
   );
 
@@ -179,6 +183,7 @@ function buildHarness(
     catalog,
     providerSearch,
     deezerSearch,
+    sonovaultSearch,
     setDeezer: (answer: SourceTrack[] | 'unavailable') => {
       deezerAnswer = answer;
     },
@@ -332,6 +337,44 @@ describe('GET /sessions/:id/search — search sources', () => {
       providerId: 'mock-streamer',
       source: 'external',
     });
+  });
+
+  it('answers from sonovault as external when deezer is unavailable and the catalog is empty', async () => {
+    const sonovaultTracks: SourceTrack[] = [{ ...DEEZER_TRACKS[0]!, albumArtUrl: null }];
+    const { search, catalog, deezerSearch, sonovaultSearch, providerSearch } = buildHarness({
+      order: ['deezer', 'catalog', 'sonovault', 'provider'],
+      deezer: 'unavailable',
+      sonovault: sonovaultTracks,
+    });
+
+    const res = await search('Daft Punk - One More Time');
+    await catalog.whenIdle();
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      results: sonovaultTracks,
+      providerId: 'mock-streamer',
+      source: 'external',
+    });
+    expect(deezerSearch).toHaveBeenCalledTimes(1);
+    expect(sonovaultSearch).toHaveBeenCalledTimes(1);
+    expect(sonovaultSearch.mock.calls[0]![0]).toBe('Daft Punk - One More Time');
+    expect(providerSearch).not.toHaveBeenCalled();
+    expect(await catalog.search('mock-streamer', 'daft', 5)).toMatchObject([
+      { trackUri: 'opendj:isrc:GBDUW0000053', isrc: 'GBDUW0000053' },
+    ]);
+  });
+
+  it('moves past a skipping sonovault to the provider', async () => {
+    const { search, sonovaultSearch, providerSearch } = buildHarness({
+      order: ['catalog', 'sonovault', 'provider'],
+    });
+
+    const res = await search('one more');
+
+    expect(((await res.json()) as { source: string }).source).toBe('provider');
+    expect(sonovaultSearch).toHaveBeenCalledTimes(1);
+    expect(providerSearch).toHaveBeenCalledTimes(1);
   });
 
   it('refuses with 503 search_unavailable when no source could be asked', async () => {

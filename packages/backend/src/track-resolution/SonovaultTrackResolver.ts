@@ -13,7 +13,11 @@
  * provider's scheme in `@opendj/core`, so a provider without a known scheme
  * never resolves.
  *
- * Own limiter (scope `sonovault`, one deployment-wide key): 18 calls/min.
+ * Limiter (scope `sonovault`, one deployment-wide key): 18 calls/min. When
+ * guest search also asks Sonovault (`SEARCH_SOURCES` lists `sonovault`), deps
+ * builds one `createSonovaultLimiter()` and hands it to both, so the two never
+ * exceed the API's budget together; search keeps a reserve free for
+ * resolution (see `SonovaultSearchSource`).
  * Answers are cached per ISRC, links for 24h and misses (404, no links) for
  * 10 min. A spent limiter, timeout (4s), network failure, or other HTTP error
  * is a miss that isn't cached.
@@ -24,10 +28,11 @@ import { SlidingWindowRateLimiter } from '../rate-limit/SlidingWindowRateLimiter
 import type { TrackResolveRequest, TrackResolver } from './TrackResolver.js';
 
 export const SONOVAULT_SCOPE = 'sonovault';
-const SONOVAULT_KEY = 'global';
+export const SONOVAULT_KEY = 'global';
 const DEFAULT_BASE_URL = 'https://api.sonovault.now';
 const DEFAULT_TIMEOUT_MS = 4_000;
 const RATE_LIMIT_PER_MIN = 18;
+const RATE_LIMIT_WINDOW_MS = 60_000;
 const HIT_TTL_MS = 24 * 60 * 60_000;
 const MISS_TTL_MS = 10 * 60_000;
 const CACHE_MAX_ENTRIES = 2_000;
@@ -68,6 +73,16 @@ export interface SonovaultTrackResolverOptions {
   timeoutMs?: number;
   now?: () => number;
   logger?: Pick<Console, 'warn'>;
+  /** A Sonovault limiter shared with other callers. Default: a new one. */
+  limiter?: SlidingWindowRateLimiter;
+}
+
+/** The deployment-wide Sonovault budget: 18 calls/min under `SONOVAULT_SCOPE`. */
+export function createSonovaultLimiter(now?: () => number): SlidingWindowRateLimiter {
+  return new SlidingWindowRateLimiter({
+    ...(now !== undefined && { now }),
+    scopes: { [SONOVAULT_SCOPE]: { limit: RATE_LIMIT_PER_MIN, windowMs: RATE_LIMIT_WINDOW_MS } },
+  });
 }
 
 function firstString(
@@ -148,10 +163,7 @@ export class SonovaultTrackResolver implements TrackResolver {
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.now = options.now ?? Date.now;
     this.logger = options.logger ?? console;
-    this.limiter = new SlidingWindowRateLimiter({
-      now: this.now,
-      scopes: { [SONOVAULT_SCOPE]: { limit: RATE_LIMIT_PER_MIN, windowMs: 60_000 } },
-    });
+    this.limiter = options.limiter ?? createSonovaultLimiter(this.now);
   }
 
   async resolve(request: TrackResolveRequest): Promise<string | null> {

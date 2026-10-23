@@ -67,7 +67,11 @@ import type { ExternalSearchSourceId } from './routes/search.js';
 import { DeezerSearchSource } from './search-sources/DeezerSearchSource.js';
 import type { SearchSource } from './search-sources/SearchSource.js';
 import { SessionAuditService } from './session/SessionAuditService.js';
-import { SonovaultTrackResolver } from './track-resolution/SonovaultTrackResolver.js';
+import { SonovaultSearchSource } from './search-sources/SonovaultSearchSource.js';
+import {
+  createSonovaultLimiter,
+  SonovaultTrackResolver,
+} from './track-resolution/SonovaultTrackResolver.js';
 import { SpotifyOEmbedVerifier } from './track-resolution/SpotifyOEmbedVerifier.js';
 import {
   CatalogTrackResolver,
@@ -106,7 +110,7 @@ export interface AppDeps {
   trackCatalog: TrackCatalog;
   /** Guest search sources in the order they are asked (`SEARCH_SOURCES`). */
   searchSources: SearchSourceId[];
-  /** External search sources listed in `searchSources` (e.g. Deezer). */
+  /** External search sources listed in `searchSources` (Deezer; Sonovault with a key). */
   externalSearchSources: Partial<Record<ExternalSearchSourceId, SearchSource>>;
   /**
    * Add-time resolution of non-native track uris: catalog, then Sonovault
@@ -326,10 +330,27 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
       rateLimit: options.config.deezerRateLimit ?? DEFAULT_DEEZER_RATE_LIMIT,
     });
   }
+  const sonovaultApiKey = options.config.sonovaultApiKey;
+  // One Sonovault budget for search and add-time resolution; search leaves a
+  // reserve for resolution (see SonovaultSearchSource).
+  const sonovaultLimiter = createSonovaultLimiter();
+  if (searchSources.includes('sonovault')) {
+    if (sonovaultApiKey !== undefined) {
+      externalSearchSources.sonovault = new SonovaultSearchSource({
+        apiKey: sonovaultApiKey,
+        fetchImpl,
+        limiter: sonovaultLimiter,
+      });
+    } else {
+      console.warn(
+        '[search] SEARCH_SOURCES lists sonovault but SONOVAULT_API_KEY is not set; sonovault search is disabled',
+      );
+    }
+  }
   const resolvers: TrackResolver[] = [new CatalogTrackResolver(trackCatalog)];
-  if (options.config.sonovaultApiKey !== undefined) {
+  if (sonovaultApiKey !== undefined) {
     resolvers.push(
-      new SonovaultTrackResolver({ apiKey: options.config.sonovaultApiKey, fetchImpl }),
+      new SonovaultTrackResolver({ apiKey: sonovaultApiKey, fetchImpl, limiter: sonovaultLimiter }),
     );
   }
   resolvers.push(new ProviderIsrcTrackResolver({ streamingRouter, searchRateLimiter }));

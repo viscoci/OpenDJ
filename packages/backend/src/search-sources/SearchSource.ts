@@ -12,6 +12,10 @@
  * - `deezer` — Deezer's public search (`DeezerSearchSource`); answers
  *   `opendj:isrc:<ISRC>` URIs that are resolved to the provider at add time.
  * - `catalog` — the local track catalog (`createCatalogSearchSource`).
+ * - `sonovault` — Sonovault's artist + title search (`SonovaultSearchSource`),
+ *   only for queries like `Artist - Title` / `Title by Artist`; needs
+ *   `SONOVAULT_API_KEY` (listed without one, it is disabled with a startup
+ *   warning). Answers `opendj:isrc:<ISRC>` URIs like `deezer`.
  */
 
 export type { SearchSourceId } from '../config.js';

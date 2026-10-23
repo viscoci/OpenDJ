@@ -32,7 +32,7 @@
  * answers. A source that can't be asked (refusal, rate limit, error) or
  * finds nothing passes to the next one, except that a provider answer
  * (even an empty one) is final and a provider error (non-429) is a 502.
- * External sources (`deezer`) answer `source: 'external'` with
+ * External sources (`deezer`, `sonovault`) answer `source: 'external'` with
  * `opendj:isrc:<ISRC>` track URIs (resolved to the provider when a guest
  * adds one), share the result cache below (keyed by source), spend no
  * provider budget or daily unit, and add their results to the catalog. A

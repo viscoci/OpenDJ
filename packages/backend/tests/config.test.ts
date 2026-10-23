@@ -222,6 +222,13 @@ describe('loadConfig — search sources', () => {
     expect(config.searchSources).toEqual(['deezer', 'catalog', 'provider']);
   });
 
+  it('accepts sonovault in SEARCH_SOURCES (with or without a key; deps decides)', () => {
+    expect(
+      loadConfig({ ...minimalEnv, SEARCH_SOURCES: 'deezer,catalog,sonovault,provider' })
+        .searchSources,
+    ).toEqual(['deezer', 'catalog', 'sonovault', 'provider']);
+  });
+
   it('treats an empty SEARCH_SOURCES as the default', () => {
     expect(loadConfig({ ...minimalEnv, SEARCH_SOURCES: '' }).searchSources).toEqual([
       'provider',
@@ -229,7 +236,7 @@ describe('loadConfig — search sources', () => {
     ]);
   });
 
-  it.each([['provider,bogus'], ['deezer,deezer'], [' , ']])(
+  it.each([['provider,bogus'], ['deezer,deezer'], ['sonovault,sonovault'], [' , ']])(
     'rejects SEARCH_SOURCES=%j',
     (value) => {
       expect(() => loadConfig({ ...minimalEnv, SEARCH_SOURCES: value })).toThrow(ConfigError);

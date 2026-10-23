@@ -19,11 +19,11 @@ const LoginProviderCredsSchema = v.object({
 const PositiveInt = v.pipe(v.number(), v.integer(), v.minValue(1));
 
 /** Where guest search can get answers (see `SEARCH_SOURCES`). */
-export const SEARCH_SOURCE_IDS = ['provider', 'deezer', 'catalog'] as const;
+export const SEARCH_SOURCE_IDS = ['provider', 'deezer', 'catalog', 'sonovault'] as const;
 export type SearchSourceId = (typeof SEARCH_SOURCE_IDS)[number];
 
 const SearchSourcesSchema = v.pipe(
-  v.array(v.picklist(SEARCH_SOURCE_IDS, 'must be one of provider, deezer, catalog')),
+  v.array(v.picklist(SEARCH_SOURCE_IDS, 'must be one of provider, deezer, catalog, sonovault')),
   v.minLength(1, 'must name at least one source'),
   v.check((ids) => new Set(ids).size === ids.length, 'must not repeat a source'),
 );
@@ -83,7 +83,10 @@ const ConfigSchema = v.object({
   searchSources: v.optional(SearchSourcesSchema),
   /** Deezer searches allowed per 5s across the deployment (`DEEZER_RATE_LIMIT`). */
   deezerRateLimit: v.optional(PositiveInt),
-  /** Enables Sonovault ISRC → provider link lookups at add time (`SONOVAULT_API_KEY`). */
+  /**
+   * Enables Sonovault ISRC → provider link lookups at add time, and the
+   * `sonovault` search source when `SEARCH_SOURCES` lists it (`SONOVAULT_API_KEY`).
+   */
   sonovaultApiKey: v.optional(v.pipe(v.string(), v.nonEmpty())),
   /**
    * Verify non-catalog add-time resolutions against the provider's own title
