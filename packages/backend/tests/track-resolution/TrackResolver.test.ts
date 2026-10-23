@@ -141,6 +141,26 @@ describe('SonovaultTrackResolver', () => {
     [{ links: [{ service: 'SPOTIFY', link: 'spotify:track:0DiWol3AO6WpXZgp0goxAV' }] }],
     [{ links: { spotify: { url: 'https://open.spotify.com/track/0DiWol3AO6WpXZgp0goxAV' } } }],
     [{ links: { spotify: 'https://open.spotify.com/track/0DiWol3AO6WpXZgp0goxAV' } }],
+    // Sonovault's live shape (verified 2026-10-23): `source` + `external_id` + `url`.
+    [
+      {
+        track_id: 104195873,
+        isrc: ISRC,
+        links: [
+          {
+            source: 'applemusic',
+            external_id: '711069',
+            url: 'https://music.apple.com/song/711069',
+          },
+          {
+            source: 'spotify',
+            external_id: '0DiWol3AO6WpXZgp0goxAV',
+            url: 'https://open.spotify.com/track/0DiWol3AO6WpXZgp0goxAV',
+          },
+        ],
+      },
+    ],
+    [{ links: [{ source: 'spotify', external_id: '0DiWol3AO6WpXZgp0goxAV' }] }],
   ])('reads link shape %j defensively', async (body) => {
     const resolver = new SonovaultTrackResolver({
       apiKey: 'k',

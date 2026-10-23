@@ -39,7 +39,14 @@ const PLATFORM_PROVIDERS: Readonly<Record<string, string>> = {
 };
 
 const NAME_FIELDS = ['platform', 'name', 'service', 'provider', 'source'] as const;
-const ID_FIELDS = ['id', 'trackId', 'track_id', 'platformId', 'platform_id', 'externalId'] as const;
+const ID_FIELDS = [
+  'external_id',
+  'externalId',
+  'id',
+  'trackId',
+  'platformId',
+  'platform_id',
+] as const;
 const URL_FIELDS = ['url', 'link', 'href', 'uri'] as const;
 
 /** One platform's link: an id and/or a URL. */
