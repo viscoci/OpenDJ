@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   ConfigError,
+  DEFAULT_DEEZER_CONFIDENT_RANK,
   DEFAULT_DEEZER_RATE_LIMIT,
   DEFAULT_PROVIDER_COOLDOWN_MAX_SEC,
   DEFAULT_SEARCH_PACING,
@@ -214,6 +215,8 @@ describe('loadConfig — search sources', () => {
     expect(config.searchSources).toEqual(['provider', 'catalog']);
     expect(resolveSearchSources(config)).toEqual(['provider', 'catalog']);
     expect(config.deezerRateLimit).toBe(DEFAULT_DEEZER_RATE_LIMIT);
+    expect(config.deezerConfidentRank).toBe(DEFAULT_DEEZER_CONFIDENT_RANK);
+    expect(DEFAULT_DEEZER_CONFIDENT_RANK).toBe(500_000);
     expect(config.sonovaultApiKey).toBeUndefined();
   });
 
@@ -256,6 +259,14 @@ describe('loadConfig — search sources', () => {
     expect(config.deezerRateLimit).toBe(20);
     expect(config.sonovaultApiKey).toBe('sv-key');
     expect(() => loadConfig({ ...minimalEnv, DEEZER_RATE_LIMIT: '0' })).toThrow(ConfigError);
+  });
+
+  it('parses DEEZER_CONFIDENT_RANK as a positive integer', () => {
+    expect(loadConfig({ ...minimalEnv, DEEZER_CONFIDENT_RANK: '650000' }).deezerConfidentRank).toBe(
+      650_000,
+    );
+    expect(() => loadConfig({ ...minimalEnv, DEEZER_CONFIDENT_RANK: '0' })).toThrow(ConfigError);
+    expect(() => loadConfig({ ...minimalEnv, DEEZER_CONFIDENT_RANK: '-5' })).toThrow(ConfigError);
   });
 
   it('turns track verification on unless TRACK_VERIFY=off', () => {

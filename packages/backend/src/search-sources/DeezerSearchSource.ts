@@ -1,7 +1,7 @@
 /**
  * Deezer's public search API as a guest search source. No API key.
  *
- * `GET https://api.deezer.com/search?q=<q>&limit=<n>` answers
+ * `GET https://api.deezer.com/search?q=<q>&limit=<n>&order=RANKING` answers
  * `{ data: [{ id, title, isrc, duration (s), rank, artist: { name },
  * album: { cover_medium } }] }`. Each hit becomes an `opendj:isrc:<ISRC>`
  * track (hits without an ISRC are skipped) that is resolved to the session's
@@ -14,15 +14,27 @@
  * bonus comes from the optional `requestedCounts` port (the local catalog);
  * a failing lookup ranks without it.
  *
+ * `searchWithConfidence` also reports whether the answer is confident (see
+ * `isConfidentAnswer`): a non-variant hit matching every query word with a
+ * Deezer rank of at least `confidentRank` (`DEEZER_CONFIDENT_RANK`) among the
+ * returned results. Deezer lacks some originals (e.g. "Mr. Brightside" comes
+ * back as covers and remixes only), and the route asks the provider instead.
+ *
  * Its own limiter (scope `deezer`, one deployment-wide key) keeps calls at
  * `rateLimit` per 5s, under Deezer's 50 per 5s. A spent limiter, a timeout,
  * an HTTP error, or an `{ error }` body all answer `'unavailable'`.
  */
 
+import { DEFAULT_DEEZER_CONFIDENT_RANK } from '../config.js';
 import { SlidingWindowRateLimiter } from '../rate-limit/SlidingWindowRateLimiter.js';
-import { rankDeezerHits, type RankableHit } from './deezerRanking.js';
+import { isConfidentAnswer, scoreDeezerHits, type RankableHit } from './deezerRanking.js';
 import { isrcTrackUri, normalizeIsrc } from './isrc.js';
-import type { SearchSource, SearchSourceContext, SourceTrack } from './SearchSource.js';
+import type {
+  ScoredSourceAnswer,
+  SearchSource,
+  SearchSourceContext,
+  SourceTrack,
+} from './SearchSource.js';
 
 export const DEEZER_SCOPE = 'deezer';
 const DEEZER_KEY = 'global';
@@ -49,6 +61,8 @@ export interface DeezerSearchSourceOptions {
   logger?: Pick<Console, 'warn'>;
   /** Guest request counts by ISRC, for the requested bonus. Default: none. */
   requestedCounts?: RequestedCountsLookup;
+  /** Minimum Deezer rank of a confident answer's original. Default 500000. */
+  confidentRank?: number;
 }
 
 interface DeezerTrack {
@@ -87,9 +101,11 @@ export class DeezerSearchSource implements SearchSource {
   private readonly baseUrl: string;
   private readonly logger: Pick<Console, 'warn'>;
   private readonly requestedCounts: RequestedCountsLookup | null;
+  private readonly confidentRank: number;
 
   constructor(options: DeezerSearchSourceOptions = {}) {
     this.requestedCounts = options.requestedCounts ?? null;
+    this.confidentRank = options.confidentRank ?? DEFAULT_DEEZER_CONFIDENT_RANK;
     this.fetchImpl = options.fetchImpl ?? ((input, init) => globalThis.fetch(input, init));
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.baseUrl = options.baseUrl ?? DEFAULT_BASE_URL;
@@ -107,10 +123,23 @@ export class DeezerSearchSource implements SearchSource {
     limit: number,
     ctx?: SearchSourceContext,
   ): Promise<SourceTrack[] | 'unavailable'> {
+    const answer = await this.searchWithConfidence(query, limit, ctx);
+    return answer === 'unavailable' ? answer : answer.tracks;
+  }
+
+  async searchWithConfidence(
+    query: string,
+    limit: number,
+    ctx?: SearchSourceContext,
+  ): Promise<ScoredSourceAnswer | 'unavailable'> {
     const hits = await this.fetchHits(query, Math.max(limit, DEEZER_FETCH_LIMIT));
     if (hits === 'unavailable') return hits;
     const requested = await this.lookupRequested(hits, ctx);
-    return rankDeezerHits(query, hits, requested).slice(0, limit);
+    const scored = scoreDeezerHits(query, hits, requested).slice(0, limit);
+    return {
+      tracks: scored.map((h) => h.track),
+      confident: isConfidentAnswer(query, scored, limit, this.confidentRank),
+    };
   }
 
   private async lookupRequested(
@@ -129,7 +158,7 @@ export class DeezerSearchSource implements SearchSource {
 
   private async fetchHits(query: string, limit: number): Promise<RankableHit[] | 'unavailable'> {
     if (!this.limiter.tryApply(DEEZER_SCOPE, DEEZER_KEY).ok) return 'unavailable';
-    const params = new URLSearchParams({ q: query, limit: String(limit) });
+    const params = new URLSearchParams({ q: query, limit: String(limit), order: 'RANKING' });
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     try {

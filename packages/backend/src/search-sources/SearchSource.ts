@@ -37,6 +37,16 @@ export interface SearchSourceContext {
   providerId: string;
 }
 
+/** A source's answer with its own confidence that it found what was asked for. */
+export interface ScoredSourceAnswer {
+  tracks: SourceTrack[];
+  /**
+   * False when the source suspects it lacks the original (only covers,
+   * remixes, or obscure hits came back). The route may then ask the provider.
+   */
+  confident: boolean;
+}
+
 export interface SearchSource {
   readonly id: SearchSourceId;
   search(
@@ -44,4 +54,13 @@ export interface SearchSource {
     limit: number,
     ctx: SearchSourceContext,
   ): Promise<SourceTrack[] | 'unavailable'>;
+  /**
+   * Optional: `search` plus confidence. The route prefers it when present;
+   * sources without it are always treated as confident.
+   */
+  searchWithConfidence?(
+    query: string,
+    limit: number,
+    ctx: SearchSourceContext,
+  ): Promise<ScoredSourceAnswer | 'unavailable'>;
 }

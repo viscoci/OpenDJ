@@ -84,6 +84,12 @@ const ConfigSchema = v.object({
   /** Deezer searches allowed per 5s across the deployment (`DEEZER_RATE_LIMIT`). */
   deezerRateLimit: v.optional(PositiveInt),
   /**
+   * Minimum Deezer `rank` of a confident Deezer answer's original
+   * (`DEEZER_CONFIDENT_RANK`). A low-confidence answer is escalated to the
+   * provider when `SEARCH_SOURCES` lists `provider` after `deezer`.
+   */
+  deezerConfidentRank: v.optional(PositiveInt),
+  /**
    * Enables Sonovault ISRC → provider link lookups at add time, and the
    * `sonovault` search source when `SEARCH_SOURCES` lists it (`SONOVAULT_API_KEY`).
    */
@@ -136,6 +142,13 @@ export const DEFAULT_SEARCH_SOURCES: ReadonlyArray<SearchSourceId> = Object.free
 
 /** Default Deezer searches per 5s, under Deezer's documented 50 per 5s. */
 export const DEFAULT_DEEZER_RATE_LIMIT = 45;
+
+/**
+ * Default minimum Deezer rank for a confident answer. Live ranks: real hits
+ * sit around 500k-950k (Cha Cha Slide 527545, Basket Case 883330); the best
+ * cover answering "mr brightside" ranks 354521.
+ */
+export const DEFAULT_DEEZER_CONFIDENT_RANK = 500_000;
 
 /** Search source order from `config`, defaulting to `DEFAULT_SEARCH_SOURCES`. */
 export function resolveSearchSources(config: {
@@ -239,6 +252,10 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
       ? [...DEFAULT_SEARCH_SOURCES]
       : searchSources.split(',').map((id) => id.trim().toLowerCase());
   candidate['deezerRateLimit'] = parseInteger(env['DEEZER_RATE_LIMIT'], DEFAULT_DEEZER_RATE_LIMIT);
+  candidate['deezerConfidentRank'] = parseInteger(
+    env['DEEZER_CONFIDENT_RANK'],
+    DEFAULT_DEEZER_CONFIDENT_RANK,
+  );
   const sonovaultApiKey = env['SONOVAULT_API_KEY'];
   if (sonovaultApiKey !== undefined && sonovaultApiKey !== '') {
     candidate['sonovaultApiKey'] = sonovaultApiKey;

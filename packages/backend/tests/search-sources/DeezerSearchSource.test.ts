@@ -86,6 +86,8 @@ describe('DeezerSearchSource', () => {
     expect(url.origin + url.pathname).toBe('https://api.deezer.com/search');
     expect(url.searchParams.get('q')).toBe('one more time');
     expect(url.searchParams.get('limit')).toBe('25');
+    expect(url.searchParams.get('order')).toBe('RANKING');
+    expect([...url.searchParams.keys()]).toEqual(['q', 'limit', 'order']);
     expect(results).toEqual([
       {
         trackUri: 'opendj:isrc:GBDUW0000053',
@@ -172,13 +174,18 @@ function deezerItem(title: string, artist: string, rank: number, isrc: string) {
 function rankedSource(
   items: ReturnType<typeof deezerItem>[],
   requestedCounts?: DeezerSearchSourceOptions['requestedCounts'],
+  extra: Pick<DeezerSearchSourceOptions, 'confidentRank'> = {},
 ) {
   const fetchImpl = vi.fn<typeof fetch>(async () =>
     jsonResponse({ data: items, total: items.length }),
   );
   return {
     fetchImpl,
-    source: sourceWith(fetchImpl, requestedCounts ? { requestedCounts } : {}),
+    source: new DeezerSearchSource({
+      fetchImpl,
+      ...(requestedCounts && { requestedCounts }),
+      ...extra,
+    }),
   };
 }
 
@@ -215,6 +222,7 @@ describe('DeezerSearchSource ranking', () => {
 
     const url = new URL(String(fetchImpl.mock.calls[0]![0]));
     expect(url.searchParams.get('limit')).toBe('25');
+    expect(url.searchParams.get('order')).toBe('RANKING');
     expect(titles(results)).toHaveLength(3);
   });
 
@@ -341,5 +349,88 @@ describe('DeezerSearchSource ranking', () => {
       'Song B / Band',
       'Song C / Band',
     ]);
+  });
+});
+
+// Live "mr brightside": Deezer has no original, only a remix, covers, and karaoke.
+const BRIGHTSIDE_COVERS_ONLY = [
+  deezerItem('Mr. Brightside (Jacques Lu Cont Remix)', 'The Killers', 610_000, 'USUM70500001'),
+  deezerItem('Mr. Brightside', 'Part Time Killer', 354_521, 'QZAAA2000001'),
+  deezerItem('Mr. Brightside', 'ItaloBrothers', 300_000, 'DEA621500001'),
+  deezerItem('Mr. Brightside (Live)', 'The Killers', 480_000, 'USUM70700002'),
+  deezerItem('Mr. Brightside - Karaoke Version', 'Karaoke Hits', 150_000, 'GBKRK0500001'),
+];
+
+const BASKET_CASE = [
+  deezerItem('Basket Case', 'Green Day', 883_330, 'USRE19900154'),
+  deezerItem('Basket Case (Karaoke Version)', 'Karaoke Hits', 120_000, 'GBKRK0500002'),
+];
+
+describe('DeezerSearchSource confidence', () => {
+  const confidence = async (
+    items: ReturnType<typeof deezerItem>[],
+    query: string,
+    confidentRank?: number,
+  ) => {
+    const { source } = rankedSource(
+      items,
+      undefined,
+      confidentRank !== undefined ? { confidentRank } : {},
+    );
+    const answer = await source.searchWithConfidence(query, 20, CTX);
+    if (answer === 'unavailable') throw new Error('unexpected unavailable');
+    return answer;
+  };
+
+  it('is not confident when only covers and remixes come back (live mr brightside)', async () => {
+    const answer = await confidence(BRIGHTSIDE_COVERS_ONLY, 'mr brightside');
+    expect(answer.confident).toBe(false);
+    expect(answer.tracks.length).toBeGreaterThan(0);
+  });
+
+  it('is confident for a popular non-variant hit that matches every query word', async () => {
+    expect((await confidence(BASKET_CASE, 'basket case')).confident).toBe(true);
+    expect(
+      (
+        await confidence(
+          [deezerItem('September', 'Earth, Wind & Fire', 934_544, 'USSM17800845')],
+          'september',
+        )
+      ).confident,
+    ).toBe(true);
+  });
+
+  it('is always confident for queries shorter than 3 non-space characters', async () => {
+    expect((await confidence(BRIGHTSIDE_COVERS_ONLY, 'mr')).confident).toBe(true);
+    expect((await confidence(BRIGHTSIDE_COVERS_ONLY, ' m r ')).confident).toBe(true);
+  });
+
+  it('is not confident when every popular hit is a variant', async () => {
+    const variantsOnly = [
+      deezerItem('Mr. Brightside (Remix)', 'The Killers', 900_000, 'USUM70500011'),
+      deezerItem('Mr. Brightside (Live)', 'The Killers', 800_000, 'USUM70500012'),
+    ];
+    expect((await confidence(variantsOnly, 'mr brightside')).confident).toBe(false);
+    // ...unless the query asks for that variant.
+    expect((await confidence(variantsOnly, 'mr brightside remix')).confident).toBe(true);
+  });
+
+  it('is not confident when the matching original ranks below the threshold', async () => {
+    const lowRank = [deezerItem('Mr. Brightside', 'The Killers', 400_000, 'USIR20400274')];
+    expect((await confidence(lowRank, 'mr brightside')).confident).toBe(false);
+    expect((await confidence(lowRank, 'mr brightside', 300_000)).confident).toBe(true);
+  });
+
+  it('is not confident when the popular hit misses a query word', async () => {
+    const other = [deezerItem('Brightside', 'Someone Else', 900_000, 'QZAAA2000021')];
+    expect((await confidence(other, 'mr brightside')).confident).toBe(false);
+  });
+
+  it('answers the same tracks as search()', async () => {
+    const { source } = rankedSource(BRIGHTSIDE);
+    const answer = await source.searchWithConfidence('mr brightside', 3, CTX);
+    if (answer === 'unavailable') throw new Error('unexpected unavailable');
+    expect(answer.tracks).toEqual(await source.search('mr brightside', 3, CTX));
+    expect(answer.confident).toBe(true);
   });
 });

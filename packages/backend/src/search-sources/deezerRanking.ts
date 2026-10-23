@@ -14,6 +14,12 @@
  *    starts a word of the title or artist, plus `REQUESTED_BONUS` when the
  *    local catalog says guests requested that ISRC.
  * 3. Ties keep Deezer's order.
+ *
+ * `isConfidentAnswer` says whether the top of a ranked batch holds a
+ * plausible original: a non-variant hit matching every query word whose
+ * Deezer rank is at least the confidence threshold. Deezer lacks some
+ * originals and answers only covers and remixes for them; such answers are
+ * not confident.
  */
 
 import type { SourceTrack } from './SearchSource.js';
@@ -120,6 +126,16 @@ export interface RankableHit {
   rank: number;
 }
 
+/** A re-ranked hit with the facts its score was built from. */
+export interface ScoredHit {
+  track: SourceTrack;
+  rank: number;
+  /** Carries a variant marker the query didn't ask for. */
+  variant: boolean;
+  /** Every query word starts a word of the title or artist. */
+  allTokens: boolean;
+}
+
 /**
  * `hits` (in Deezer's order) deduplicated and re-ranked for `query`.
  * `requested` maps an ISRC to how often guests requested it.
@@ -129,6 +145,34 @@ export function rankDeezerHits(
   hits: ReadonlyArray<RankableHit>,
   requested: ReadonlyMap<string, number> = new Map(),
 ): SourceTrack[] {
+  return scoreDeezerHits(query, hits, requested).map((h) => h.track);
+}
+
+/** Queries with fewer non-space characters are always confident (partial typing). */
+export const MIN_CONFIDENCE_QUERY_CHARS = 3;
+
+/**
+ * Whether the first `limit` of `scored` (from `scoreDeezerHits`) hold a
+ * non-variant hit that matches every query word with a Deezer rank of at
+ * least `minRank`. Queries shorter than `MIN_CONFIDENCE_QUERY_CHARS`
+ * non-space characters are always confident.
+ */
+export function isConfidentAnswer(
+  query: string,
+  scored: ReadonlyArray<ScoredHit>,
+  limit: number,
+  minRank: number,
+): boolean {
+  if (query.replace(/\s/g, '').length < MIN_CONFIDENCE_QUERY_CHARS) return true;
+  return scored.slice(0, limit).some((hit) => !hit.variant && hit.allTokens && hit.rank >= minRank);
+}
+
+/** `rankDeezerHits` with each hit's rank, variant, and all-words facts. */
+export function scoreDeezerHits(
+  query: string,
+  hits: ReadonlyArray<RankableHit>,
+  requested: ReadonlyMap<string, number> = new Map(),
+): ScoredHit[] {
   const deduped = dedupeHits(hits);
   const paddedQuery = ` ${normalizeText(query)} `;
   const queryTokens = normalizeText(query).split(' ').filter(Boolean);
@@ -150,11 +194,11 @@ export function rankDeezerHits(
       (variant ? VARIANT_PENALTY : 0) +
       (allTokens ? ALL_TOKENS_BONUS : 0) +
       (wasRequested ? REQUESTED_BONUS : 0);
-    return { track: hit.track, score, index: hit.index };
+    return { track: hit.track, rank: hit.rank, variant, allTokens, score, index: hit.index };
   });
 
   scored.sort((a, b) => b.score - a.score || a.index - b.index);
-  return scored.map((s) => s.track);
+  return scored.map(({ track, rank, variant, allTokens }) => ({ track, rank, variant, allTokens }));
 }
 
 /** One hit per (title core, primary artist): the highest rank, at its own position. */

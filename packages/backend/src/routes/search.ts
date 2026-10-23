@@ -65,6 +65,24 @@
  * without a `fallbackReason`. Catalog rows minted by an external source are
  * hidden when a resolved row with the same ISRC also matches.
  *
+ * Low-confidence escalation. An external source that reports confidence
+ * (`searchWithConfidence`; today `deezer`, see `DEEZER_CONFIDENT_RANK`) may
+ * answer not confident, e.g. Deezer has only covers of "Mr. Brightside".
+ * When `provider` is listed after that source, the route then asks the
+ * provider through the same admission (cooldown, budget, daily cap) with
+ * the guest unit this request already spent, so the guest is charged once.
+ * A provider answer is returned as a normal `source: 'provider'` 200 (and
+ * cached under the provider key). If the provider can't be asked or fails
+ * (busy, daily cap, cooldown, 429, error), the external answer is returned
+ * as-is (`source: 'external'`, no `fallbackReason`). Each escalation logs
+ * `[search] <source> low-confidence q=<q> → provider served|refused:<reason>`.
+ * Caching: each source's answer is cached under its own key as usual. A
+ * request whose external answer came from the cache (spending no guest unit)
+ * only uses a cached or in-flight provider answer for the query and never
+ * starts a provider call, so a low-confidence answer returned after a
+ * refused escalation is reused until it expires (`SEARCH_CACHE_TTL_MS`), and
+ * the next miss after that escalates again.
+ *
  * Clients branch on `error`, not the status. Our own refusal waits add 0-1.5s
  * of server jitter so refused clients don't retry in lockstep.
  *
@@ -244,6 +262,8 @@ export function searchRoutes(deps: SearchRouteDeps): Hono {
   const retryDeadlines = new RetryDeadlines();
   const order = deps.searchSources ?? DEFAULT_SEARCH_SOURCES;
   const catalogSource = deps.trackCatalog ? createCatalogSearchSource(deps.trackCatalog) : null;
+  /** Cached result arrays of external answers whose source was not confident. */
+  const lowConfidenceResults = new WeakSet<SourceTrack[]>();
 
   /** The live cached or in-flight search for `key`; evicts an expired entry. */
   function lookupCached(key: string): Promise<SourceTrack[]> | null {
@@ -453,6 +473,9 @@ export function searchRoutes(deps: SearchRouteDeps): Hono {
     const limit = parsed.output.limit ?? 20;
     const normalizedQuery = normalizeQuery(query);
     const ctx: SearchSourceContext = { accountId: session.accountId, providerId };
+    const providerCacheKey = [session.accountId, providerId, limit, normalizedQuery].join('\u0000');
+    const providerSearch = async (): Promise<SourceTrack[]> =>
+      (await searchable!.search(query, limit)).map(trackToSource);
 
     let limitKey: string | null = null;
     const getLimitKey = async (): Promise<string> =>
@@ -479,10 +502,60 @@ export function searchRoutes(deps: SearchRouteDeps): Hono {
       );
     };
 
+    /**
+     * Ask the provider after a low-confidence external answer. Returns the
+     * provider's 200, or null when the external answer should stand. Spends
+     * provider budget only when this request already spent its guest unit
+     * (`guestGated`), never a second guest unit.
+     */
+    const escalateToProvider = async (sourceId: SearchSourceId): Promise<Response | null> => {
+      let tracks = lookupCached(providerCacheKey);
+      let slowDown: SearchSlowDownDto | null = tracks ? peekSlowDown(providerId) : null;
+      let outcome: string;
+      if (!tracks) {
+        // An external cache hit spent no guest unit: no new provider call.
+        if (!guestGated) return null;
+        // No awaits from here until the in-flight promise is inserted.
+        const admission = admit({
+          cacheKey: providerCacheKey,
+          accountId: session.accountId,
+          providerId,
+          limitKey: limitKey ?? SEARCH_ANON_KEY,
+          guestGated: true,
+          search: providerSearch,
+        });
+        if (admission.kind === 'search') {
+          tracks = admission.tracks;
+          slowDown = admission.slowDown;
+        } else {
+          outcome = `refused:${admission.kind === 'unavailable' ? admission.reason : admission.kind}`;
+        }
+      }
+      let response: Response | null = null;
+      if (tracks) {
+        try {
+          const results = await tracks;
+          response = c.json({
+            results,
+            providerId,
+            source: 'provider',
+            ...(slowDown && { slowDown }),
+          });
+          outcome = 'served';
+        } catch (err) {
+          outcome = `refused:${(err as { status?: number })?.status === 429 ? 'rate_limited' : 'error'}`;
+        }
+      }
+      console.info(
+        `[search] ${sourceId} low-confidence q=${normalizedQuery} → provider ${outcome!}`,
+      );
+      return response;
+    };
+
     for (const sourceId of order) {
       if (sourceId === 'provider') {
         if (!searchable) continue;
-        const cacheKey = [session.accountId, providerId, limit, normalizedQuery].join('\u0000');
+        const cacheKey = providerCacheKey;
         // Fast path: a live cached or in-flight result skips the slot lookup
         // and never touches the limits.
         let tracks = lookupCached(cacheKey);
@@ -498,7 +571,7 @@ export function searchRoutes(deps: SearchRouteDeps): Hono {
             providerId,
             limitKey: key,
             guestGated,
-            search: async () => (await searchable.search(query, limit)).map(trackToSource),
+            search: providerSearch,
           });
           if (admission.kind === 'unavailable') {
             fallbackReason = admission.reason;
@@ -582,6 +655,14 @@ export function searchRoutes(deps: SearchRouteDeps): Hono {
         }
       }
       tracks ??= startCachedSearch(cacheKey, providerId, async () => {
+        if (source.searchWithConfidence) {
+          const answer = await source.searchWithConfidence(query, limit, ctx);
+          if (answer === 'unavailable') throw SOURCE_UNAVAILABLE;
+          // A fresh array: its identity carries the confidence flag in the cache.
+          const tracks = [...answer.tracks];
+          if (!answer.confident) lowConfidenceResults.add(tracks);
+          return tracks;
+        }
         const results = await source.search(query, limit, ctx);
         if (results === 'unavailable') throw SOURCE_UNAVAILABLE;
         return results;
@@ -593,7 +674,17 @@ export function searchRoutes(deps: SearchRouteDeps): Hono {
         externalUnavailable = true;
         continue;
       }
-      if (results.length > 0) return c.json({ results, providerId, source: 'external' });
+      if (results.length > 0) {
+        if (
+          searchable &&
+          lowConfidenceResults.has(results) &&
+          order.indexOf('provider') > order.indexOf(sourceId)
+        ) {
+          const escalated = await escalateToProvider(sourceId);
+          if (escalated) return escalated;
+        }
+        return c.json({ results, providerId, source: 'external' });
+      }
       emptySource ??= 'external';
     }
 

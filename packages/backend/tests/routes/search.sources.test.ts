@@ -65,6 +65,8 @@ function buildHarness(
   opts: {
     order?: SearchSourceId[];
     deezer?: SourceTrack[] | 'unavailable';
+    /** When set, the deezer mock also reports confidence through `searchWithConfidence`. */
+    deezerConfident?: boolean;
     sonovault?: SourceTrack[] | 'unavailable';
     pacing?: Partial<SearchPacingConfig>;
     cooldowns?: ProviderCooldowns;
@@ -117,7 +119,17 @@ function buildHarness(
 
   let deezerAnswer: SourceTrack[] | 'unavailable' = opts.deezer ?? DEEZER_TRACKS;
   const deezerSearch = vi.fn<SearchSource['search']>(async () => deezerAnswer);
-  const deezer: SearchSource = { id: 'deezer', search: deezerSearch };
+  const deezerConfident = opts.deezerConfident;
+  const deezerScored = vi.fn<NonNullable<SearchSource['searchWithConfidence']>>(async () =>
+    deezerAnswer === 'unavailable'
+      ? 'unavailable'
+      : { tracks: deezerAnswer, confident: deezerConfident ?? true },
+  );
+  const deezer: SearchSource = {
+    id: 'deezer',
+    search: deezerSearch,
+    ...(deezerConfident !== undefined && { searchWithConfidence: deezerScored }),
+  };
   const sonovaultAnswer: SourceTrack[] | 'unavailable' = opts.sonovault ?? 'unavailable';
   const sonovaultSearch = vi.fn<SearchSource['search']>(async () => sonovaultAnswer);
   const sonovault: SearchSource = { id: 'sonovault', search: sonovaultSearch };
@@ -190,6 +202,7 @@ function buildHarness(
     catalog,
     providerSearch,
     deezerSearch,
+    deezerScored,
     sonovaultSearch,
     accountId,
     setDeezer: (answer: SourceTrack[] | 'unavailable') => {
@@ -588,6 +601,222 @@ describe('GET /sessions/:id/search — fall-through after a provider refusal', (
 
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ source: 'local', fallbackReason: 'busy' });
+    expect(deezerSearch).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /sessions/:id/search — low-confidence deezer escalation', () => {
+  const ESCALATING: SearchSourceId[] = ['deezer', 'catalog', 'provider'];
+  const rateLimited = () =>
+    Object.assign(new Error('Spotify Web API returned 429'), { status: 429, retryAfterSec: 30 });
+  type Body = { source?: string; fallbackReason?: string; error?: string; results?: unknown[] };
+  type Harness = ReturnType<typeof buildHarness>;
+
+  const providerResults = PROVIDER_TRACKS.map((t) => ({
+    trackUri: t.uri,
+    trackName: t.name,
+    artistName: t.artist,
+    albumArtUrl: t.albumArt,
+    durationMs: t.durationMs,
+  }));
+
+  const spyInfo = () => vi.spyOn(console, 'info').mockImplementation(() => {});
+
+  it('asks the provider once when deezer is not confident, charging the guest once', async () => {
+    const info = spyInfo();
+    const { search, addGuest, limiter, providerSearch, deezerScored } = buildHarness({
+      order: ESCALATING,
+      deezerConfident: false,
+      pacing: { searchGuestLimit: 10 },
+    });
+    const slotId = await addGuest('tok-a');
+
+    const res = await search('mr brightside', 'tok-a');
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Body;
+    expect(body.source).toBe('provider');
+    expect(body.fallbackReason).toBeUndefined();
+    expect(body.results).toEqual(providerResults);
+    expect(deezerScored).toHaveBeenCalledTimes(1);
+    expect(providerSearch).toHaveBeenCalledTimes(1);
+    expect(limiter.peekSync(SEARCH_SCOPE, searchGuestKey(slotId)).remaining).toBe(9);
+    expect(budgetRemaining(limiter)).toBe(DEFAULT_SEARCH_PACING.searchBudgetLimit - 1);
+    expect(dailyRemaining(limiter)).toBe(DEFAULT_SEARCH_PACING.searchDailyLimit - 1);
+    expect(info).toHaveBeenCalledWith(
+      '[search] deezer low-confidence q=mr brightside → provider served',
+    );
+    info.mockRestore();
+  });
+
+  it('serves a repeat of an escalated query from the provider cache without spending', async () => {
+    const info = spyInfo();
+    const { search, limiter, providerSearch, deezerScored } = buildHarness({
+      order: ESCALATING,
+      deezerConfident: false,
+    });
+
+    await search('mr brightside');
+    const again = await search('Mr  Brightside');
+
+    expect(((await again.json()) as Body).source).toBe('provider');
+    expect(deezerScored).toHaveBeenCalledTimes(1);
+    expect(providerSearch).toHaveBeenCalledTimes(1);
+    expect(budgetRemaining(limiter)).toBe(DEFAULT_SEARCH_PACING.searchBudgetLimit - 1);
+    info.mockRestore();
+  });
+
+  const refusals: Array<[string, Partial<SearchPacingConfig>, (h: Harness) => void]> = [
+    [
+      'busy',
+      { searchBudgetLimit: 1 },
+      (h) => h.limiter.tryApply(SEARCH_BUDGET_SCOPE, 'mock-streamer'),
+    ],
+    [
+      'daily_limit',
+      { searchDailyLimit: 1 },
+      (h) => h.limiter.tryApply(SEARCH_DAILY_SCOPE, 'mock-streamer'),
+    ],
+    ['rate_limited', {}, (h) => h.failProviderWith(rateLimited())],
+    ['error', {}, (h) => h.failProviderWith(new Error('boom'))],
+  ];
+
+  it.each(refusals)(
+    'returns the deezer answer as external when the provider is refused (%s)',
+    async (reason, pacing, setup) => {
+      const info = spyInfo();
+      const h = buildHarness({
+        order: ESCALATING,
+        deezerConfident: false,
+        pacing: { ...pacing, searchGuestLimit: 10 },
+      });
+      const slotId = await h.addGuest('tok-a');
+      setup(h);
+
+      const res = await h.search('mr brightside', 'tok-a');
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({
+        results: DEEZER_TRACKS,
+        providerId: 'mock-streamer',
+        source: 'external',
+      });
+      expect(h.limiter.peekSync(SEARCH_SCOPE, searchGuestKey(slotId)).remaining).toBe(9);
+      expect(info).toHaveBeenCalledWith(
+        `[search] deezer low-confidence q=mr brightside → provider refused:${reason}`,
+      );
+      info.mockRestore();
+    },
+  );
+
+  it('returns the deezer answer while the provider search cooldown is open', async () => {
+    const info = spyInfo();
+    const cooldowns = new ProviderCooldowns();
+    const { search, accountId, providerSearch, limiter } = buildHarness({
+      order: ESCALATING,
+      deezerConfident: false,
+      cooldowns,
+    });
+    cooldowns.record(accountId, 'mock-streamer', 'search', 600);
+
+    const res = await search('mr brightside');
+
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as Body).source).toBe('external');
+    expect(providerSearch).not.toHaveBeenCalled();
+    expect(budgetRemaining(limiter)).toBe(DEFAULT_SEARCH_PACING.searchBudgetLimit);
+    expect(info).toHaveBeenCalledWith(
+      '[search] deezer low-confidence q=mr brightside → provider refused:provider_limited',
+    );
+    info.mockRestore();
+  });
+
+  it('spends no budget on an escalation refused by the daily cap', async () => {
+    const info = spyInfo();
+    const h = buildHarness({
+      order: ESCALATING,
+      deezerConfident: false,
+      pacing: { searchDailyLimit: 1 },
+    });
+    h.limiter.tryApply(SEARCH_DAILY_SCOPE, 'mock-streamer');
+
+    await h.search('mr brightside');
+
+    expect(budgetRemaining(h.limiter)).toBe(DEFAULT_SEARCH_PACING.searchBudgetLimit);
+    expect(h.providerSearch).not.toHaveBeenCalled();
+    info.mockRestore();
+  });
+
+  it('serves a cached low-confidence deezer answer without retrying the provider', async () => {
+    // Documented: the returned deezer answer is cached for the query like any
+    // other, so a repeat within the cache TTL is a free cache hit, not a new
+    // escalation (only a cached provider answer would be used).
+    const info = spyInfo();
+    const h = buildHarness({
+      order: ESCALATING,
+      deezerConfident: false,
+      pacing: { searchBudgetLimit: 1 },
+    });
+    h.limiter.tryApply(SEARCH_BUDGET_SCOPE, 'mock-streamer');
+
+    await h.search('mr brightside');
+    const again = await h.search('mr brightside');
+
+    expect(((await again.json()) as Body).source).toBe('external');
+    expect(h.deezerScored).toHaveBeenCalledTimes(1);
+    expect(h.providerSearch).not.toHaveBeenCalled();
+    expect(info).toHaveBeenCalledTimes(1);
+    info.mockRestore();
+  });
+
+  it('never asks the provider when deezer is confident', async () => {
+    const info = spyInfo();
+    const { search, providerSearch, deezerScored } = buildHarness({
+      order: ESCALATING,
+      deezerConfident: true,
+    });
+
+    const res = await search('basket case');
+
+    expect(((await res.json()) as Body).source).toBe('external');
+    expect(deezerScored).toHaveBeenCalledTimes(1);
+    expect(providerSearch).not.toHaveBeenCalled();
+    expect(info).not.toHaveBeenCalled();
+    info.mockRestore();
+  });
+
+  it('never escalates when the provider is not listed after deezer', async () => {
+    const info = spyInfo();
+    const noProvider = buildHarness({ order: ['deezer', 'catalog'], deezerConfident: false });
+    const res = await noProvider.search('mr brightside');
+    expect(((await res.json()) as Body).source).toBe('external');
+    expect(noProvider.providerSearch).not.toHaveBeenCalled();
+
+    // Provider first and busy: deezer answers the fall-through with no second provider try.
+    const before = buildHarness({
+      order: ['provider', 'deezer', 'catalog'],
+      deezerConfident: false,
+      pacing: { searchBudgetLimit: 1 },
+    });
+    before.limiter.tryApply(SEARCH_BUDGET_SCOPE, 'mock-streamer');
+    const fell = await before.search('mr brightside');
+    expect(fell.status).toBe(200);
+    expect(((await fell.json()) as Body).source).toBe('external');
+    expect(before.providerSearch).not.toHaveBeenCalled();
+    expect(info).not.toHaveBeenCalled();
+    info.mockRestore();
+  });
+
+  it('keeps the default provider,catalog order unchanged', async () => {
+    const { search, providerSearch, deezerScored, deezerSearch } = buildHarness({
+      deezerConfident: false,
+    });
+
+    const res = await search('mr brightside');
+
+    expect(((await res.json()) as Body).source).toBe('provider');
+    expect(providerSearch).toHaveBeenCalledTimes(1);
+    expect(deezerScored).not.toHaveBeenCalled();
     expect(deezerSearch).not.toHaveBeenCalled();
   });
 });

@@ -27,6 +27,7 @@ import {
   type LoginProviderRegistry,
 } from './auth/loginProviders/index.js';
 import {
+  DEFAULT_DEEZER_CONFIDENT_RANK,
   DEFAULT_DEEZER_RATE_LIMIT,
   DEFAULT_PROVIDER_COOLDOWN_MAX_SEC,
   resolveSearchPacing,
@@ -332,6 +333,7 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
     externalSearchSources.deezer = new DeezerSearchSource({
       fetchImpl,
       rateLimit: options.config.deezerRateLimit ?? DEFAULT_DEEZER_RATE_LIMIT,
+      confidentRank: options.config.deezerConfidentRank ?? DEFAULT_DEEZER_CONFIDENT_RANK,
       requestedCounts: (providerId, isrcs) => trackCatalog.requestedCountsByIsrc(providerId, isrcs),
     });
   }
