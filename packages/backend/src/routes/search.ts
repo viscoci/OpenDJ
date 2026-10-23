@@ -175,6 +175,7 @@ export function searchRoutes(deps: SearchRouteDeps): Hono {
 
   /** The slow-down hint for a budget with `remaining` of `limit` calls left, if due. */
   function slowDownFor(remaining: number, limit: number): SearchSlowDownDto | null {
+    if (pacing.searchSlowDownThresholdPct === 0) return null;
     if (remaining * 100 > limit * pacing.searchSlowDownThresholdPct) return null;
     return { debounceMs: pacing.searchSlowDownDebounceMs, ttlSec: pacing.searchSlowDownTtlSec };
   }

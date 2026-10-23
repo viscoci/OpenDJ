@@ -621,6 +621,19 @@ describe('GET /sessions/:id/search — slow-down hint', () => {
     expect(coolHit.slowDown).toBeUndefined();
     expect(mockProvider.calls).toBe(7);
   });
+
+  it('never sends the hint when the threshold is 0, even with the budget fully spent', async () => {
+    const { search } = buildHarness({
+      pacing: { ...pacing, searchSlowDownThresholdPct: 0 },
+    });
+    let last: SearchBody | undefined;
+    for (let i = 0; i < 10; i += 1) {
+      last = (await (await search(`q${i}`)).json()) as SearchBody;
+    }
+    expect(last?.slowDown).toBeUndefined();
+    const cachedHit = (await (await search('q0')).json()) as SearchBody;
+    expect(cachedHit.slowDown).toBeUndefined();
+  });
 });
 
 describe('GET /sessions/:id/search — refusal jitter', () => {
