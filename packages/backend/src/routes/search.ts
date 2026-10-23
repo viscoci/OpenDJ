@@ -2,9 +2,12 @@
  * `/api/v1/sessions/:id/search` — track search proxied through the session's
  * connected streaming provider.
  *
- * Public (no auth required) — guests need to search to make requests. The
- * route resolves the session, looks up the account's connected provider,
- * type-guards for `ISupportsSearch`, and forwards the query.
+ * Optional guest auth — guests need to search to make requests. A caller may
+ * send `Authorization: Bearer <slotToken>`; a slot in this session (active or
+ * queued) is limited per guest. A missing, unknown, or other-session token is
+ * never a 401: it falls into one shared anonymous limit. The route resolves
+ * the session, looks up the account's connected provider, type-guards for
+ * `ISupportsSearch`, and forwards the query.
  *
  * Errors:
  * - 404 `session_not_found` / `session_ended`
@@ -14,27 +17,66 @@
  * - 502 `provider_error` — search failed at the provider edge
  * - 503 `provider_rate_limited` — the provider is throttling the host's
  *   account; body carries `retryAfterSec` (also sent as `Retry-After`)
+ * - 429 `search_too_fast` — this guest (or the shared anonymous bucket) is
+ *   over its search limit; body carries `retryAfterSec` + `Retry-After`
+ * - 503 `search_busy` — the search budget for the provider's API key is spent;
+ *   body carries `retryAfterSec` + `Retry-After`
+ *
+ * Clients branch on `error`, not the status. Our own refusal waits add 0-1.5s
+ * of server jitter so refused clients don't retry in lockstep.
  *
  * Results are cached per (account, provider, query, limit) for
  * `SEARCH_CACHE_TTL_MS`, and identical in-flight queries share one provider
  * call — guests at the same party type the same song names, and every
- * provider call counts against the host's Spotify quota.
+ * provider call counts against the host's Spotify quota. Cache hits and
+ * joined in-flight searches never spend, and are never refused by, the limits.
+ *
+ * A cache miss is admitted in one synchronous step after every async lookup:
+ * re-check the cache (joining any in-flight search), check the Spotify
+ * cooldown, peek the guest-or-anon limit and the budget, then spend both and
+ * insert the in-flight promise. Two identical misses can never both spend.
+ *
+ * A 200 carries `slowDown: { debounceMs, ttlSec }` when the budget's remaining
+ * calls are at or below `searchSlowDownThresholdPct` of its limit. It is
+ * computed per response and never cached.
+ *
+ * Pacing state is in-memory: on Cloudflare Workers each isolate gets its own
+ * budget, limits, and result cache.
  */
 
 import { Hono } from 'hono';
 import * as v from 'valibot';
 import { InvalidProviderCredentialsError, supportsSearch, type Track } from '@opendj/core';
+import type { SearchPacingConfig } from '../config.js';
 import {
   ProviderConnectionNotFoundError,
   StreamingRouter,
   UnknownProviderError,
 } from '../providers/streaming/StreamingRouter.js';
-import type { ProviderConnectionRepository, SessionRepository } from '../repositories/types.js';
+import {
+  SEARCH_ANON_KEY,
+  SEARCH_BUDGET_SCOPE,
+  SEARCH_SCOPE,
+  searchGuestKey,
+  type SlidingWindowRateLimiter,
+} from '../rate-limit/SlidingWindowRateLimiter.js';
+import type {
+  GuestSlotRepository,
+  ProviderConnectionRepository,
+  SessionRepository,
+} from '../repositories/types.js';
 
 export interface SearchRouteDeps {
   sessions: SessionRepository;
   providerConnections: ProviderConnectionRepository;
   streamingRouter: StreamingRouter;
+  /** Resolves the optional bearer slot token to a guest identity. */
+  guestSlots: Pick<GuestSlotRepository, 'findBySlotToken'>;
+  /** Per-guest / anonymous limits and the per-provider search budget. */
+  searchRateLimiter: SlidingWindowRateLimiter;
+  searchPacing: SearchPacingConfig;
+  /** Server jitter added to our own refusal waits, in ms (clamped to 0-1500). Default random. */
+  jitterMs?: () => number;
 }
 
 const QuerySchema = v.object({
@@ -46,6 +88,8 @@ const QuerySchema = v.object({
 const SEARCH_CACHE_TTL_MS = 60_000;
 /** Upper bound on cached queries; oldest entries are evicted first. */
 const SEARCH_CACHE_MAX_ENTRIES = 500;
+/** Upper bound on the server jitter added to our own refusal waits. */
+const MAX_REFUSAL_JITTER_MS = 1_500;
 
 interface CachedSearch {
   expiresAtEpochMs: number;
@@ -60,6 +104,19 @@ export interface SearchResultDto {
   durationMs: number | null;
 }
 
+/** Tells the client to lengthen its search debounce for a while. */
+export interface SearchSlowDownDto {
+  debounceMs: number;
+  ttlSec: number;
+}
+
+type Admission =
+  | { kind: 'search'; tracks: Promise<Track[]>; slowDown: SearchSlowDownDto | null }
+  | {
+      kind: 'provider_rate_limited' | 'search_too_fast' | 'search_busy';
+      retryAfterSec: number;
+    };
+
 function toDto(track: Track): SearchResultDto {
   return {
     trackUri: track.uri,
@@ -70,23 +127,40 @@ function toDto(track: Track): SearchResultDto {
   };
 }
 
+function bearerFromAuthHeader(header: string | undefined): string | null {
+  if (!header) return null;
+  const m = /^Bearer\s+(.+)$/i.exec(header);
+  return m ? m[1]!.trim() : null;
+}
+
+function randomJitterMs(): number {
+  return Math.random() * MAX_REFUSAL_JITTER_MS;
+}
+
 export function searchRoutes(deps: SearchRouteDeps): Hono {
   const app = new Hono();
   const cache = new Map<string, CachedSearch>();
+  const limiter = deps.searchRateLimiter;
+  const pacing = deps.searchPacing;
+  const jitterMs = deps.jitterMs ?? randomJitterMs;
+
+  /** The live cached or in-flight search for `key`; evicts an expired entry. */
+  function lookupCached(key: string): Promise<Track[]> | null {
+    const hit = cache.get(key);
+    if (!hit) return null;
+    if (hit.expiresAtEpochMs > Date.now()) return hit.tracks;
+    cache.delete(key);
+    return null;
+  }
 
   /**
-   * Run `search` once per cache key per TTL. The promise itself is cached so
-   * concurrent identical queries share a single provider call; rejected
-   * promises are evicted so failures are never served from cache.
+   * Start `search` and cache its promise so identical queries share one
+   * provider call. Rejected promises are evicted so failures are never served
+   * from cache.
    */
-  function cachedSearch(key: string, search: () => Promise<Track[]>): Promise<Track[]> {
-    const now = Date.now();
-    const hit = cache.get(key);
-    if (hit && hit.expiresAtEpochMs > now) return hit.tracks;
-    if (hit) cache.delete(key);
-
+  function startCachedSearch(key: string, search: () => Promise<Track[]>): Promise<Track[]> {
     const tracks = search();
-    const entry: CachedSearch = { expiresAtEpochMs: now + SEARCH_CACHE_TTL_MS, tracks };
+    const entry: CachedSearch = { expiresAtEpochMs: Date.now() + SEARCH_CACHE_TTL_MS, tracks };
     cache.set(key, entry);
     tracks.catch(() => {
       if (cache.get(key) === entry) cache.delete(key);
@@ -97,6 +171,73 @@ export function searchRoutes(deps: SearchRouteDeps): Hono {
       cache.delete(oldest);
     }
     return tracks;
+  }
+
+  /** The slow-down hint for a budget with `remaining` of `limit` calls left, if due. */
+  function slowDownFor(remaining: number, limit: number): SearchSlowDownDto | null {
+    if (remaining * 100 > limit * pacing.searchSlowDownThresholdPct) return null;
+    return { debounceMs: pacing.searchSlowDownDebounceMs, ttlSec: pacing.searchSlowDownTtlSec };
+  }
+
+  function peekSlowDown(providerId: string): SearchSlowDownDto | null {
+    const budget = limiter.peekSync(SEARCH_BUDGET_SCOPE, providerId);
+    return slowDownFor(budget.remaining, budget.limit);
+  }
+
+  /** Our own refusal wait in whole seconds: the limiter's wait plus jitter. */
+  function refusalWaitSec(retryAfterMs: number): number {
+    const jitter = Math.min(MAX_REFUSAL_JITTER_MS, Math.max(0, jitterMs()));
+    return Math.max(1, Math.ceil((retryAfterMs + jitter) / 1000));
+  }
+
+  /** Limiter key for the optional slot token: a slot in this session, else `anon`. */
+  async function resolveLimitKey(sessionId: string, slotToken: string | null): Promise<string> {
+    if (!slotToken) return SEARCH_ANON_KEY;
+    const slot = await deps.guestSlots.findBySlotToken(slotToken);
+    if (!slot || slot.sessionId !== sessionId) return SEARCH_ANON_KEY;
+    return searchGuestKey(slot.id);
+  }
+
+  /**
+   * Admit one cache miss. Synchronous on purpose: an await between the cache
+   * re-check and the in-flight insert would let two identical misses both
+   * spend budget. Cooldown is checked first (hardest block); a busy refusal
+   * never spends the guest's limit, and a too-fast refusal never spends budget.
+   */
+  function admit(input: {
+    cacheKey: string;
+    accountId: string;
+    providerId: string;
+    limitKey: string;
+    search: () => Promise<Track[]>;
+  }): Admission {
+    const joined = lookupCached(input.cacheKey);
+    if (joined) return { kind: 'search', tracks: joined, slowDown: peekSlowDown(input.providerId) };
+
+    const until = deps.streamingRouter.rateLimitedUntil(input.accountId, input.providerId);
+    if (until !== null) {
+      return {
+        kind: 'provider_rate_limited',
+        retryAfterSec: Math.max(1, Math.ceil((until - Date.now()) / 1000)),
+      };
+    }
+
+    const guest = limiter.peekSync(SEARCH_SCOPE, input.limitKey);
+    if (!guest.ok) {
+      return { kind: 'search_too_fast', retryAfterSec: refusalWaitSec(guest.retryAfterMs) };
+    }
+    const budget = limiter.peekSync(SEARCH_BUDGET_SCOPE, input.providerId);
+    if (!budget.ok) {
+      return { kind: 'search_busy', retryAfterSec: refusalWaitSec(budget.retryAfterMs) };
+    }
+
+    limiter.tryApply(SEARCH_SCOPE, input.limitKey);
+    const spent = limiter.tryApply(SEARCH_BUDGET_SCOPE, input.providerId);
+    return {
+      kind: 'search',
+      tracks: startCachedSearch(input.cacheKey, input.search),
+      slowDown: slowDownFor(spent.remaining, spent.limit),
+    };
   }
 
   app.get('/', async (c) => {
@@ -119,13 +260,16 @@ export function searchRoutes(deps: SearchRouteDeps): Hono {
     const connections = await deps.providerConnections.findAllForAccount(session.accountId);
     const connection = connections[0];
     if (!connection) return c.json({ error: 'no_provider_connected' }, 503);
+    const providerId = connection.providerId;
 
+    // Must complete before admission: loading the provider is what brings the
+    // connection's cooldown into the router.
     let provider;
     try {
-      provider = await deps.streamingRouter.getProvider(session.accountId, connection.providerId);
+      provider = await deps.streamingRouter.getProvider(session.accountId, providerId);
     } catch (err) {
       if (err instanceof UnknownProviderError) {
-        return c.json({ error: 'unknown_provider', providerId: connection.providerId }, 502);
+        return c.json({ error: 'unknown_provider', providerId }, 502);
       }
       if (err instanceof ProviderConnectionNotFoundError) {
         return c.json({ error: 'no_provider_connected' }, 503);
@@ -137,23 +281,56 @@ export function searchRoutes(deps: SearchRouteDeps): Hono {
     }
 
     if (!supportsSearch(provider)) {
-      return c.json({ error: 'search_not_supported', providerId: connection.providerId }, 501);
+      return c.json({ error: 'search_not_supported', providerId }, 501);
     }
 
     const query = parsed.output.q;
     const limit = parsed.output.limit ?? 20;
     const cacheKey = [
       session.accountId,
-      connection.providerId,
+      providerId,
       limit,
       query.trim().replace(/\s+/g, ' ').toLowerCase(),
     ].join('\u0000');
-    try {
-      const tracks = await cachedSearch(cacheKey, () => provider.search(query, limit));
-      return c.json({
-        results: tracks.map(toDto),
-        providerId: connection.providerId,
+
+    // Fast path: a live cached or in-flight result skips the slot lookup and
+    // never touches the limits.
+    let tracks = lookupCached(cacheKey);
+    let slowDown: SearchSlowDownDto | null;
+    if (tracks) {
+      slowDown = peekSlowDown(providerId);
+    } else {
+      const limitKey = await resolveLimitKey(
+        session.id,
+        bearerFromAuthHeader(c.req.header('authorization')),
+      );
+      // No awaits from here until the in-flight promise is inserted.
+      const admission = admit({
+        cacheKey,
+        accountId: session.accountId,
+        providerId,
+        limitKey,
+        search: () => provider.search(query, limit),
       });
+      if (admission.kind !== 'search') {
+        const { retryAfterSec } = admission;
+        c.header('Retry-After', String(retryAfterSec));
+        switch (admission.kind) {
+          case 'provider_rate_limited':
+            return c.json({ error: admission.kind, providerId, retryAfterSec }, 503);
+          case 'search_too_fast':
+            return c.json({ error: admission.kind, retryAfterSec }, 429);
+          case 'search_busy':
+            return c.json({ error: admission.kind, retryAfterSec }, 503);
+        }
+      }
+      tracks = admission.tracks;
+      slowDown = admission.slowDown;
+    }
+
+    try {
+      const results = (await tracks).map(toDto);
+      return c.json({ results, providerId, ...(slowDown && { slowDown }) });
     } catch (err) {
       const rateLimit = err as { status?: number; retryAfterSec?: number | null };
       if (rateLimit?.status === 429) {
@@ -162,23 +339,9 @@ export function searchRoutes(deps: SearchRouteDeps): Hono {
             ? rateLimit.retryAfterSec
             : null;
         if (retryAfterSec !== null) c.header('Retry-After', String(retryAfterSec));
-        return c.json(
-          {
-            error: 'provider_rate_limited',
-            providerId: connection.providerId,
-            retryAfterSec,
-          },
-          503,
-        );
+        return c.json({ error: 'provider_rate_limited', providerId, retryAfterSec }, 503);
       }
-      return c.json(
-        {
-          error: 'provider_error',
-          providerId: connection.providerId,
-          message: (err as Error).message,
-        },
-        502,
-      );
+      return c.json({ error: 'provider_error', providerId, message: (err as Error).message }, 502);
     }
   });
 

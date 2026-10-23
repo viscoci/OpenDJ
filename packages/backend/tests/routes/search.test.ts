@@ -3,6 +3,9 @@
  *
  * Uses a hand-rolled mock provider implementing IStreamingProvider +
  * ISupportsSearch. No real network calls.
+ *
+ * Pacing tests use small limits so each describe can drive the budget, the
+ * per-guest limit, and the anonymous limit to their edges directly.
  */
 
 import { Hono } from 'hono';
@@ -17,11 +20,23 @@ import {
   type Track,
 } from '@opendj/core';
 import {
+  InMemoryGuestSlotRepository,
   InMemoryProviderConnectionRepository,
   InMemorySessionRepository,
 } from '../../src/repositories/in-memory/index.js';
 import { searchRoutes } from '../../src/routes/search.js';
-import { ProviderRateLimitedError } from '../../src/providers/streaming/ProviderCooldowns.js';
+import { DEFAULT_SEARCH_PACING, type SearchPacingConfig } from '../../src/config.js';
+import {
+  createSearchRateLimiter,
+  SEARCH_ANON_KEY,
+  SEARCH_BUDGET_SCOPE,
+  SEARCH_SCOPE,
+  searchGuestKey,
+} from '../../src/rate-limit/SlidingWindowRateLimiter.js';
+import {
+  ProviderCooldowns,
+  ProviderRateLimitedError,
+} from '../../src/providers/streaming/ProviderCooldowns.js';
 import { StreamingRouter } from '../../src/providers/streaming/StreamingRouter.js';
 import type { ProviderRegistry } from '../../src/providers/streaming/providerRegistry.js';
 
@@ -58,8 +73,12 @@ class MockSearchProvider implements IStreamingProvider, ISupportsSearch {
       },
     });
   }
+  /** When set, searches wait on this promise before answering. */
+  gate: Promise<void> | null = null;
+
   async search(query: string, limit = 20): Promise<Track[]> {
     this.calls += 1;
+    if (this.gate) await this.gate;
     if (this.failWith) throw this.failWith;
     this.lastQuery = query;
     return this.resultsToReturn.slice(0, limit);
@@ -115,10 +134,17 @@ function buildHarness(
     provider?: 'mock-streamer' | 'mute-provider';
     noConnection?: boolean;
     noSession?: boolean;
+    pacing?: Partial<SearchPacingConfig>;
+    cooldowns?: ProviderCooldowns;
+    jitterMs?: () => number;
   } = {},
 ) {
   const sessions = new InMemorySessionRepository();
   const providerConnections = new InMemoryProviderConnectionRepository();
+  const guestSlots = new InMemoryGuestSlotRepository();
+  const pacing: SearchPacingConfig = { ...DEFAULT_SEARCH_PACING, ...opts.pacing };
+  // Read Date.now per call so vi fake timers move the limiter clock too.
+  const limiter = createSearchRateLimiter(pacing, () => Date.now());
 
   const mockProvider = new MockSearchProvider();
   mockProvider.setResults(SAMPLE_TRACKS);
@@ -132,6 +158,7 @@ function buildHarness(
     providerConnections,
     registry,
     context: { fetch: globalThis.fetch },
+    ...(opts.cooldowns && { cooldowns: opts.cooldowns }),
   });
 
   const sessionId = 'sess-search-1';
@@ -171,9 +198,39 @@ function buildHarness(
       sessions,
       providerConnections,
       streamingRouter: router,
+      guestSlots,
+      searchRateLimiter: limiter,
+      searchPacing: pacing,
+      jitterMs: opts.jitterMs ?? (() => 0),
     }),
   );
-  return { app, sessionId, mockProvider };
+
+  async function addGuest(
+    token: string,
+    input: { sessionId?: string; status?: 'active' | 'queued' } = {},
+  ): Promise<string> {
+    const slot = await guestSlots.create({
+      sessionId: input.sessionId ?? sessionId,
+      fingerprintHash: `fp-${token}`,
+      slotToken: token,
+      status: input.status ?? 'active',
+    });
+    return slot.id;
+  }
+
+  function search(q: string, token?: string): Promise<Response> {
+    return Promise.resolve(
+      app.request(`http://x/sessions/${sessionId}/search?q=${encodeURIComponent(q)}`, {
+        ...(token !== undefined && { headers: { authorization: `Bearer ${token}` } }),
+      }),
+    );
+  }
+
+  return { app, sessionId, accountId, mockProvider, limiter, addGuest, search };
+}
+
+function budgetRemaining(limiter: ReturnType<typeof createSearchRateLimiter>): number {
+  return limiter.peekSync(SEARCH_BUDGET_SCOPE, 'mock-streamer').remaining;
 }
 
 describe('GET /sessions/:id/search', () => {
@@ -318,4 +375,274 @@ describe('GET /sessions/:id/search — result cache', () => {
     expect(ok.status).toBe(200);
     expect(mockProvider.calls).toBe(2);
   });
+});
+
+interface RefusalBody {
+  error: string;
+  retryAfterSec: number;
+}
+
+interface SearchBody {
+  results: ReadonlyArray<unknown>;
+  providerId: string;
+  slowDown?: { debounceMs: number; ttlSec: number };
+}
+
+describe('GET /sessions/:id/search — search budget', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('refuses a cache miss with 503 search_busy and Retry-After once the budget is spent (AE2)', async () => {
+    const { search, mockProvider, limiter } = buildHarness({ pacing: { searchBudgetLimit: 2 } });
+    expect((await search('one')).status).toBe(200);
+    expect((await search('two')).status).toBe(200);
+
+    const res = await search('daft punk');
+
+    expect(res.status).toBe(503);
+    const body = (await res.json()) as RefusalBody;
+    expect(body.error).toBe('search_busy');
+    const waitSec = Math.ceil(
+      limiter.peekSync(SEARCH_BUDGET_SCOPE, 'mock-streamer').retryAfterMs / 1000,
+    );
+    expect(body.retryAfterSec).toBeGreaterThanOrEqual(waitSec);
+    expect(res.headers.get('retry-after')).toBe(String(body.retryAfterSec));
+    expect(mockProvider.calls).toBe(2);
+  });
+
+  it('serves a query cached 20s ago while the budget is spent (AE1)', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const { search, addGuest, mockProvider } = buildHarness({ pacing: { searchBudgetLimit: 1 } });
+    await addGuest('tok-a');
+    await addGuest('tok-b');
+    expect((await search('daft punk', 'tok-a')).status).toBe(200);
+
+    vi.setSystemTime(Date.now() + 20_000);
+    const res = await search('Daft Punk', 'tok-b');
+
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as SearchBody).results).toHaveLength(2);
+    expect(mockProvider.calls).toBe(1);
+  });
+
+  it('joins an in-flight duplicate while the budget is spent', async () => {
+    const { search, mockProvider } = buildHarness({ pacing: { searchBudgetLimit: 1 } });
+    let release!: () => void;
+    mockProvider.gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const first = search('ashes');
+    await vi.waitFor(() => expect(mockProvider.calls).toBe(1));
+    const second = search('ashes');
+    release();
+
+    const [a, b] = await Promise.all([first, second]);
+    expect(a.status).toBe(200);
+    expect(b.status).toBe(200);
+    expect(mockProvider.calls).toBe(1);
+  });
+
+  it('spends the budget once for two concurrent identical cache misses', async () => {
+    const { search, mockProvider, limiter } = buildHarness();
+
+    const [a, b] = await Promise.all([search('ashes'), search('ashes')]);
+
+    expect(a.status).toBe(200);
+    expect(b.status).toBe(200);
+    expect(mockProvider.calls).toBe(1);
+    expect(budgetRemaining(limiter)).toBe(DEFAULT_SEARCH_PACING.searchBudgetLimit - 1);
+  });
+
+  it("leaves the guest's own limit unchanged when refusing as busy", async () => {
+    const { search, addGuest, limiter } = buildHarness({ pacing: { searchBudgetLimit: 1 } });
+    const slotId = await addGuest('tok-a');
+    expect((await search('one', 'tok-a')).status).toBe(200);
+    const before = limiter.peekSync(SEARCH_SCOPE, searchGuestKey(slotId)).remaining;
+
+    const res = await search('two', 'tok-a');
+
+    expect(res.status).toBe(503);
+    expect(((await res.json()) as RefusalBody).error).toBe('search_busy');
+    expect(limiter.peekSync(SEARCH_SCOPE, searchGuestKey(slotId)).remaining).toBe(before);
+  });
+});
+
+describe('GET /sessions/:id/search — per-guest limits', () => {
+  it('refuses only the fast guest with 429 search_too_fast (AE4)', async () => {
+    const { search, addGuest, mockProvider } = buildHarness({
+      pacing: { searchGuestLimit: 2, searchBudgetLimit: 10 },
+    });
+    await addGuest('tok-a');
+    await addGuest('tok-b');
+    expect((await search('a1', 'tok-a')).status).toBe(200);
+    expect((await search('a2', 'tok-a')).status).toBe(200);
+
+    const tooFast = await search('a3', 'tok-a');
+    const other = await search('b1', 'tok-b');
+
+    expect(tooFast.status).toBe(429);
+    const body = (await tooFast.json()) as RefusalBody;
+    expect(body.error).toBe('search_too_fast');
+    expect(body.retryAfterSec).toBeGreaterThanOrEqual(1);
+    expect(tooFast.headers.get('retry-after')).toBe(String(body.retryAfterSec));
+    expect(other.status).toBe(200);
+    expect(mockProvider.calls).toBe(3);
+  });
+
+  it('does not spend the search budget on a too-fast refusal', async () => {
+    const { search, addGuest, limiter } = buildHarness({
+      pacing: { searchGuestLimit: 1, searchBudgetLimit: 10 },
+    });
+    await addGuest('tok-a');
+    expect((await search('a1', 'tok-a')).status).toBe(200);
+    const before = budgetRemaining(limiter);
+
+    expect((await search('a2', 'tok-a')).status).toBe(429);
+
+    expect(budgetRemaining(limiter)).toBe(before);
+  });
+
+  it('accepts a queued guest slot as a guest identity', async () => {
+    const { search, addGuest, limiter } = buildHarness();
+    const slotId = await addGuest('tok-q', { status: 'queued' });
+
+    expect((await search('hello', 'tok-q')).status).toBe(200);
+
+    const guest = limiter.peekSync(SEARCH_SCOPE, searchGuestKey(slotId));
+    expect(guest.remaining).toBe(DEFAULT_SEARCH_PACING.searchGuestLimit - 1);
+    const anon = limiter.peekSync(SEARCH_SCOPE, SEARCH_ANON_KEY);
+    expect(anon.remaining).toBe(DEFAULT_SEARCH_PACING.searchAnonLimit);
+  });
+
+  it('limits a slot token from another session as anonymous', async () => {
+    const { search, addGuest, limiter } = buildHarness();
+    const slotId = await addGuest('tok-elsewhere', { sessionId: 'other-session' });
+
+    expect((await search('hello', 'tok-elsewhere')).status).toBe(200);
+
+    const guest = limiter.peekSync(SEARCH_SCOPE, searchGuestKey(slotId));
+    expect(guest.remaining).toBe(DEFAULT_SEARCH_PACING.searchGuestLimit);
+    const anon = limiter.peekSync(SEARCH_SCOPE, SEARCH_ANON_KEY);
+    expect(anon.remaining).toBe(DEFAULT_SEARCH_PACING.searchAnonLimit - 1);
+  });
+
+  it('treats an unknown bearer token as anonymous, not 401', async () => {
+    const { search, limiter } = buildHarness();
+
+    const res = await search('hello', 'tok-nobody');
+
+    expect(res.status).toBe(200);
+    const anon = limiter.peekSync(SEARCH_SCOPE, SEARCH_ANON_KEY);
+    expect(anon.remaining).toBe(DEFAULT_SEARCH_PACING.searchAnonLimit - 1);
+  });
+});
+
+describe('GET /sessions/:id/search — anonymous limit', () => {
+  it('shares one anon limit across tokenless callers and still spends the budget (AE10)', async () => {
+    const { search, addGuest, limiter } = buildHarness({
+      pacing: { searchAnonLimit: 5, searchBudgetLimit: 20 },
+    });
+    await addGuest('tok-a');
+    for (let i = 0; i < 5; i += 1) {
+      expect((await search(`anon ${i}`)).status).toBe(200);
+    }
+
+    const sixth = await search('anon 6');
+    const guest = await search('guest search', 'tok-a');
+
+    expect(sixth.status).toBe(429);
+    expect(((await sixth.json()) as RefusalBody).error).toBe('search_too_fast');
+    expect(guest.status).toBe(200);
+    expect(budgetRemaining(limiter)).toBe(20 - 6);
+  });
+});
+
+describe('GET /sessions/:id/search — Spotify cooldown and cache', () => {
+  it('serves cached queries and refuses misses without spending limits while cooling down (AE8)', async () => {
+    const cooldowns = new ProviderCooldowns();
+    const { search, accountId, mockProvider, limiter } = buildHarness({ cooldowns });
+    expect((await search('cached song')).status).toBe(200);
+    cooldowns.record(accountId, 'mock-streamer', 40 * 60);
+    const budgetBefore = budgetRemaining(limiter);
+    const anonBefore = limiter.peekSync(SEARCH_SCOPE, SEARCH_ANON_KEY).remaining;
+
+    const hit = await search('cached song');
+    const miss = await search('fresh song');
+
+    expect(hit.status).toBe(200);
+    expect(miss.status).toBe(503);
+    const body = (await miss.json()) as RefusalBody;
+    expect(body.error).toBe('provider_rate_limited');
+    expect(body.retryAfterSec).toBeGreaterThan(40 * 60 - 5);
+    expect(body.retryAfterSec).toBeLessThanOrEqual(40 * 60);
+    expect(miss.headers.get('retry-after')).toBe(String(body.retryAfterSec));
+    expect(mockProvider.calls).toBe(1);
+    expect(budgetRemaining(limiter)).toBe(budgetBefore);
+    expect(limiter.peekSync(SEARCH_SCOPE, SEARCH_ANON_KEY).remaining).toBe(anonBefore);
+  });
+});
+
+describe('GET /sessions/:id/search — slow-down hint', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const pacing = { searchBudgetLimit: 10, searchAnonLimit: 50 };
+
+  it('adds slowDown once budget remaining is at or below the threshold (AE5)', async () => {
+    const { search } = buildHarness({ pacing });
+    for (let i = 0; i < 6; i += 1) {
+      const body = (await (await search(`q${i}`)).json()) as SearchBody;
+      expect(body.slowDown).toBeUndefined();
+    }
+
+    const body = (await (await search('q6')).json()) as SearchBody;
+
+    expect(body.slowDown).toEqual({
+      debounceMs: DEFAULT_SEARCH_PACING.searchSlowDownDebounceMs,
+      ttlSec: DEFAULT_SEARCH_PACING.searchSlowDownTtlSec,
+    });
+  });
+
+  it('computes the hint for a cache hit at the time it is served, never from the cache', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const { search, mockProvider } = buildHarness({ pacing });
+    expect(((await (await search('early')).json()) as SearchBody).slowDown).toBeUndefined();
+    for (let i = 0; i < 6; i += 1) await search(`drain ${i}`);
+
+    const hotHit = (await (await search('early')).json()) as SearchBody;
+    expect(hotHit.slowDown).toBeDefined();
+
+    // The budget window (30s) has passed but the cache entry (60s) is still live.
+    vi.setSystemTime(Date.now() + 31_000);
+    const coolHit = (await (await search('drain 5')).json()) as SearchBody;
+    expect(coolHit.slowDown).toBeUndefined();
+    expect(mockProvider.calls).toBe(7);
+  });
+});
+
+describe('GET /sessions/:id/search — refusal jitter', () => {
+  it.each([0, 750, 1500])(
+    'keeps retryAfterSec within [limiter wait, limiter wait + 2] with %ims jitter',
+    async (jitter) => {
+      const { search, limiter } = buildHarness({
+        pacing: { searchBudgetLimit: 1 },
+        jitterMs: () => jitter,
+      });
+      await search('one');
+
+      const res = await search('two');
+
+      const body = (await res.json()) as RefusalBody;
+      const waitSec = Math.ceil(
+        limiter.peekSync(SEARCH_BUDGET_SCOPE, 'mock-streamer').retryAfterMs / 1000,
+      );
+      expect(Number.isInteger(body.retryAfterSec)).toBe(true);
+      expect(body.retryAfterSec).toBeGreaterThanOrEqual(waitSec);
+      expect(body.retryAfterSec).toBeLessThanOrEqual(waitSec + 2);
+      expect(res.headers.get('retry-after')).toBe(String(body.retryAfterSec));
+    },
+  );
 });
