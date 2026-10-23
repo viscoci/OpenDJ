@@ -25,7 +25,7 @@ import {
   createDefaultLoginProviderRegistry,
   type LoginProviderRegistry,
 } from './auth/loginProviders/index.js';
-import type { Config } from './config.js';
+import { resolveSearchPacing, type Config, type SearchPacingConfig } from './config.js';
 import {
   ConsoleEmailAdapter,
   EmailVerificationService,
@@ -47,6 +47,10 @@ import { StreamingRouter } from './providers/streaming/StreamingRouter.js';
 import { QueueService, type RealtimeRoomRegistry } from './queue/QueueService.js';
 import { NowPlayingPoller } from './realtime/NowPlayingPoller.js';
 import { ProviderCooldowns } from './providers/streaming/ProviderCooldowns.js';
+import {
+  createSearchRateLimiter,
+  type SlidingWindowRateLimiter,
+} from './rate-limit/SlidingWindowRateLimiter.js';
 import { RoomRegistryImpl, type RealtimeRoomManager } from './realtime/RoomRegistryImpl.js';
 import { createDrizzleRepositories } from './repositories/drizzle/index.js';
 import type { Repositories } from './repositories/types.js';
@@ -67,6 +71,13 @@ export interface AppDeps {
   streamingRouter: StreamingRouter;
   /** Shared per-account provider rate-limit cooldowns (see ProviderCooldowns). */
   providerCooldowns: ProviderCooldowns;
+  /** Guest search pacing settings, with defaults applied. */
+  searchPacing: SearchPacingConfig;
+  /**
+   * The process's one guest-search limiter: scope `'search'` (keys
+   * `guest:<slotId>` / `anon`) and scope `'search_budget'` (key `<providerId>`).
+   */
+  searchRateLimiter: SlidingWindowRateLimiter;
   streamingProviderOAuthConfigs: StreamingProviderOAuthRegistry;
   lyricsLookupService: LyricsLookupService;
   abuseModerationService: AbuseModerationService;
@@ -130,6 +141,12 @@ export interface CreateDepsOptions {
    * adapter.
    */
   emailAdapter?: EmailAdapter;
+  /**
+   * Override the guest-search limiter (e.g. one built with
+   * `createSearchRateLimiter(pacing, fakeClock)` in tests). Defaults to one
+   * built from the config's search pacing.
+   */
+  searchRateLimiter?: SlidingWindowRateLimiter;
 }
 
 const NULL_ROOM_REGISTRY: RealtimeRoomRegistry = {
@@ -210,6 +227,9 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
     context: { fetch: fetchImpl },
     cooldowns: providerCooldowns,
   });
+
+  const searchPacing = resolveSearchPacing(options.config);
+  const searchRateLimiter = options.searchRateLimiter ?? createSearchRateLimiter(searchPacing);
 
   const sessionAuditService = new SessionAuditService({
     repository: repositories.sessionAuditEvents,
@@ -340,6 +360,8 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
     sessionAuditService,
     streamingRouter,
     providerCooldowns,
+    searchPacing,
+    searchRateLimiter,
     streamingProviderOAuthConfigs:
       options.streamingProviderOAuthConfigs ?? defaultStreamingProviderOAuthConfigs,
     lyricsLookupService,

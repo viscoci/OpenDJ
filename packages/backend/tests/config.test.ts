@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { ConfigError, loadConfig } from '../src/config.js';
+import {
+  ConfigError,
+  DEFAULT_SEARCH_PACING,
+  loadConfig,
+  resolveSearchPacing,
+} from '../src/config.js';
 
 const minimalEnv = {
   DATABASE_URL: 'postgres://postgres:postgres@localhost:5432/opendj',
@@ -90,6 +95,87 @@ describe('loadConfig', () => {
 
   it('rejects a non-URL DATABASE_URL', () => {
     expect(() => loadConfig({ DATABASE_URL: 'not-a-url' })).toThrow(ConfigError);
+  });
+
+  it('defaults the search pacing fields when their env vars are absent', () => {
+    const config = loadConfig(minimalEnv);
+    expect(DEFAULT_SEARCH_PACING).toEqual({
+      searchBudgetLimit: 3,
+      searchBudgetWindowMs: 30_000,
+      searchGuestLimit: 5,
+      searchAnonLimit: 5,
+      searchWindowMs: 30_000,
+      searchSlowDownThresholdPct: 30,
+      searchSlowDownDebounceMs: 1_200,
+      searchSlowDownTtlSec: 30,
+    });
+    expect(resolveSearchPacing(config)).toEqual(DEFAULT_SEARCH_PACING);
+    expect(config).toMatchObject(DEFAULT_SEARCH_PACING);
+  });
+
+  it('parses the search pacing env vars', () => {
+    const config = loadConfig({
+      ...minimalEnv,
+      SEARCH_BUDGET_LIMIT: '8',
+      SEARCH_BUDGET_WINDOW_MS: '60000',
+      SEARCH_GUEST_LIMIT: '6',
+      SEARCH_ANON_LIMIT: '4',
+      SEARCH_WINDOW_MS: '20000',
+      SEARCH_SLOWDOWN_THRESHOLD_PCT: '50',
+      SEARCH_SLOWDOWN_DEBOUNCE_MS: '900',
+      SEARCH_SLOWDOWN_TTL_SEC: '45',
+    });
+    expect(resolveSearchPacing(config)).toEqual({
+      searchBudgetLimit: 8,
+      searchBudgetWindowMs: 60_000,
+      searchGuestLimit: 6,
+      searchAnonLimit: 4,
+      searchWindowMs: 20_000,
+      searchSlowDownThresholdPct: 50,
+      searchSlowDownDebounceMs: 900,
+      searchSlowDownTtlSec: 45,
+    });
+  });
+
+  it('falls back to defaults when a search pacing env var is unparseable', () => {
+    expect(loadConfig({ ...minimalEnv, SEARCH_BUDGET_LIMIT: 'lots' }).searchBudgetLimit).toBe(3);
+  });
+
+  it.each([
+    'SEARCH_BUDGET_LIMIT',
+    'SEARCH_BUDGET_WINDOW_MS',
+    'SEARCH_GUEST_LIMIT',
+    'SEARCH_ANON_LIMIT',
+    'SEARCH_WINDOW_MS',
+    'SEARCH_SLOWDOWN_DEBOUNCE_MS',
+    'SEARCH_SLOWDOWN_TTL_SEC',
+  ])('rejects a non-positive %s', (name) => {
+    expect(() => loadConfig({ ...minimalEnv, [name]: '0' })).toThrow(ConfigError);
+    expect(() => loadConfig({ ...minimalEnv, [name]: '-3' })).toThrow(ConfigError);
+  });
+
+  it('accepts a slow-down threshold of 0..100 and rejects values outside it', () => {
+    expect(
+      loadConfig({ ...minimalEnv, SEARCH_SLOWDOWN_THRESHOLD_PCT: '0' }).searchSlowDownThresholdPct,
+    ).toBe(0);
+    expect(
+      loadConfig({ ...minimalEnv, SEARCH_SLOWDOWN_THRESHOLD_PCT: '100' })
+        .searchSlowDownThresholdPct,
+    ).toBe(100);
+    expect(() => loadConfig({ ...minimalEnv, SEARCH_SLOWDOWN_THRESHOLD_PCT: '101' })).toThrow(
+      ConfigError,
+    );
+    expect(() => loadConfig({ ...minimalEnv, SEARCH_SLOWDOWN_THRESHOLD_PCT: '-1' })).toThrow(
+      ConfigError,
+    );
+  });
+
+  it('resolveSearchPacing fills defaults for a hand-built config missing the fields', () => {
+    const { searchBudgetLimit: _a, searchAnonLimit: _b, ...partial } = loadConfig(minimalEnv);
+    expect(resolveSearchPacing({ ...partial, searchAnonLimit: 9 })).toEqual({
+      ...DEFAULT_SEARCH_PACING,
+      searchAnonLimit: 9,
+    });
   });
 
   it('attaches VALKEY_URL when provided', () => {
