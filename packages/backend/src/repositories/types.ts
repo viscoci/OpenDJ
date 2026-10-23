@@ -234,6 +234,8 @@ export interface QueueItemRecord {
 export interface QueueItemRepository {
   findById(id: string): Promise<QueueItemRecord | null>;
   findAllForSession(sessionId: string): Promise<QueueItemRecord[]>;
+  /** Every queue item in every session. Only for the one-time track catalog backfill. */
+  findAll(): Promise<QueueItemRecord[]>;
   create(input: {
     sessionId: string;
     guestId: string;
@@ -738,6 +740,54 @@ export interface SessionAuditEventRepository {
   ): Promise<SessionAuditEventRecord[]>;
 }
 
+/** One `track_catalog` row: a track a provider search returned or a guest requested. */
+export interface TrackCatalogRecord {
+  providerId: string;
+  trackUri: string;
+  trackName: string;
+  artistName: string;
+  albumArtUrl: string | null;
+  durationMs: number | null;
+  timesSeen: number;
+  timesRequested: number;
+  lastSeenAt: Date;
+}
+
+/**
+ * One write to the catalog. Inserts the track, or adds the increments to an
+ * existing `(providerId, trackUri)` row, refreshes its metadata (keeping a
+ * known album art / duration when this write has none), and keeps the later
+ * `seenAt`.
+ */
+export interface TrackCatalogUpsert {
+  providerId: string;
+  trackUri: string;
+  trackName: string;
+  artistName: string;
+  albumArtUrl: string | null;
+  durationMs: number | null;
+  seenIncrement: number;
+  requestedIncrement: number;
+  seenAt: Date;
+}
+
+export interface TrackCatalogRepository {
+  /** Apply every upsert; duplicate `(providerId, trackUri)` pairs in one batch are folded. */
+  upsertMany(entries: ReadonlyArray<TrackCatalogUpsert>): Promise<void>;
+  /** Every row, any provider. Loads the in-process search index. */
+  findAll(): Promise<TrackCatalogRecord[]>;
+  /**
+   * Ranked matches for `query` among one provider's tracks (see
+   * `rankCatalogMatches`): every query token prefix-matches a word of
+   * "name artist", accent- and punctuation-insensitive.
+   */
+  search(input: {
+    providerId: string;
+    query: string;
+    limit: number;
+  }): Promise<TrackCatalogRecord[]>;
+}
+
 export interface Repositories {
   users: UserRepository;
   accounts: AccountRepository;
@@ -761,4 +811,5 @@ export interface Repositories {
   lyricsFeedback: LyricsFeedbackRepository;
   abuseSubjects: AbuseSubjectRepository;
   actionEvents: ActionEventRepository;
+  trackCatalog: TrackCatalogRepository;
 }

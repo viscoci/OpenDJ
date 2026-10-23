@@ -58,6 +58,8 @@ const ConfigSchema = v.object({
   ),
   searchSlowDownDebounceMs: v.optional(PositiveInt),
   searchSlowDownTtlSec: v.optional(PositiveInt),
+  /** Spotify searches allowed per provider per rolling 24h (the provider's daily quota). */
+  searchDailyLimit: v.optional(PositiveInt),
   /**
    * Cap on a provider rate-limit cooldown persisted to `provider_connections`
    * (seconds), so a bogus `Retry-After` can't pause the provider for days.
@@ -78,11 +80,14 @@ export interface SearchPacingConfig {
   searchSlowDownThresholdPct: number;
   searchSlowDownDebounceMs: number;
   searchSlowDownTtlSec: number;
+  searchDailyLimit: number;
 }
 
 /**
  * Defaults sized for Spotify development mode: the now-playing poller makes
  * ~6 calls per 30s, so 3 searches per 30s keeps the app near 10 calls per 30s.
+ * Development mode also caps `/v1/search` at roughly 500 calls per 24h per
+ * developer account; 400 a day leaves headroom for other callers.
  */
 export const DEFAULT_SEARCH_PACING: Readonly<SearchPacingConfig> = Object.freeze({
   searchBudgetLimit: 3,
@@ -93,6 +98,7 @@ export const DEFAULT_SEARCH_PACING: Readonly<SearchPacingConfig> = Object.freeze
   searchSlowDownThresholdPct: 30,
   searchSlowDownDebounceMs: 1_200,
   searchSlowDownTtlSec: 30,
+  searchDailyLimit: 400,
 });
 
 /** Default cap on a persisted provider cooldown: 24h. */
@@ -174,6 +180,10 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
     searchSlowDownTtlSec: parseInteger(
       env['SEARCH_SLOWDOWN_TTL_SEC'],
       DEFAULT_SEARCH_PACING.searchSlowDownTtlSec,
+    ),
+    searchDailyLimit: parseInteger(
+      env['SEARCH_DAILY_LIMIT'],
+      DEFAULT_SEARCH_PACING.searchDailyLimit,
     ),
     providerCooldownMaxSec: parseInteger(
       env['PROVIDER_COOLDOWN_MAX_SEC'],

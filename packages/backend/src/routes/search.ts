@@ -21,6 +21,22 @@
  *   over its search limit; body carries `retryAfterSec` + `Retry-After`
  * - 503 `search_busy` — the search budget for the provider's API key is spent;
  *   body carries `retryAfterSec` + `Retry-After`
+ * - 503 `search_daily_limit` — the provider's daily search cap
+ *   (`searchDailyLimit` per rolling 24h) is spent; body carries
+ *   `retryAfterSec` (until the oldest unit of the day expires) + `Retry-After`
+ *
+ * A 200 carries `source: 'provider'` for a provider answer (live or cached).
+ *
+ * Local fallback. When a cache miss can't go to the provider because the
+ * budget is busy, the daily cap is spent, or the provider's search cooldown
+ * is open (or the provider answers 429 at call time), the route searches the
+ * local track catalog (tracks seen in earlier provider results or requested
+ * by guests). One or more matches return 200 `{ results, providerId,
+ * source: 'local', fallbackReason: 'busy' | 'daily_limit' |
+ * 'provider_limited' }` and spend nothing. No match returns the refusal
+ * above. Per-guest `search_too_fast` and early-retry refusals never get
+ * local results. Every successful provider call adds its results to the
+ * catalog (fire-and-forget).
  *
  * Clients branch on `error`, not the status. Our own refusal waits add 0-1.5s
  * of server jitter so refused clients don't retry in lockstep.
@@ -33,11 +49,13 @@
  *
  * A cache miss is admitted in one synchronous step after every async lookup:
  * re-check the cache (joining any in-flight search), check the Spotify
- * cooldown, peek the guest-or-anon limit and the budget, then spend both and
- * insert the in-flight promise. Two identical misses can never both spend.
+ * cooldown, peek the guest-or-anon limit, the budget, and the daily cap, then
+ * spend all three and insert the in-flight promise. Two identical misses can
+ * never both spend, and nothing is spent unless all three admit.
  *
  * Early retries pay. Each busy or too-fast refusal records the retry deadline
- * it handed out (including jitter) for its limiter key. A cache miss from
+ * it handed out (including jitter) for its limiter key (a busy refusal only
+ * when no local match was served; a daily-cap refusal records none). A cache miss from
  * that key that arrives before the deadline is refused (`search_busy` while the
  * budget is spent, else `search_too_fast` until the deadline) and spends one
  * unit of the key's own search limit, so a client that ignores
@@ -57,6 +75,7 @@
 import { Hono } from 'hono';
 import * as v from 'valibot';
 import { InvalidProviderCredentialsError, supportsSearch, type Track } from '@opendj/core';
+import type { TrackCatalog } from '../catalog/TrackCatalog.js';
 import type { SearchPacingConfig } from '../config.js';
 import {
   ProviderConnectionNotFoundError,
@@ -66,6 +85,7 @@ import {
 import {
   SEARCH_ANON_KEY,
   SEARCH_BUDGET_SCOPE,
+  SEARCH_DAILY_SCOPE,
   SEARCH_SCOPE,
   searchGuestKey,
   type SlidingWindowRateLimiter,
@@ -75,6 +95,7 @@ import type {
   GuestSlotRepository,
   ProviderConnectionRepository,
   SessionRepository,
+  TrackCatalogRecord,
 } from '../repositories/types.js';
 import { bearerFromAuthHeader } from './bearer.js';
 
@@ -84,9 +105,11 @@ export interface SearchRouteDeps {
   streamingRouter: StreamingRouter;
   /** Resolves the optional bearer slot token to a guest identity. */
   guestSlots: Pick<GuestSlotRepository, 'findBySlotToken'>;
-  /** Per-guest / anonymous limits and the per-provider search budget. */
+  /** Per-guest / anonymous limits, the per-provider search budget, and the daily cap. */
   searchRateLimiter: SlidingWindowRateLimiter;
   searchPacing: SearchPacingConfig;
+  /** Local catalog for fallback answers. Without one, refusals are never softened. */
+  trackCatalog?: Pick<TrackCatalog, 'recordSeen' | 'search'>;
   /** Server jitter added to our own refusal waits, in ms (clamped to 0-1500). Default random. */
   jitterMs?: () => number;
 }
@@ -122,12 +145,15 @@ export interface SearchSlowDownDto {
   ttlSec: number;
 }
 
+/** Why a local catalog answer was served instead of the provider's. */
+export type SearchFallbackReason = 'busy' | 'daily_limit' | 'provider_limited';
+
 type Admission =
   | { kind: 'search'; tracks: Promise<Track[]>; slowDown: SearchSlowDownDto | null }
-  | {
-      kind: 'provider_rate_limited' | 'search_too_fast' | 'search_busy';
-      retryAfterSec: number;
-    };
+  /** A refusal that never gets local results (per-guest limits, early retries). */
+  | { kind: 'search_too_fast' | 'search_busy'; retryAfterSec: number }
+  /** The provider can't be asked right now; try the local catalog, else refuse. */
+  | { kind: 'unavailable'; reason: SearchFallbackReason; retryAfterMs: number };
 
 function toDto(track: Track): SearchResultDto {
   return {
@@ -137,6 +163,21 @@ function toDto(track: Track): SearchResultDto {
     albumArtUrl: track.albumArt,
     durationMs: track.durationMs,
   };
+}
+
+function catalogToDto(record: TrackCatalogRecord): SearchResultDto {
+  return {
+    trackUri: record.trackUri,
+    trackName: record.trackName,
+    artistName: record.artistName,
+    albumArtUrl: record.albumArtUrl,
+    durationMs: record.durationMs,
+  };
+}
+
+/** Whole seconds, at least 1. */
+function waitSec(ms: number): number {
+  return Math.max(1, Math.ceil(ms / 1000));
 }
 
 function randomJitterMs(): number {
@@ -165,13 +206,26 @@ export function searchRoutes(deps: SearchRouteDeps): Hono {
    * provider call. Rejected promises are evicted so failures are never served
    * from cache.
    */
-  function startCachedSearch(key: string, search: () => Promise<Track[]>): Promise<Track[]> {
+  function startCachedSearch(
+    key: string,
+    providerId: string,
+    search: () => Promise<Track[]>,
+  ): Promise<Track[]> {
     const tracks = search();
     const entry: CachedSearch = { expiresAtEpochMs: Date.now() + SEARCH_CACHE_TTL_MS, tracks };
     cache.set(key, entry);
-    tracks.catch(() => {
-      if (cache.get(key) === entry) cache.delete(key);
-    });
+    tracks.then(
+      (results) => {
+        try {
+          deps.trackCatalog?.recordSeen(providerId, results);
+        } catch (err) {
+          console.error('[search] failed to record results in the track catalog', err);
+        }
+      },
+      () => {
+        if (cache.get(key) === entry) cache.delete(key);
+      },
+    );
     while (cache.size > SEARCH_CACHE_MAX_ENTRIES) {
       const oldest = cache.keys().next().value;
       if (oldest === undefined) break;
@@ -203,7 +257,7 @@ export function searchRoutes(deps: SearchRouteDeps): Hono {
     kind: 'search_too_fast' | 'search_busy',
     limitKey: string,
     retryAfterMs: number,
-  ): Admission {
+  ): { kind: 'search_too_fast' | 'search_busy'; retryAfterSec: number } {
     const retryAfterSec = refusalWaitSec(retryAfterMs);
     retryDeadlines.record(limitKey, Date.now() + retryAfterSec * 1000);
     return { kind, retryAfterSec };
@@ -220,9 +274,10 @@ export function searchRoutes(deps: SearchRouteDeps): Hono {
   /**
    * Admit one cache miss. Synchronous on purpose: an await between the cache
    * re-check and the in-flight insert would let two identical misses both
-   * spend budget. Cooldown is checked first (hardest block); a busy refusal
-   * never spends the guest's limit (an early retry is charged instead), and a
-   * too-fast refusal never spends budget.
+   * spend budget. Cooldown is checked first (hardest block); a busy or
+   * daily-cap answer never spends the guest's limit (an early retry is
+   * charged instead), and a too-fast refusal never spends budget. Guest,
+   * budget, and daily units are spent together or not at all.
    */
   function admit(input: {
     cacheKey: string;
@@ -240,10 +295,7 @@ export function searchRoutes(deps: SearchRouteDeps): Hono {
       'search',
     );
     if (until !== null) {
-      return {
-        kind: 'provider_rate_limited',
-        retryAfterSec: Math.max(1, Math.ceil((until - Date.now()) / 1000)),
-      };
+      return { kind: 'unavailable', reason: 'provider_limited', retryAfterMs: until - Date.now() };
     }
 
     const guest = limiter.peekSync(SEARCH_SCOPE, input.limitKey);
@@ -251,6 +303,7 @@ export function searchRoutes(deps: SearchRouteDeps): Hono {
       return refuse('search_too_fast', input.limitKey, guest.retryAfterMs);
     }
     const budget = limiter.peekSync(SEARCH_BUDGET_SCOPE, input.providerId);
+    const daily = limiter.peekSync(SEARCH_DAILY_SCOPE, input.providerId);
     const earlyByMs = retryDeadlines.remainingMs(input.limitKey);
     if (earlyByMs > 0) {
       // Retrying before the deadline we handed out costs the key one unit and
@@ -260,17 +313,36 @@ export function searchRoutes(deps: SearchRouteDeps): Hono {
         ? refuse('search_too_fast', input.limitKey, earlyByMs)
         : refuse('search_busy', input.limitKey, budget.retryAfterMs);
     }
+    if (!daily.ok) {
+      return { kind: 'unavailable', reason: 'daily_limit', retryAfterMs: daily.retryAfterMs };
+    }
     if (!budget.ok) {
-      return refuse('search_busy', input.limitKey, budget.retryAfterMs);
+      return { kind: 'unavailable', reason: 'busy', retryAfterMs: budget.retryAfterMs };
     }
 
     limiter.tryApply(SEARCH_SCOPE, input.limitKey);
+    limiter.tryApply(SEARCH_DAILY_SCOPE, input.providerId);
     const spent = limiter.tryApply(SEARCH_BUDGET_SCOPE, input.providerId);
     return {
       kind: 'search',
-      tracks: startCachedSearch(input.cacheKey, input.search),
+      tracks: startCachedSearch(input.cacheKey, input.providerId, input.search),
       slowDown: slowDownFor(spent.remaining, spent.limit),
     };
+  }
+
+  /** Local catalog matches for `query`; [] without a catalog or on any failure. */
+  async function localResults(
+    providerId: string,
+    query: string,
+    limit: number,
+  ): Promise<SearchResultDto[]> {
+    if (!deps.trackCatalog) return [];
+    try {
+      return (await deps.trackCatalog.search(providerId, query, limit)).map(catalogToDto);
+    } catch (err) {
+      console.error('[search] local catalog search failed', err);
+      return [];
+    }
   }
 
   app.get('/', async (c) => {
@@ -345,17 +417,42 @@ export function searchRoutes(deps: SearchRouteDeps): Hono {
         limitKey,
         search: () => provider.search(query, limit),
       });
+      if (admission.kind === 'unavailable') {
+        const results = await localResults(providerId, query, limit);
+        if (results.length > 0) {
+          return c.json({
+            results,
+            providerId,
+            source: 'local',
+            fallbackReason: admission.reason,
+          });
+        }
+        switch (admission.reason) {
+          case 'provider_limited': {
+            const retryAfterSec = waitSec(admission.retryAfterMs);
+            c.header('Retry-After', String(retryAfterSec));
+            return c.json({ error: 'provider_rate_limited', providerId, retryAfterSec }, 503);
+          }
+          case 'daily_limit': {
+            // No retry deadline: an early retry would lose its local fallback for hours.
+            const retryAfterSec = waitSec(admission.retryAfterMs);
+            c.header('Retry-After', String(retryAfterSec));
+            return c.json({ error: 'search_daily_limit', retryAfterSec }, 503);
+          }
+          case 'busy': {
+            const refusal = refuse('search_busy', limitKey, admission.retryAfterMs);
+            c.header('Retry-After', String(refusal.retryAfterSec));
+            return c.json({ error: 'search_busy', retryAfterSec: refusal.retryAfterSec }, 503);
+          }
+        }
+      }
       if (admission.kind !== 'search') {
         const { retryAfterSec } = admission;
         c.header('Retry-After', String(retryAfterSec));
-        switch (admission.kind) {
-          case 'provider_rate_limited':
-            return c.json({ error: admission.kind, providerId, retryAfterSec }, 503);
-          case 'search_too_fast':
-            return c.json({ error: admission.kind, retryAfterSec }, 429);
-          case 'search_busy':
-            return c.json({ error: admission.kind, retryAfterSec }, 503);
-        }
+        return c.json(
+          { error: admission.kind, retryAfterSec },
+          admission.kind === 'search_too_fast' ? 429 : 503,
+        );
       }
       tracks = admission.tracks;
       slowDown = admission.slowDown;
@@ -363,10 +460,19 @@ export function searchRoutes(deps: SearchRouteDeps): Hono {
 
     try {
       const results = (await tracks).map(toDto);
-      return c.json({ results, providerId, ...(slowDown && { slowDown }) });
+      return c.json({ results, providerId, source: 'provider', ...(slowDown && { slowDown }) });
     } catch (err) {
       const rateLimit = err as { status?: number; retryAfterSec?: number | null };
       if (rateLimit?.status === 429) {
+        const local = await localResults(providerId, query, limit);
+        if (local.length > 0) {
+          return c.json({
+            results: local,
+            providerId,
+            source: 'local',
+            fallbackReason: 'provider_limited',
+          });
+        }
         const retryAfterSec =
           typeof rateLimit.retryAfterSec === 'number' && rateLimit.retryAfterSec > 0
             ? rateLimit.retryAfterSec

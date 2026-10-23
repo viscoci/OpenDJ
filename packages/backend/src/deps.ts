@@ -21,6 +21,7 @@ import { ClaimsService } from './auth/ClaimsService.js';
 import { EmailPasswordService } from './auth/EmailPasswordService.js';
 import { LoginAuthService, type LoginCredentials } from './auth/LoginAuthService.js';
 import { AccountService } from './account/AccountService.js';
+import { TrackCatalog } from './catalog/TrackCatalog.js';
 import {
   createDefaultLoginProviderRegistry,
   type LoginProviderRegistry,
@@ -80,9 +81,15 @@ export interface AppDeps {
   searchPacing: SearchPacingConfig;
   /**
    * The process's one guest-search limiter: scope `'search'` (keys
-   * `guest:<slotId>` / `anon`) and scope `'search_budget'` (key `<providerId>`).
+   * `guest:<slotId>` / `anon`), scope `'search_budget'` (key `<providerId>`),
+   * and scope `'search_daily'` (key `<providerId>`, 24h window).
    */
   searchRateLimiter: SlidingWindowRateLimiter;
+  /**
+   * Local catalog of tracks seen in provider searches or requested by
+   * guests; search falls back to it when the provider can't be asked.
+   */
+  trackCatalog: TrackCatalog;
   streamingProviderOAuthConfigs: StreamingProviderOAuthRegistry;
   lyricsLookupService: LyricsLookupService;
   abuseModerationService: AbuseModerationService;
@@ -278,6 +285,16 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
   const searchPacing = resolveSearchPacing(options.config);
   const searchRateLimiter = options.searchRateLimiter ?? createSearchRateLimiter(searchPacing);
 
+  const trackCatalog = new TrackCatalog({
+    repository: repositories.trackCatalog,
+    queueItems: repositories.queueItems,
+    sessions: repositories.sessions,
+    providerConnections: repositories.providerConnections,
+  });
+  // Load the index (and backfill an empty table from queue items) in the
+  // background so boot never waits on it.
+  trackCatalog.warm();
+
   const sessionAuditService = new SessionAuditService({
     repository: repositories.sessionAuditEvents,
   });
@@ -296,6 +313,7 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
     streamingRouter,
     providerConnections: repositories.providerConnections,
     audit: sessionAuditService,
+    trackCatalog,
   });
 
   const karaokeService = new KaraokeService({
@@ -413,6 +431,7 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
     providerCooldowns,
     searchPacing,
     searchRateLimiter,
+    trackCatalog,
     streamingProviderOAuthConfigs:
       options.streamingProviderOAuthConfigs ?? defaultStreamingProviderOAuthConfigs,
     lyricsLookupService,

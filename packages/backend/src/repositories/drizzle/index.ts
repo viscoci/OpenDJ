@@ -27,6 +27,7 @@ import { DrizzleQueueItemRepository } from './queue-items.js';
 import { DrizzleQueueSkipVoteRepository } from './queue-skip-votes.js';
 import { DrizzleSessionAuditEventRepository } from './session-audit-events.js';
 import { DrizzleSessionRepository } from './sessions.js';
+import { DrizzleTrackCatalogRepository } from './track-catalog.js';
 import { DrizzleUserRepository } from './users.js';
 
 export * from './users.js';
@@ -51,6 +52,7 @@ export * from './queue-items.js';
 export * from './queue-skip-votes.js';
 export * from './session-audit-events.js';
 export * from './sessions.js';
+export * from './track-catalog.js';
 
 export function createDrizzleRepositories(db: Database): Repositories {
   return {
@@ -76,5 +78,6 @@ export function createDrizzleRepositories(db: Database): Repositories {
     lyricsFeedback: new DrizzleLyricsFeedbackRepository(db),
     abuseSubjects: new DrizzleAbuseSubjectRepository(db),
     actionEvents: new DrizzleActionEventRepository(db),
+    trackCatalog: new DrizzleTrackCatalogRepository(db),
   };
 }

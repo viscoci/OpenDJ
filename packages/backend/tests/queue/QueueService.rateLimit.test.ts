@@ -115,6 +115,7 @@ async function setup(opts: { moderationEnabled?: boolean } = {}) {
   });
   room.subscribe('c1', (e) => events.push(e as SessionEvent));
 
+  const trackCatalog = { recordRequested: vi.fn<(accountId: string, track: Track) => void>() };
   const service = new QueueService({
     sessions,
     guests,
@@ -125,6 +126,7 @@ async function setup(opts: { moderationEnabled?: boolean } = {}) {
     rooms: { forSession: (id) => (id === SESSION_ID ? room : null) },
     streamingRouter,
     providerConnections,
+    trackCatalog,
   });
 
   await guests.create({ sessionId: SESSION_ID, fingerprint: 'fp-1', userId: null });
@@ -137,7 +139,7 @@ async function setup(opts: { moderationEnabled?: boolean } = {}) {
 
   const request = () =>
     service.requestTrack({ sessionId: SESSION_ID, slotToken: 'slot-1', track: TRACK }, NOW);
-  return { service, queueItems, cooldowns, queueTrack, events, request };
+  return { service, queueItems, cooldowns, queueTrack, events, request, trackCatalog };
 }
 
 async function rejection(promise: Promise<unknown>): Promise<QueueServiceError> {
@@ -224,5 +226,51 @@ describe('QueueService.moderate — provider rate limited', () => {
     expect(err.code).toBe('provider_rate_limited');
     expect((await queueItems.findById(created.id))?.status).toBe('pending');
     expect(queueTrack).not.toHaveBeenCalled();
+  });
+});
+
+describe('QueueService.requestTrack — local track catalog', () => {
+  it('records an accepted request in the track catalog', async () => {
+    const { request, trackCatalog } = await setup();
+
+    await request();
+
+    expect(trackCatalog.recordRequested).toHaveBeenCalledTimes(1);
+    expect(trackCatalog.recordRequested).toHaveBeenCalledWith(ACCOUNT_ID, TRACK);
+  });
+
+  it('records a request held for moderation', async () => {
+    const { request, trackCatalog } = await setup({ moderationEnabled: true });
+
+    await request();
+
+    expect(trackCatalog.recordRequested).toHaveBeenCalledWith(ACCOUNT_ID, TRACK);
+  });
+
+  it('does not record a refused or rolled-back request', async () => {
+    const refused = await setup();
+    refused.cooldowns.record(ACCOUNT_ID, 'spotify', 'player', 900);
+    await rejection(refused.request());
+    expect(refused.trackCatalog.recordRequested).not.toHaveBeenCalled();
+
+    const rolledBack = await setup();
+    rolledBack.queueTrack.mockRejectedValueOnce(
+      Object.assign(new Error('Spotify Web API returned 429'), { status: 429, retryAfterSec: 60 }),
+    );
+    await rejection(rolledBack.request());
+    expect(rolledBack.trackCatalog.recordRequested).not.toHaveBeenCalled();
+  });
+
+  it('still accepts the request when the catalog throws', async () => {
+    const { request, queueItems, trackCatalog } = await setup();
+    trackCatalog.recordRequested.mockImplementation(() => {
+      throw new Error('catalog broke');
+    });
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    await request();
+
+    expect(await queueItems.findAllForSession(SESSION_ID)).toHaveLength(1);
+    error.mockRestore();
   });
 });

@@ -109,6 +109,7 @@ describe('loadConfig', () => {
       searchSlowDownThresholdPct: 30,
       searchSlowDownDebounceMs: 1_200,
       searchSlowDownTtlSec: 30,
+      searchDailyLimit: 400,
     });
     expect(resolveSearchPacing(config)).toEqual(DEFAULT_SEARCH_PACING);
     expect(config).toMatchObject(DEFAULT_SEARCH_PACING);
@@ -125,6 +126,7 @@ describe('loadConfig', () => {
       SEARCH_SLOWDOWN_THRESHOLD_PCT: '50',
       SEARCH_SLOWDOWN_DEBOUNCE_MS: '900',
       SEARCH_SLOWDOWN_TTL_SEC: '45',
+      SEARCH_DAILY_LIMIT: '250',
     });
     expect(resolveSearchPacing(config)).toEqual({
       searchBudgetLimit: 8,
@@ -135,6 +137,7 @@ describe('loadConfig', () => {
       searchSlowDownThresholdPct: 50,
       searchSlowDownDebounceMs: 900,
       searchSlowDownTtlSec: 45,
+      searchDailyLimit: 250,
     });
   });
 
@@ -150,6 +153,7 @@ describe('loadConfig', () => {
     'SEARCH_WINDOW_MS',
     'SEARCH_SLOWDOWN_DEBOUNCE_MS',
     'SEARCH_SLOWDOWN_TTL_SEC',
+    'SEARCH_DAILY_LIMIT',
   ])('rejects a non-positive %s', (name) => {
     expect(() => loadConfig({ ...minimalEnv, [name]: '0' })).toThrow(ConfigError);
     expect(() => loadConfig({ ...minimalEnv, [name]: '-3' })).toThrow(ConfigError);

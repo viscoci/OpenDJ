@@ -33,6 +33,7 @@ import type {
   QueueSkipVoteRepository,
   SessionRepository,
 } from '../repositories/types.js';
+import type { TrackCatalog } from '../catalog/TrackCatalog.js';
 import { sanitizeKaraokeDisplayName } from '../karaoke/displayName.js';
 import type { StreamingRouter } from '../providers/streaming/StreamingRouter.js';
 import {
@@ -96,6 +97,13 @@ export interface QueueServiceDeps {
    * failures don't block the user-facing action.
    */
   audit?: SessionAuditService;
+  /**
+   * Optional local track catalog. Every accepted request (auto-approved or
+   * held for moderation) is counted there so guest search can still find it
+   * when the provider can't be asked. Fire-and-forget; never blocks or fails
+   * the request.
+   */
+  trackCatalog?: Pick<TrackCatalog, 'recordRequested'>;
 }
 
 export interface RealtimeRoomRegistry {
@@ -261,6 +269,12 @@ export class QueueService {
         });
         throw rateLimitedError(pushed.retryAfterSec);
       }
+    }
+
+    try {
+      this.deps.trackCatalog?.recordRequested(session.accountId, input.track);
+    } catch (err) {
+      console.error('[QueueService] track catalog recordRequested failed', err);
     }
 
     void this.deps.audit?.record({

@@ -42,6 +42,10 @@ export interface SlidingWindowRateLimiterOptions {
 export const SEARCH_SCOPE = 'search' satisfies RateLimitScope;
 /** Spotify-call budget scope. Key: the provider id (one API key per deployment). */
 export const SEARCH_BUDGET_SCOPE = 'search_budget' satisfies RateLimitScope;
+/** Daily Spotify-search cap scope. Key: the provider id. Window: `SEARCH_DAILY_WINDOW_MS`. */
+export const SEARCH_DAILY_SCOPE = 'search_daily' satisfies RateLimitScope;
+/** The daily cap's rolling window: 24h. */
+export const SEARCH_DAILY_WINDOW_MS = 86_400_000;
 /** Shared key for searches that carry no valid guest identity. */
 export const SEARCH_ANON_KEY = 'anon';
 
@@ -174,6 +178,10 @@ export function createSearchRateLimiter(
       [SEARCH_BUDGET_SCOPE]: {
         limit: pacing.searchBudgetLimit,
         windowMs: pacing.searchBudgetWindowMs,
+      },
+      [SEARCH_DAILY_SCOPE]: {
+        limit: pacing.searchDailyLimit,
+        windowMs: SEARCH_DAILY_WINDOW_MS,
       },
     },
   });

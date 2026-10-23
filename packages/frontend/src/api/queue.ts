@@ -114,8 +114,14 @@ export class QueueApi {
    * the wait for the rate-limit codes):
    * - 429 `search_too_fast` — this guest is searching too quickly
    * - 503 `search_busy` — the deployment's search budget is spent
+   * - 503 `search_daily_limit` — the deployment's daily search cap is spent
    * - 503 `provider_rate_limited` — the provider is rate limiting the account
    * - 503 `no_provider_connected`, 501 `search_not_supported`
+   *
+   * While the provider can't be asked (busy, daily cap, provider limit), a
+   * 200 may instead carry `source: 'local'` matches from tracks already seen
+   * on this deployment, with `fallbackReason`; the refusals above only come
+   * when nothing local matches.
    *
    * An aborted `signal` rejects with `NetworkError`; check `signal.aborted`
    * to tell a cancellation from a real network failure.

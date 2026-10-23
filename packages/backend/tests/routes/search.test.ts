@@ -22,14 +22,18 @@ import {
 import {
   InMemoryGuestSlotRepository,
   InMemoryProviderConnectionRepository,
+  InMemoryQueueItemRepository,
   InMemorySessionRepository,
+  InMemoryTrackCatalogRepository,
 } from '../../src/repositories/in-memory/index.js';
+import { TrackCatalog } from '../../src/catalog/TrackCatalog.js';
 import { searchRoutes } from '../../src/routes/search.js';
 import { DEFAULT_SEARCH_PACING, type SearchPacingConfig } from '../../src/config.js';
 import {
   createSearchRateLimiter,
   SEARCH_ANON_KEY,
   SEARCH_BUDGET_SCOPE,
+  SEARCH_DAILY_SCOPE,
   SEARCH_SCOPE,
   searchGuestKey,
 } from '../../src/rate-limit/SlidingWindowRateLimiter.js';
@@ -149,6 +153,13 @@ function buildHarness(
   const mockProvider = new MockSearchProvider();
   mockProvider.setResults(SAMPLE_TRACKS);
   const muteProvider = new NoSearchProvider();
+  const catalogRepo = new InMemoryTrackCatalogRepository();
+  const catalog = new TrackCatalog({
+    repository: catalogRepo,
+    queueItems: new InMemoryQueueItemRepository(),
+    sessions,
+    providerConnections,
+  });
   const registry: ProviderRegistry = {
     'mock-streamer': () => mockProvider,
     'mute-provider': () => muteProvider,
@@ -201,6 +212,7 @@ function buildHarness(
       guestSlots,
       searchRateLimiter: limiter,
       searchPacing: pacing,
+      trackCatalog: catalog,
       jitterMs: opts.jitterMs ?? (() => 0),
     }),
   );
@@ -226,7 +238,24 @@ function buildHarness(
     );
   }
 
-  return { app, sessionId, accountId, mockProvider, limiter, addGuest, search };
+  /** Put `tracks` into the local catalog as if a provider search had returned them. */
+  async function seedCatalog(tracks: Track[] = SAMPLE_TRACKS): Promise<void> {
+    catalog.recordSeen('mock-streamer', tracks);
+    await catalog.whenIdle();
+  }
+
+  return {
+    app,
+    sessionId,
+    accountId,
+    mockProvider,
+    limiter,
+    catalog,
+    catalogRepo,
+    addGuest,
+    search,
+    seedCatalog,
+  };
 }
 
 function budgetRemaining(limiter: ReturnType<typeof createSearchRateLimiter>): number {
@@ -880,5 +909,271 @@ describe('GET /sessions/:id/search — early retry with a free slot', () => {
 
     vi.setSystemTime(start + 30_500 + body.retryAfterSec * 1000);
     expect((await search('r2', 'tok-rude')).status).toBe(200);
+  });
+});
+
+interface LocalBody extends SearchBody {
+  source?: 'provider' | 'local';
+  fallbackReason?: string;
+}
+
+function dailyRemaining(limiter: ReturnType<typeof createSearchRateLimiter>): number {
+  return limiter.peekSync(SEARCH_DAILY_SCOPE, 'mock-streamer').remaining;
+}
+
+describe('GET /sessions/:id/search — daily cap', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('refuses with 503 search_daily_limit after N admissions, independent of the 30s window', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const { search, mockProvider } = buildHarness({
+      pacing: { searchDailyLimit: 2, searchBudgetLimit: 10 },
+    });
+    const start = Date.now();
+    expect((await search('a1')).status).toBe(200);
+    expect((await search('a2')).status).toBe(200);
+
+    // Well past the 30s budget window: the budget is free, the daily cap is not.
+    vi.setSystemTime(start + 31_000);
+    const res = await search('zzz nothing');
+
+    expect(res.status).toBe(503);
+    const body = (await res.json()) as RefusalBody;
+    expect(body.error).toBe('search_daily_limit');
+    expect(body.retryAfterSec).toBeGreaterThanOrEqual(86_400 - 31 - 1);
+    expect(body.retryAfterSec).toBeLessThanOrEqual(86_400);
+    expect(res.headers.get('retry-after')).toBe(String(body.retryAfterSec));
+    expect(mockProvider.calls).toBe(2);
+
+    // A day after the first admission one unit has expired.
+    vi.setSystemTime(start + 86_400_000 + 1);
+    expect((await search('a3')).status).toBe(200);
+    expect(mockProvider.calls).toBe(3);
+  });
+
+  it('still serves cache hits while the daily cap is spent', async () => {
+    const { search, mockProvider } = buildHarness({ pacing: { searchDailyLimit: 1 } });
+    expect((await search('cached')).status).toBe(200);
+
+    expect((await search('Cached')).status).toBe(200);
+    expect(mockProvider.calls).toBe(1);
+  });
+
+  it('spends a daily unit only when the budget admits too', async () => {
+    const { search, addGuest, limiter } = buildHarness({
+      pacing: { searchDailyLimit: 5, searchBudgetLimit: 1 },
+    });
+    const slotId = await addGuest('tok-a');
+    expect((await search('one', 'tok-a')).status).toBe(200);
+    expect(dailyRemaining(limiter)).toBe(4);
+
+    const busy = await search('two', 'tok-a');
+
+    expect(((await busy.json()) as RefusalBody).error).toBe('search_busy');
+    expect(dailyRemaining(limiter)).toBe(4);
+    expect(limiter.peekSync(SEARCH_SCOPE, searchGuestKey(slotId)).remaining).toBe(
+      DEFAULT_SEARCH_PACING.searchGuestLimit - 1,
+    );
+  });
+
+  it('spends no budget or guest unit when the daily cap refuses', async () => {
+    const { search, addGuest, limiter } = buildHarness({
+      pacing: { searchDailyLimit: 1, searchBudgetLimit: 5 },
+    });
+    const slotId = await addGuest('tok-a');
+    expect((await search('one', 'tok-a')).status).toBe(200);
+    const guestBefore = limiter.peekSync(SEARCH_SCOPE, searchGuestKey(slotId)).remaining;
+
+    const res = await search('two', 'tok-a');
+
+    expect(((await res.json()) as RefusalBody).error).toBe('search_daily_limit');
+    expect(budgetRemaining(limiter)).toBe(4);
+    expect(limiter.peekSync(SEARCH_SCOPE, searchGuestKey(slotId)).remaining).toBe(guestBefore);
+    // A daily refusal hands out no retry deadline: the next try is not "early".
+    const again = await search('three', 'tok-a');
+    expect(((await again.json()) as RefusalBody).error).toBe('search_daily_limit');
+    expect(limiter.peekSync(SEARCH_SCOPE, searchGuestKey(slotId)).remaining).toBe(guestBefore);
+  });
+});
+
+describe('GET /sessions/:id/search — source', () => {
+  it("marks provider answers and cache hits as source 'provider'", async () => {
+    const { search } = buildHarness();
+
+    const live = (await (await search('first')).json()) as LocalBody;
+    const cached = (await (await search('First')).json()) as LocalBody;
+
+    expect(live.source).toBe('provider');
+    expect(live.fallbackReason).toBeUndefined();
+    expect(cached.source).toBe('provider');
+  });
+
+  it('adds provider results to the local catalog once per provider call', async () => {
+    const { search, catalog, catalogRepo } = buildHarness();
+
+    await search('anything');
+    await search('Anything');
+    await catalog.whenIdle();
+
+    const rows = await catalogRepo.findAll();
+    expect(rows.map((r) => [r.providerId, r.trackUri, r.timesSeen])).toEqual([
+      ['mock-streamer', 'mock:track:1', 1],
+      ['mock-streamer', 'mock:track:2', 1],
+    ]);
+  });
+
+  it('never fails the response when the catalog write fails', async () => {
+    const { search, catalog, catalogRepo } = buildHarness();
+    vi.spyOn(catalogRepo, 'upsertMany').mockRejectedValue(new Error('db down'));
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const res = await search('anything');
+    await catalog.whenIdle();
+
+    expect(res.status).toBe(200);
+    expect(error).toHaveBeenCalled();
+    error.mockRestore();
+  });
+});
+
+describe('GET /sessions/:id/search — local catalog fallback', () => {
+  type Reason = 'busy' | 'daily_limit' | 'provider_limited';
+
+  /** A harness whose next cache miss can't reach the provider because of `reason`. */
+  async function blocked(reason: Reason) {
+    const cooldowns = new ProviderCooldowns();
+    const harness = buildHarness({
+      cooldowns,
+      pacing:
+        reason === 'busy'
+          ? { searchBudgetLimit: 1, searchDailyLimit: 10 }
+          : reason === 'daily_limit'
+            ? { searchBudgetLimit: 10, searchDailyLimit: 1 }
+            : {},
+    });
+    await harness.addGuest('tok-a');
+    expect((await harness.search('spend', 'tok-a')).status).toBe(200);
+    if (reason === 'provider_limited') {
+      cooldowns.record(harness.accountId, 'mock-streamer', 'search', 600);
+    }
+    await harness.seedCatalog();
+    return harness;
+  }
+
+  it.each<Reason>(['busy', 'daily_limit', 'provider_limited'])(
+    'serves local matches with fallbackReason %s and spends nothing',
+    async (reason) => {
+      const { search, limiter, mockProvider } = await blocked(reason);
+      const callsBefore = mockProvider.calls;
+      const before = {
+        budget: budgetRemaining(limiter),
+        daily: dailyRemaining(limiter),
+        anon: limiter.peekSync(SEARCH_SCOPE, SEARCH_ANON_KEY).remaining,
+      };
+
+      const res = await search('first son');
+      const again = await search('test art');
+
+      expect(res.status).toBe(200);
+      expect(res.headers.get('retry-after')).toBeNull();
+      expect(await res.json()).toEqual({
+        results: [
+          {
+            trackUri: 'mock:track:1',
+            trackName: 'First Song',
+            artistName: 'Test Artist',
+            albumArtUrl: 'https://cdn.test/a.jpg',
+            durationMs: 180_000,
+          },
+        ],
+        providerId: 'mock-streamer',
+        source: 'local',
+        fallbackReason: reason,
+      });
+      expect(again.status).toBe(200);
+      expect(mockProvider.calls).toBe(callsBefore);
+      expect({
+        budget: budgetRemaining(limiter),
+        daily: dailyRemaining(limiter),
+        anon: limiter.peekSync(SEARCH_SCOPE, SEARCH_ANON_KEY).remaining,
+      }).toEqual(before);
+    },
+  );
+
+  it.each<[Reason, string]>([
+    ['busy', 'search_busy'],
+    ['daily_limit', 'search_daily_limit'],
+    ['provider_limited', 'provider_rate_limited'],
+  ])('falls back to the %s refusal when nothing local matches', async (reason, error) => {
+    const { search } = await blocked(reason);
+
+    const res = await search('daft punk');
+
+    expect(res.status).toBe(503);
+    expect(((await res.json()) as RefusalBody).error).toBe(error);
+    expect(Number(res.headers.get('retry-after'))).toBeGreaterThan(0);
+  });
+
+  it('serves local matches when the provider answers 429 at call time', async () => {
+    const { search, mockProvider, seedCatalog } = buildHarness();
+    await seedCatalog();
+    mockProvider.failWith = Object.assign(new Error('Spotify Web API returned 429'), {
+      status: 429,
+      retryAfterSec: 3600,
+    });
+
+    const res = await search('second');
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as LocalBody;
+    expect(body).toMatchObject({ source: 'local', fallbackReason: 'provider_limited' });
+    expect(body.results).toHaveLength(1);
+  });
+
+  it('never serves local results to a too-fast guest', async () => {
+    const { search, addGuest, seedCatalog } = buildHarness({
+      pacing: { searchGuestLimit: 1, searchBudgetLimit: 10 },
+    });
+    await seedCatalog();
+    await addGuest('tok-a');
+    expect((await search('zzz', 'tok-a')).status).toBe(200);
+
+    const res = await search('first', 'tok-a');
+
+    expect(res.status).toBe(429);
+    expect(((await res.json()) as RefusalBody).error).toBe('search_too_fast');
+  });
+
+  it('never serves local results to an early retry', async () => {
+    const { search, addGuest, seedCatalog, limiter } = buildHarness({
+      pacing: { searchBudgetLimit: 1, searchGuestLimit: 5 },
+    });
+    await seedCatalog();
+    const rude = await addGuest('tok-rude');
+    expect((await search('spend')).status).toBe(200);
+    expect(((await (await search('zzz', 'tok-rude')).json()) as RefusalBody).error).toBe(
+      'search_busy',
+    );
+
+    const early = await search('first', 'tok-rude');
+
+    expect(early.status).toBe(503);
+    expect(((await early.json()) as RefusalBody).error).toBe('search_busy');
+    expect(limiter.peekSync(SEARCH_SCOPE, searchGuestKey(rude)).remaining).toBe(4);
+  });
+
+  it('caps local results at the request limit', async () => {
+    const { app, sessionId, seedCatalog } = await blocked('busy');
+    await seedCatalog([
+      ...SAMPLE_TRACKS,
+      { uri: 'mock:track:3', name: 'Third Song', artist: 'X', albumArt: null, durationMs: null },
+    ]);
+
+    const res = await app.request(`http://x/sessions/${sessionId}/search?q=song&limit=2`);
+
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as LocalBody).results).toHaveLength(2);
   });
 });

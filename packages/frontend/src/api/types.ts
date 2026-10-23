@@ -177,6 +177,14 @@ export interface SearchResponse {
    * search debounce to `debounceMs` for `ttlSec` seconds.
    */
   slowDown?: { debounceMs: number; ttlSec: number };
+  /**
+   * `'provider'` for a live (or cached) provider answer. `'local'` when the
+   * provider couldn't be asked and these are matches from tracks the
+   * deployment has already seen or queued; `fallbackReason` says why.
+   */
+  source?: 'provider' | 'local';
+  /** Why a `'local'` answer was served instead of the provider's. */
+  fallbackReason?: 'busy' | 'daily_limit' | 'provider_limited';
 }
 
 export interface RegisterRequest {

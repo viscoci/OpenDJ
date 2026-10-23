@@ -34,6 +34,8 @@ import type {
   SessionEventRow,
   SessionInsert,
   SessionRow,
+  TrackCatalogInsert,
+  TrackCatalogRow,
   UserInsert,
   UserRow,
 } from '../src/schema/index.js';
@@ -143,5 +145,16 @@ describe('action_events + abuse_subjects', () => {
     expectTypeOf<AbuseSubjectRow>().toHaveProperty('status').toEqualTypeOf<string>();
     expectTypeOf<ActionEventInsert>().toHaveProperty('eventKind');
     expectTypeOf<AbuseSubjectInsert>().toHaveProperty('subjectHash');
+  });
+});
+
+describe('track_catalog', () => {
+  it('row has the catalog key and counters', () => {
+    expectTypeOf<TrackCatalogRow>().toHaveProperty('providerId').toEqualTypeOf<string>();
+    expectTypeOf<TrackCatalogRow>().toHaveProperty('trackUri').toEqualTypeOf<string>();
+    expectTypeOf<TrackCatalogRow>().toHaveProperty('timesSeen').toEqualTypeOf<number>();
+    expectTypeOf<TrackCatalogRow>().toHaveProperty('timesRequested').toEqualTypeOf<number>();
+    expectTypeOf<TrackCatalogRow>().toHaveProperty('lastSeenAt').toEqualTypeOf<Date>();
+    expectTypeOf<TrackCatalogInsert>().toHaveProperty('trackName');
   });
 });
