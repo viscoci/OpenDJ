@@ -115,6 +115,40 @@ export interface QueueServiceDeps {
    * it, uris are used as sent.
    */
   trackResolver?: Pick<TrackResolverChain, 'resolve'>;
+  /**
+   * Optional read-only view of what the host's provider will play: its
+   * upcoming queue plus the current track, as last seen by the
+   * NowPlayingPoller. With duplicates off, a request for a uri in that set
+   * is refused as `duplicate_request` (the host added it in Spotify
+   * directly, or its earlier OpenDJ request was retired early). Never calls
+   * the provider; null or a failed read skips the check.
+   */
+  providerQueueView?: ProviderQueueView;
+}
+
+/** Read-only view of the provider's upcoming queue + now playing. */
+export interface ProviderQueueView {
+  /** Uris queued or playing on the provider, or null when unknown. */
+  upcomingUris(sessionId: string): Promise<ReadonlySet<string> | null>;
+}
+
+/**
+ * `ProviderQueueView` over the realtime room snapshot the NowPlayingPoller
+ * keeps current (`providerQueue` + `nowPlaying`). Null when no room is bound
+ * or the poller hasn't reported anything yet.
+ */
+export function roomProviderQueueView(rooms: RealtimeRoomRegistry): ProviderQueueView {
+  return {
+    async upcomingUris(sessionId) {
+      const room = rooms.forSession(sessionId);
+      if (!room) return null;
+      const snapshot = await room.getSnapshot();
+      if (!snapshot.nowPlaying && snapshot.providerQueue.length === 0) return null;
+      const uris = new Set(snapshot.providerQueue.map((t) => t.uri));
+      if (snapshot.nowPlaying) uris.add(snapshot.nowPlaying.uri);
+      return uris;
+    },
+  };
 }
 
 export interface RealtimeRoomRegistry {
@@ -204,6 +238,7 @@ export class QueueService {
     enqueueCheck(input.track.uri);
     const track = await this.resolveTrack(session.accountId, input.track);
     if (track.uri !== input.track.uri) enqueueCheck(track.uri);
+    await this.assertNotOnProvider(input.sessionId, session.allowDuplicates, track.uri);
 
     // Karaoke gate — ALL checks run BEFORE the item insert so a rejected
     // claim never strands a claimless item in `required` mode.
@@ -312,6 +347,32 @@ export class QueueService {
     });
 
     return created;
+  }
+
+  /**
+   * Duplicate rule, provider side: with duplicates off, refuse a uri the
+   * host's provider already has queued or playing (per the poller's last
+   * snapshot). Unknown state or a failed read lets the request through.
+   */
+  private async assertNotOnProvider(
+    sessionId: string,
+    allowDuplicates: boolean,
+    uri: string,
+  ): Promise<void> {
+    if (allowDuplicates || !this.deps.providerQueueView) return;
+    let uris: ReadonlySet<string> | null;
+    try {
+      uris = await this.deps.providerQueueView.upcomingUris(sessionId);
+    } catch (err) {
+      console.warn(`[QueueService] provider queue view failed: ${(err as Error).message}`);
+      return;
+    }
+    if (uris?.has(uri)) {
+      throw new QueueServiceError(
+        'duplicate_request',
+        'canEnqueue rejected: duplicate_request (already queued on the provider)',
+      );
+    }
   }
 
   /** Host action: approve or reject a pending item. */

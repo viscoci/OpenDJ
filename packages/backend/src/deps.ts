@@ -53,7 +53,11 @@ import type { ProviderRegistry } from './providers/streaming/providerRegistry.js
 import { SoundtrackProvider } from './providers/streaming/SoundtrackProvider.js';
 import { SpotifyProvider } from './providers/streaming/spotify/SpotifyProvider.js';
 import { StreamingRouter } from './providers/streaming/StreamingRouter.js';
-import { QueueService, type RealtimeRoomRegistry } from './queue/QueueService.js';
+import {
+  QueueService,
+  roomProviderQueueView,
+  type RealtimeRoomRegistry,
+} from './queue/QueueService.js';
 import { NowPlayingPoller } from './realtime/NowPlayingPoller.js';
 import { ProviderCooldowns } from './providers/streaming/ProviderCooldowns.js';
 import {
@@ -381,6 +385,9 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
     audit: sessionAuditService,
     trackCatalog,
     trackResolver,
+    // Duplicate check also covers what Spotify already has queued/playing,
+    // read from the poller-maintained room snapshot (no extra API call).
+    providerQueueView: roomProviderQueueView(rooms),
   });
 
   const karaokeService = new KaraokeService({
