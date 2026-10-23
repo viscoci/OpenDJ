@@ -113,3 +113,38 @@ export function compareTitles(
     ? { ok: true }
     : { ok: false, reason: `title mismatch (overlap ${overlap.toFixed(2)})` };
 }
+
+/** Splits an artist credit on commas, ` & `, ` and ` and `feat.` joins. */
+const ARTIST_SEPARATOR = /\s*,\s*|\s+(?:&|and|feat\.?|ft\.?|featuring)\s+/iu;
+
+/** One artist name, loose, with brackets and a leading `the` dropped. */
+function looseArtist(name: string): string {
+  return loose(name.replace(/\([^)]*\)|\[[^\]]*\]/g, ' ')).replace(/^the\s+/u, '');
+}
+
+/** The whole credit plus each split part, loosened, empties dropped. */
+function artistNames(credit: string): string[] {
+  const names = [credit, ...credit.split(ARTIST_SEPARATOR)].map(looseArtist);
+  return [...new Set(names.filter((name) => name !== ''))];
+}
+
+/**
+ * Whether the requested artist credit (the guest's pick) is among the
+ * artists a provider credits the resolved recording to. Names are loosened
+ * (case, accents, punctuation, a leading `the`); any requested name that
+ * equals or contains / is contained in (whole tokens) any page artist matches.
+ */
+export function compareArtists(
+  requested: string,
+  candidates: ReadonlyArray<string>,
+): { ok: true } | { ok: false; reason: string } {
+  const wanted = artistNames(requested);
+  const offered = candidates.flatMap(artistNames);
+  if (wanted.length === 0) return { ok: true };
+  for (const a of wanted) {
+    for (const b of offered) {
+      if (a === b || hasPhrase(a, b) || hasPhrase(b, a)) return { ok: true };
+    }
+  }
+  return { ok: false, reason: `artist mismatch (credited to ${candidates.join(', ')})` };
+}

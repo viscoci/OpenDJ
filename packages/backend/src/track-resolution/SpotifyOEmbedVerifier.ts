@@ -1,20 +1,31 @@
 /**
- * Verifies a resolved Spotify track through Spotify's public oEmbed endpoint
- * (no auth, not the Web API, so it spends none of the search quota).
+ * Verifies a resolved Spotify track through Spotify's public endpoints (no
+ * auth, not the Web API, so it spends none of the search quota).
  *
- * `GET https://open.spotify.com/oembed?url=https://open.spotify.com/track/<id>`
+ * Title: `GET https://open.spotify.com/oembed?url=https://open.spotify.com/track/<id>`
  * answers `title` (the track name), plus `html`, `iframe_url`,
  * `thumbnail_url`, `provider_name`, `type`, `version`, width/height fields.
- * It names no artist, so only the title is compared (see `compareTitles`).
+ * It names no artist; the title is compared with `compareTitles`.
  *
- * Own limiter (scope `spotify_oembed`, one deployment-wide key): 60 calls/min.
- * Titles are cached per URI for 24h. A spent limiter, timeout (3s), network
- * failure, HTTP error, or body without a title is `unavailable` and isn't
- * cached.
+ * Artist: when the title passes and the request names an artist, the public
+ * track page `GET https://open.spotify.com/track/<id>` (plain HTML, fetched
+ * with a browser User-Agent) is read. Its `<title>` credits the artists, e.g.
+ * `Happy - song and lyrics by Ken | Spotify` or `Push It - Radio Version -
+ * Song, Lyrics, and Music Video by Salt-N-Pepa | Spotify` (see
+ * `parseSpotifyPageArtists`), compared with `compareArtists`. This catches a
+ * same-titled recording by another artist, which oEmbed alone can't. A page
+ * that can't be fetched or parsed falls back to the title-only decision.
+ *
+ * One limiter (scope `spotify_oembed`, one deployment-wide key) of 60
+ * calls/min covers both fetches. Titles and page artists are cached per URI
+ * for 24h. A spent limiter, timeout (3s), network failure, HTTP error, or an
+ * unparsable body is `unavailable` (oEmbed) / a title-only fallback (page),
+ * and isn't cached.
  */
 
 import { SlidingWindowRateLimiter } from '../rate-limit/SlidingWindowRateLimiter.js';
 import {
+  compareArtists,
   compareTitles,
   type TrackVerdict,
   type TrackVerifier,
@@ -26,13 +37,62 @@ const LIMITER_KEY = 'global';
 const DEFAULT_BASE_URL = 'https://open.spotify.com';
 const DEFAULT_TIMEOUT_MS = 3_000;
 const RATE_LIMIT_PER_MIN = 60;
-const TITLE_TTL_MS = 24 * 60 * 60_000;
+const CACHE_TTL_MS = 24 * 60 * 60_000;
 const CACHE_MAX_ENTRIES = 2_000;
 const TRACK_URI = /^spotify:track:([A-Za-z0-9]+)$/;
+const BROWSER_USER_AGENT =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
 
-interface CacheEntry {
+type Fetched<T> = { ok: true; value: T } | { ok: false; reason: string };
+
+type Unavailable = Extract<TrackVerdict, { verdict: 'unavailable' }>;
+
+interface CacheEntry<T> {
   expiresAtEpochMs: number;
-  title: string;
+  value: T;
+}
+
+const NAMED_ENTITIES: Record<string, string> = {
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+  nbsp: ' ',
+};
+
+function decodeEntities(text: string): string {
+  return text.replace(/&(#x[0-9a-f]+|#[0-9]+|[a-z]+);/giu, (whole, code: string) => {
+    if (code[0] === '#') {
+      const point =
+        code[1] === 'x' || code[1] === 'X'
+          ? Number.parseInt(code.slice(2), 16)
+          : Number.parseInt(code.slice(1), 10);
+      return Number.isFinite(point) && point <= 0x10ffff ? String.fromCodePoint(point) : whole;
+    }
+    return NAMED_ENTITIES[code.toLowerCase()] ?? whole;
+  });
+}
+
+/**
+ * The artists a Spotify track page's `<title>` credits: the text after the
+ * last ` by ` up to ` | Spotify`, split on commas, ` & ` and ` and `. Null
+ * when the page has no such title.
+ */
+export function parseSpotifyPageArtists(html: string): string[] | null {
+  const raw = /<title[^>]*>([\s\S]*?)<\/title>/iu.exec(html)?.[1];
+  if (raw === undefined) return null;
+  const title = decodeEntities(raw).replace(/\s+/gu, ' ').trim();
+  const lower = title.toLowerCase();
+  const by = lower.lastIndexOf(' by ');
+  if (by < 0) return null;
+  const end = lower.lastIndexOf(' | spotify');
+  const credit = title.slice(by + ' by '.length, end > by ? end : undefined);
+  const artists = credit
+    .split(/\s*,\s*|\s+&\s+|\s+and\s+/iu)
+    .map((artist) => artist.trim())
+    .filter((artist) => artist !== '');
+  return artists.length > 0 ? artists : null;
 }
 
 export interface SpotifyOEmbedVerifierOptions {
@@ -51,7 +111,8 @@ export class SpotifyOEmbedVerifier implements TrackVerifier {
   private readonly now: () => number;
   private readonly logger: Pick<Console, 'warn'>;
   private readonly limiter: SlidingWindowRateLimiter;
-  private readonly cache = new Map<string, CacheEntry>();
+  private readonly titles = new Map<string, CacheEntry<string>>();
+  private readonly artists = new Map<string, CacheEntry<string[]>>();
 
   constructor(options: SpotifyOEmbedVerifierOptions = {}) {
     this.fetchImpl = options.fetchImpl ?? ((input, init) => globalThis.fetch(input, init));
@@ -72,56 +133,112 @@ export class SpotifyOEmbedVerifier implements TrackVerifier {
     const title = await this.titleFor(request.uri, id);
     if (typeof title !== 'string') return title;
     const compared = compareTitles(request.trackName, title);
-    return compared.ok
+    if (!compared.ok) return { verdict: 'mismatch', title, reason: compared.reason };
+
+    const artistName = request.artistName?.trim();
+    if (!artistName) return { verdict: 'match' };
+    const artists = await this.artistsFor(request.uri, id);
+    if (artists === null) return { verdict: 'match' };
+    const credited = compareArtists(artistName, artists);
+    return credited.ok
       ? { verdict: 'match' }
-      : { verdict: 'mismatch', title, reason: compared.reason };
+      : { verdict: 'mismatch', title, reason: credited.reason };
   }
 
-  /** Cached or fetched title for the track, or an `unavailable` verdict. */
-  private async titleFor(
-    uri: string,
-    id: string,
-  ): Promise<string | Extract<TrackVerdict, { verdict: 'unavailable' }>> {
-    const cached = this.cache.get(uri);
-    if (cached && cached.expiresAtEpochMs > this.now()) return cached.title;
-    if (cached) this.cache.delete(uri);
+  /** Cached or fetched oEmbed title for the track, or an `unavailable` verdict. */
+  private async titleFor(uri: string, id: string): Promise<string | Unavailable> {
+    const cached = this.cached(this.titles, uri);
+    if (cached !== undefined) return cached;
 
+    const params = new URLSearchParams({ url: `https://open.spotify.com/track/${id}` });
+    const result = await this.fetchLimited(
+      `${this.baseUrl}/oembed?${params.toString()}`,
+      { accept: 'application/json' },
+      async (response) => {
+        const body = (await response.json()) as unknown;
+        const title =
+          body && typeof body === 'object' ? (body as { title?: unknown }).title : undefined;
+        return typeof title === 'string' && title.trim() !== ''
+          ? { ok: true, value: title }
+          : { ok: false, reason: 'no title' };
+      },
+    );
+    if (result.ok) {
+      this.remember(this.titles, uri, result.value);
+      return result.value;
+    }
+    return this.unavailable('oembed', result.reason);
+  }
+
+  /** Cached or fetched artists the track page credits, or null when unknown. */
+  private async artistsFor(uri: string, id: string): Promise<string[] | null> {
+    const cached = this.cached(this.artists, uri);
+    if (cached !== undefined) return cached;
+
+    const result = await this.fetchLimited(
+      `${this.baseUrl}/track/${id}`,
+      {
+        accept: 'text/html,application/xhtml+xml',
+        'accept-language': 'en',
+        'user-agent': BROWSER_USER_AGENT,
+      },
+      async (response) => {
+        const artists = parseSpotifyPageArtists(await response.text());
+        return artists
+          ? { ok: true, value: artists }
+          : { ok: false, reason: 'no artists in title' };
+      },
+    );
+    if (result.ok) {
+      this.remember(this.artists, uri, result.value);
+      return result.value;
+    }
+    this.unavailable('track page', result.reason);
+    return null;
+  }
+
+  /**
+   * One limited, timed fetch; `read` parses an OK response's body.
+   */
+  private async fetchLimited<T>(
+    url: string,
+    headers: Record<string, string>,
+    read: (response: Response) => Promise<Fetched<T>>,
+  ): Promise<Fetched<T>> {
     if (!this.limiter.tryApply(SPOTIFY_OEMBED_SCOPE, LIMITER_KEY).ok) {
-      return this.unavailable('rate limited');
+      return { ok: false, reason: 'rate limited' };
     }
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
-      const params = new URLSearchParams({ url: `https://open.spotify.com/track/${id}` });
-      const response = await this.fetchImpl(`${this.baseUrl}/oembed?${params.toString()}`, {
-        signal: controller.signal,
-        headers: { accept: 'application/json' },
-      });
-      if (!response.ok) return this.unavailable(`HTTP ${response.status}`);
-      const body = (await response.json()) as unknown;
-      const title =
-        body && typeof body === 'object' ? (body as { title?: unknown }).title : undefined;
-      if (typeof title !== 'string' || title.trim() === '') return this.unavailable('no title');
-      this.remember(uri, title);
-      return title;
+      const response = await this.fetchImpl(url, { signal: controller.signal, headers });
+      if (!response.ok) return { ok: false, reason: `HTTP ${response.status}` };
+      return await read(response);
     } catch (err) {
-      return this.unavailable((err as Error).message);
+      return { ok: false, reason: (err as Error).message };
     } finally {
       clearTimeout(timer);
     }
   }
 
-  private unavailable(reason: string): Extract<TrackVerdict, { verdict: 'unavailable' }> {
-    this.logger.warn(`[track-resolution] spotify oembed unavailable: ${reason}`);
+  private unavailable(source: string, reason: string): Unavailable {
+    this.logger.warn(`[track-resolution] spotify ${source} unavailable: ${reason}`);
     return { verdict: 'unavailable', reason };
   }
 
-  private remember(uri: string, title: string): void {
-    this.cache.set(uri, { expiresAtEpochMs: this.now() + TITLE_TTL_MS, title });
-    while (this.cache.size > CACHE_MAX_ENTRIES) {
-      const oldest = this.cache.keys().next().value;
+  private cached<T>(cache: Map<string, CacheEntry<T>>, uri: string): T | undefined {
+    const entry = cache.get(uri);
+    if (entry && entry.expiresAtEpochMs > this.now()) return entry.value;
+    if (entry) cache.delete(uri);
+    return undefined;
+  }
+
+  private remember<T>(cache: Map<string, CacheEntry<T>>, uri: string, value: T): void {
+    cache.set(uri, { expiresAtEpochMs: this.now() + CACHE_TTL_MS, value });
+    while (cache.size > CACHE_MAX_ENTRIES) {
+      const oldest = cache.keys().next().value;
       if (oldest === undefined) break;
-      this.cache.delete(oldest);
+      cache.delete(oldest);
     }
   }
 }

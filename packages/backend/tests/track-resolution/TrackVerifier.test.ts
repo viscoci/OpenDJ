@@ -5,8 +5,15 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import { SpotifyOEmbedVerifier } from '../../src/track-resolution/SpotifyOEmbedVerifier.js';
-import { compareTitles, type TrackVerifier } from '../../src/track-resolution/TrackVerifier.js';
+import {
+  parseSpotifyPageArtists,
+  SpotifyOEmbedVerifier,
+} from '../../src/track-resolution/SpotifyOEmbedVerifier.js';
+import {
+  compareArtists,
+  compareTitles,
+  type TrackVerifier,
+} from '../../src/track-resolution/TrackVerifier.js';
 import {
   TrackResolverChain,
   type TrackResolver,
@@ -34,6 +41,25 @@ function oembed(title: string): Response {
     { status: 200, headers: { 'content-type': 'application/json' } },
   );
 }
+
+/** The public track page's HTML, reduced to the `<title>` it carries (as seen live 2026-10-23). */
+function trackPage(title: string): Response {
+  return new Response(
+    `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/><title>${title}</title>` +
+      '<meta property="og:title" content="x"/></head><body><div id="main"></div></body></html>',
+    { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } },
+  );
+}
+
+// Live <title>s of open.spotify.com/track/<id> pages.
+const PAGE = {
+  happyKen: 'Happy - song and lyrics by Ken | Spotify',
+  getLucky:
+    'Get Lucky (Radio Edit) [feat. Pharrell Williams and Nile Rodgers] - song and lyrics by Daft Punk, Pharrell Williams, Nile Rodgers | Spotify',
+  pushIt: 'Push It - Radio Version - Song, Lyrics, and Music Video by Salt-N-Pepa | Spotify',
+  bailando:
+    'Bailando - (Originally Performed by Enrique Iglesias feat. Sean Paul) [Karaoke Version] - song and lyrics by HQ Deluxe | Spotify',
+};
 
 // Wrong recordings Sonovault mapped ISRCs to in the live 184-song test.
 const WRONG: Array<[requested: string, candidate: string]> = [
@@ -219,6 +245,259 @@ describe('SpotifyOEmbedVerifier', () => {
     expect((await verifier.verify({ uri: 'spotify:track:over', trackName: 'Shout' })).verdict).toBe(
       'match',
     );
+  });
+});
+
+describe('parseSpotifyPageArtists', () => {
+  it.each([
+    [PAGE.happyKen, ['Ken']],
+    [PAGE.getLucky, ['Daft Punk', 'Pharrell Williams', 'Nile Rodgers']],
+    [PAGE.pushIt, ['Salt-N-Pepa']],
+    [PAGE.bailando, ['HQ Deluxe']],
+  ])('reads the artists from %j', (title, artists) => {
+    expect(parseSpotifyPageArtists(`<html><head><title>${title}</title></head></html>`)).toEqual(
+      artists,
+    );
+  });
+
+  it('decodes HTML entities before splitting', () => {
+    expect(
+      parseSpotifyPageArtists(
+        '<title>Don&#x27;t Cry - song and lyrics by Guns N&#39; Roses, Katrina &amp; The Waves | Spotify</title>',
+      ),
+    ).toEqual(["Guns N' Roses", 'Katrina', 'The Waves']);
+  });
+
+  it.each([
+    ['no title', '<html><head></head></html>'],
+    ['a title without "by"', '<title>Spotify - Web Player</title>'],
+    ['an empty artist list', '<title>Happy - song and lyrics by  | Spotify</title>'],
+  ])('answers null for %s', (_, html) => {
+    expect(parseSpotifyPageArtists(html)).toBeNull();
+  });
+});
+
+describe('compareArtists', () => {
+  it.each([
+    ['Daft Punk', ['Daft Punk', 'Pharrell Williams', 'Nile Rodgers']],
+    ['Pharrell Williams', ['Daft Punk', 'Pharrell Williams', 'Nile Rodgers']],
+    ['Daft Punk feat. Pharrell Williams', ['Daft Punk', 'Pharrell Williams']],
+    ['Salt-N-Pepa', ['Salt-N-Pepa']],
+    ['The Killers', ['Killers']],
+    ['Killers', ['The Killers']],
+    ['Beyoncé', ['Beyonce']],
+    ['Sinead O’Connor', ["Sinéad O'Connor"]],
+    ['Katrina & The Waves', ['Katrina', 'The Waves']],
+    ['Katrina and the Waves', ['Katrina', 'The Waves']],
+    ['Pharrell', ['Pharrell Williams']],
+  ])('accepts %j among %j', (requested, page) => {
+    expect(compareArtists(requested, page).ok).toBe(true);
+  });
+
+  it.each([
+    ['Pharrell Williams', ['Ken']],
+    ['Enrique Iglesias', ['HQ Deluxe']],
+    ['Kenny Rogers', ['Ken']],
+    ['Oasis', ['The Wonderwalls']],
+  ])('rejects %j among %j', (requested, page) => {
+    expect(compareArtists(requested, page).ok).toBe(false);
+  });
+});
+
+describe('SpotifyOEmbedVerifier with the track page', () => {
+  const ID = '01p9iQOsSKnmEJABkbkzWT';
+  const URI = `spotify:track:${ID}`;
+
+  /** oEmbed answers `oembedTitle`; the track page answers `page()`. */
+  function routed(oembedTitle: string, page: () => Promise<Response> | Response) {
+    return vi.fn<typeof fetch>(async (input) => {
+      const url = new URL(String(input));
+      return url.pathname === '/oembed' ? oembed(oembedTitle) : page();
+    });
+  }
+
+  it('fetches the public track page with a browser User-Agent', async () => {
+    const fetchImpl = routed('Happy', () => trackPage(PAGE.happyKen));
+    const verifier = new SpotifyOEmbedVerifier({ fetchImpl, logger: quiet });
+    await verifier.verify({ uri: URI, trackName: 'Happy', artistName: 'Pharrell Williams' });
+
+    const pageCall = fetchImpl.mock.calls.find(
+      ([input]) => new URL(String(input)).pathname !== '/oembed',
+    );
+    expect(pageCall).toBeDefined();
+    expect(String(pageCall![0])).toBe(`https://open.spotify.com/track/${ID}`);
+    const headers = new Headers(pageCall![1]?.headers);
+    expect(headers.get('user-agent')).toMatch(/Mozilla\/5\.0/);
+    expect(pageCall![1]?.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('rejects a same-titled recording by another artist (Happy by Ken for Pharrell Williams)', async () => {
+    const verifier = new SpotifyOEmbedVerifier({
+      fetchImpl: routed('Happy', () => trackPage(PAGE.happyKen)),
+      logger: quiet,
+    });
+    expect(
+      await verifier.verify({ uri: URI, trackName: 'Happy', artistName: 'Pharrell Williams' }),
+    ).toMatchObject({
+      verdict: 'mismatch',
+      title: 'Happy',
+      reason: expect.stringContaining('artist'),
+    });
+  });
+
+  it('accepts Get Lucky for Daft Punk', async () => {
+    const verifier = new SpotifyOEmbedVerifier({
+      fetchImpl: routed('Get Lucky (Radio Edit) [feat. Pharrell Williams and Nile Rodgers]', () =>
+        trackPage(PAGE.getLucky),
+      ),
+      logger: quiet,
+    });
+    expect(
+      await verifier.verify({ uri: URI, trackName: 'Get Lucky', artistName: 'Daft Punk' }),
+    ).toEqual({ verdict: 'match' });
+  });
+
+  it('accepts the "Song, Lyrics, and Music Video by" phrasing (Push It by Salt-N-Pepa)', async () => {
+    const verifier = new SpotifyOEmbedVerifier({
+      fetchImpl: routed('Push It - Radio Version', () => trackPage(PAGE.pushIt)),
+      logger: quiet,
+    });
+    expect(
+      await verifier.verify({ uri: URI, trackName: 'Push It', artistName: 'Salt-N-Pepa' }),
+    ).toEqual({ verdict: 'match' });
+  });
+
+  it('accepts a "The" prefix and accents that differ from the page', async () => {
+    const verifier = new SpotifyOEmbedVerifier({
+      fetchImpl: routed('Mr. Brightside', () =>
+        trackPage('Mr. Brightside - song and lyrics by The Killers | Spotify'),
+      ),
+      logger: quiet,
+    });
+    expect(
+      await verifier.verify({ uri: URI, trackName: 'Mr. Brightside', artistName: 'Killers' }),
+    ).toEqual({ verdict: 'match' });
+
+    const accented = new SpotifyOEmbedVerifier({
+      fetchImpl: routed('Halo', () => trackPage('Halo - song and lyrics by Beyoncé | Spotify')),
+      logger: quiet,
+    });
+    expect(await accented.verify({ uri: URI, trackName: 'Halo', artistName: 'Beyonce' })).toEqual({
+      verdict: 'match',
+    });
+  });
+
+  it('accepts a Deezer-style "Katrina & The Waves" against the page (entity-encoded)', async () => {
+    const verifier = new SpotifyOEmbedVerifier({
+      fetchImpl: routed('Walking On Sunshine', () =>
+        trackPage('Walking On Sunshine - song and lyrics by Katrina &amp; The Waves | Spotify'),
+      ),
+      logger: quiet,
+    });
+    expect(
+      await verifier.verify({
+        uri: URI,
+        trackName: 'Walking On Sunshine',
+        artistName: 'Katrina & The Waves',
+      }),
+    ).toEqual({ verdict: 'match' });
+  });
+
+  it('decodes numeric entities in page artists (Guns N&#39; Roses)', async () => {
+    const verifier = new SpotifyOEmbedVerifier({
+      fetchImpl: routed("Sweet Child O' Mine", () =>
+        trackPage('Sweet Child O&#x27; Mine - song and lyrics by Guns N&#39; Roses | Spotify'),
+      ),
+      logger: quiet,
+    });
+    expect(
+      await verifier.verify({
+        uri: URI,
+        trackName: "Sweet Child O' Mine",
+        artistName: "Guns N' Roses",
+      }),
+    ).toEqual({ verdict: 'match' });
+  });
+
+  it('still rejects on a title cover marker without fetching the page', async () => {
+    const fetchImpl = routed('Happy (Karaoke Version)', () => trackPage(PAGE.happyKen));
+    const verifier = new SpotifyOEmbedVerifier({ fetchImpl, logger: quiet });
+    expect(
+      await verifier.verify({ uri: URI, trackName: 'Happy', artistName: 'Pharrell Williams' }),
+    ).toMatchObject({ verdict: 'mismatch', reason: expect.stringContaining('cover marker') });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips the page without a requested artist (title-only)', async () => {
+    const fetchImpl = routed('Happy', () => trackPage(PAGE.happyKen));
+    const verifier = new SpotifyOEmbedVerifier({ fetchImpl, logger: quiet });
+    expect(await verifier.verify({ uri: URI, trackName: 'Happy' })).toEqual({ verdict: 'match' });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['a network error', async () => Promise.reject(new Error('ECONNRESET'))],
+    ['an HTTP error', async () => new Response('nope', { status: 429 })],
+    ['a page without a parsable title', async () => new Response('<html></html>', { status: 200 })],
+  ] as Array<[string, () => Promise<Response>]>)(
+    'falls back to the title-only decision on %s',
+    async (_, page) => {
+      const verifier = new SpotifyOEmbedVerifier({
+        fetchImpl: routed('Happy', page),
+        logger: quiet,
+      });
+      expect(
+        await verifier.verify({ uri: URI, trackName: 'Happy', artistName: 'Pharrell Williams' }),
+      ).toEqual({ verdict: 'match' });
+    },
+  );
+
+  it('falls back to title-only when the page times out', async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
+      if (new URL(String(input)).pathname === '/oembed') return oembed('Happy');
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+      });
+    });
+    const verifier = new SpotifyOEmbedVerifier({ fetchImpl, timeoutMs: 5, logger: quiet });
+    expect(
+      await verifier.verify({ uri: URI, trackName: 'Happy', artistName: 'Pharrell Williams' }),
+    ).toEqual({ verdict: 'match' });
+  });
+
+  it('caches page artists per uri for 24h and does not cache a failed page', async () => {
+    let now = 1_000_000;
+    const pages = vi
+      .fn<() => Response>()
+      .mockReturnValueOnce(new Response('nope', { status: 503 }))
+      .mockImplementation(() => trackPage(PAGE.happyKen));
+    const fetchImpl = routed('Happy', pages);
+    const verifier = new SpotifyOEmbedVerifier({ fetchImpl, now: () => now, logger: quiet });
+    const req = { uri: URI, trackName: 'Happy', artistName: 'Pharrell Williams' };
+
+    expect((await verifier.verify(req)).verdict).toBe('match'); // page failed → title-only
+    expect((await verifier.verify(req)).verdict).toBe('mismatch');
+    expect((await verifier.verify(req)).verdict).toBe('mismatch');
+    expect(await verifier.verify({ ...req, artistName: 'Ken' })).toEqual({ verdict: 'match' });
+    expect(pages).toHaveBeenCalledTimes(2);
+
+    now += 24 * 60 * 60_000 + 1;
+    await verifier.verify(req);
+    expect(pages).toHaveBeenCalledTimes(3);
+  });
+
+  it('shares the 60/min limiter with oEmbed', async () => {
+    const fetchImpl = routed('Happy', () => trackPage(PAGE.happyKen));
+    const verifier = new SpotifyOEmbedVerifier({ fetchImpl, now: () => 1_000_000, logger: quiet });
+    const req = (uri: string) => ({ uri, trackName: 'Happy', artistName: 'Pharrell Williams' });
+
+    // 30 uris × (oEmbed + page) = 60 calls.
+    for (let i = 0; i < 30; i += 1) {
+      expect((await verifier.verify(req(`spotify:track:t${i}`))).verdict).toBe('mismatch');
+    }
+    expect(fetchImpl).toHaveBeenCalledTimes(60);
+    expect((await verifier.verify(req('spotify:track:over'))).verdict).toBe('unavailable');
+    expect(fetchImpl).toHaveBeenCalledTimes(60);
   });
 });
 
