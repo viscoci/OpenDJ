@@ -294,7 +294,12 @@ describe('GET /sessions/:id/search — provider rate limits', () => {
   it('returns 503 provider_rate_limited with Retry-After while the account is cooling down', async () => {
     const { app, sessionId, mockProvider } = buildHarness();
     const now = Date.now();
-    mockProvider.failWith = new ProviderRateLimitedError('mock-streamer', now + 120_000, now);
+    mockProvider.failWith = new ProviderRateLimitedError(
+      'mock-streamer',
+      'search',
+      now + 120_000,
+      now,
+    );
 
     const res = await app.request(`http://x/sessions/${sessionId}/search?q=abc`);
 
@@ -564,7 +569,7 @@ describe('GET /sessions/:id/search — Spotify cooldown and cache', () => {
     const cooldowns = new ProviderCooldowns();
     const { search, accountId, mockProvider, limiter } = buildHarness({ cooldowns });
     expect((await search('cached song')).status).toBe(200);
-    cooldowns.record(accountId, 'mock-streamer', 40 * 60);
+    cooldowns.record(accountId, 'mock-streamer', 'search', 40 * 60);
     const budgetBefore = budgetRemaining(limiter);
     const anonBefore = limiter.peekSync(SEARCH_SCOPE, SEARCH_ANON_KEY).remaining;
 
@@ -581,6 +586,17 @@ describe('GET /sessions/:id/search — Spotify cooldown and cache', () => {
     expect(mockProvider.calls).toBe(1);
     expect(budgetRemaining(limiter)).toBe(budgetBefore);
     expect(limiter.peekSync(SEARCH_SCOPE, SEARCH_ANON_KEY).remaining).toBe(anonBefore);
+  });
+
+  it('keeps searching while only the player quota group is cooling down', async () => {
+    const cooldowns = new ProviderCooldowns();
+    const { search, accountId, mockProvider } = buildHarness({ cooldowns });
+    cooldowns.record(accountId, 'mock-streamer', 'player', 40 * 60);
+
+    const res = await search('fresh song');
+
+    expect(res.status).toBe(200);
+    expect(mockProvider.calls).toBe(1);
   });
 });
 

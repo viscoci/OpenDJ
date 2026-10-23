@@ -962,7 +962,8 @@ export class QueueService {
     if (!this.deps.streamingRouter || !this.deps.providerConnections) return;
     const conn = (await this.deps.providerConnections.findAllForAccount(accountId))[0];
     if (!conn) return;
-    const until = this.deps.streamingRouter.rateLimitedUntil(accountId, conn.providerId);
+    // Queue pushes count against the player quota group, not search.
+    const until = this.deps.streamingRouter.rateLimitedUntil(accountId, conn.providerId, 'player');
     if (until === null) return;
     throw rateLimitedError(Math.max(1, Math.ceil((until - nowEpochMs) / 1000)));
   }

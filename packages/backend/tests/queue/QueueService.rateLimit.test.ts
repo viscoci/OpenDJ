@@ -150,7 +150,7 @@ async function rejection(promise: Promise<unknown>): Promise<QueueServiceError> 
 describe('QueueService.requestTrack — provider rate limited', () => {
   it('refuses an auto-approved request while the account is cooling down', async () => {
     const { cooldowns, queueItems, queueTrack, request } = await setup();
-    cooldowns.record(ACCOUNT_ID, 'spotify', 900);
+    cooldowns.record(ACCOUNT_ID, 'spotify', 'player', 900);
 
     const err = await rejection(request());
 
@@ -158,6 +158,16 @@ describe('QueueService.requestTrack — provider rate limited', () => {
     expect(err.retryAfterSec).toBeGreaterThan(0);
     expect(await queueItems.findAllForSession(SESSION_ID)).toEqual([]);
     expect(queueTrack).not.toHaveBeenCalled();
+  });
+
+  it('accepts and pushes a request while only search is cooling down', async () => {
+    const { cooldowns, queueItems, queueTrack, request } = await setup();
+    cooldowns.record(ACCOUNT_ID, 'spotify', 'search', 77_230);
+
+    await request();
+
+    expect(await queueItems.findAllForSession(SESSION_ID)).toHaveLength(1);
+    expect(queueTrack).toHaveBeenCalledTimes(1);
   });
 
   it('rolls the item back when the push itself hits a fresh 429', async () => {
@@ -190,7 +200,7 @@ describe('QueueService.requestTrack — provider rate limited', () => {
 
   it('accepts requests into moderation while cooling down (nothing is pushed yet)', async () => {
     const { cooldowns, queueItems, request } = await setup({ moderationEnabled: true });
-    cooldowns.record(ACCOUNT_ID, 'spotify', 900);
+    cooldowns.record(ACCOUNT_ID, 'spotify', 'player', 900);
 
     const created = await request();
 
@@ -205,7 +215,7 @@ describe('QueueService.moderate — provider rate limited', () => {
       moderationEnabled: true,
     });
     const created = await request();
-    cooldowns.record(ACCOUNT_ID, 'spotify', 900);
+    cooldowns.record(ACCOUNT_ID, 'spotify', 'player', 900);
 
     const err = await rejection(
       service.moderate({ itemId: created.id, decision: 'approved', sessionId: SESSION_ID }, NOW),

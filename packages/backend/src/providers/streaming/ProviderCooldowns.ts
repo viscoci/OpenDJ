@@ -11,19 +11,29 @@
  *
  * This registry is the single shared source of truth. The router hands each
  * provider a `guardFetch`-wrapped fetch, so:
- *   - any 429 (from any caller) opens a cooldown for `(accountId, providerId)`
- *     lasting the provider's `Retry-After` (default 30s when absent);
- *   - while the cooldown is open, every call for that account fails fast
- *     with `ProviderRateLimitedError` — no request reaches the provider,
- *     so the penalty window is never extended by our own retries.
+ *   - any 429 (from any caller) opens a cooldown for
+ *     `(accountId, providerId, quota group)` lasting the provider's
+ *     `Retry-After` (default 30s when absent);
+ *   - while the cooldown is open, every call in that group for that account
+ *     fails fast with `ProviderRateLimitedError` — no request reaches the
+ *     provider, so the penalty window is never extended by our own retries.
+ *
+ * Quota groups: Spotify development-mode quotas are counted per endpoint
+ * group. Observed live: `/v1/search` answered `QUOTA_EXCEEDED` with a 21h
+ * `Retry-After` while playback endpoints kept working. So the group is
+ * picked from the request URL at call time — `'search'` for `/v1/search`,
+ * `'player'` for everything else (player, queue, token refresh) — and a
+ * search quota never freezes now-playing polling or queue pushes.
  *
  * Persistence: the in-memory map is the hot path, but it is not the only
  * copy. `createDeps` writes every opened/extended cooldown through to
- * `provider_connections.rate_limited_until` (clamped, fire-and-forget), and
- * `StreamingRouter.getProvider` `seed`s it back from the connection row it
- * already loads. A restart mid-ban therefore never resumes calling the
- * provider before the announced window ends. Expired deadlines are left in
- * the table on purpose: they are harmless and need no cleanup job.
+ * `provider_connections` (`rate_limited_until` for player,
+ * `search_rate_limited_until` for search, tagged with the app client id;
+ * clamped, fire-and-forget), and `StreamingRouter.getProvider` `seed`s them
+ * back from the connection row it already loads. A restart mid-ban
+ * therefore never resumes calling the provider before the announced window
+ * ends. Expired deadlines are left in the table on purpose: they are
+ * harmless and need no cleanup job.
  *
  * Observability: `guardFetch` logs every 429 with the body's `error.reason`
  * (read from a clone) and its `Retry-After`, and counts the calls that reach
@@ -43,6 +53,17 @@ const DEFAULT_CALL_SUMMARY_INTERVAL_MS = 30_000;
 const MAX_LOGGED_BODY_CHARS = 200;
 
 /**
+ * Provider quota bucket a call counts against. `'search'` is `/v1/search`;
+ * `'player'` is every other endpoint, including token refresh.
+ */
+export type ProviderQuotaGroup = 'search' | 'player';
+
+/** Quota group of a request, from its URL path. */
+export function quotaGroupForPath(path: string): ProviderQuotaGroup {
+  return path === '/v1/search' || path.startsWith('/v1/search/') ? 'search' : 'player';
+}
+
+/**
  * Thrown instead of making a provider call while the account is cooling
  * down. Carries `status: 429` + `retryAfterSec` so existing 429 handlers
  * (NowPlayingPoller backoff, route error mapping) treat it exactly like the
@@ -51,12 +72,19 @@ const MAX_LOGGED_BODY_CHARS = 200;
 export class ProviderRateLimitedError extends OpenDjError {
   readonly status = 429;
   readonly providerId: string;
+  readonly group: ProviderQuotaGroup;
   readonly untilEpochMs: number;
   readonly retryAfterSec: number;
-  constructor(providerId: string, untilEpochMs: number, nowEpochMs: number) {
+  constructor(
+    providerId: string,
+    group: ProviderQuotaGroup,
+    untilEpochMs: number,
+    nowEpochMs: number,
+  ) {
     const retryAfterSec = Math.max(1, Math.ceil((untilEpochMs - nowEpochMs) / 1000));
-    super(`${providerId} is rate limiting this account; retry in ${retryAfterSec}s.`);
+    super(`${providerId} is rate limiting this account (${group}); retry in ${retryAfterSec}s.`);
     this.providerId = providerId;
+    this.group = group;
     this.untilEpochMs = untilEpochMs;
     this.retryAfterSec = retryAfterSec;
   }
@@ -65,6 +93,7 @@ export class ProviderRateLimitedError extends OpenDjError {
 export interface RateLimitedEvent {
   accountId: string;
   providerId: string;
+  group: ProviderQuotaGroup;
   untilEpochMs: number;
 }
 
@@ -101,9 +130,9 @@ export class ProviderCooldowns {
     this.callSummaryIntervalMs = options.callSummaryIntervalMs ?? DEFAULT_CALL_SUMMARY_INTERVAL_MS;
   }
 
-  /** End of the open cooldown for this account, or null when calls are allowed. */
-  untilEpochMs(accountId: string, providerId: string): number | null {
-    const key = cooldownKey(accountId, providerId);
+  /** End of the open cooldown for this account's group, or null when calls are allowed. */
+  untilEpochMs(accountId: string, providerId: string, group: ProviderQuotaGroup): number | null {
+    const key = cooldownKey(accountId, providerId, group);
     const until = this.until.get(key);
     if (until === undefined) return null;
     if (until <= this.now()) {
@@ -118,16 +147,21 @@ export class ProviderCooldowns {
    * short `Retry-After` on one endpoint mustn't cut short a long penalty
    * reported by another. Returns the effective window end.
    */
-  record(accountId: string, providerId: string, retryAfterSec: number | null): number {
+  record(
+    accountId: string,
+    providerId: string,
+    group: ProviderQuotaGroup,
+    retryAfterSec: number | null,
+  ): number {
     const seconds =
       retryAfterSec !== null && retryAfterSec > 0 ? retryAfterSec : DEFAULT_RETRY_AFTER_SEC;
     const candidate = this.now() + seconds * 1000;
-    const existing = this.untilEpochMs(accountId, providerId);
+    const existing = this.untilEpochMs(accountId, providerId, group);
     if (existing !== null && existing >= candidate) return existing;
-    this.until.set(cooldownKey(accountId, providerId), candidate);
+    this.until.set(cooldownKey(accountId, providerId, group), candidate);
     for (const listener of this.listeners) {
       try {
-        listener({ accountId, providerId, untilEpochMs: candidate });
+        listener({ accountId, providerId, group, untilEpochMs: candidate });
       } catch {
         // A broken listener must never break the provider call path.
       }
@@ -136,17 +170,22 @@ export class ProviderCooldowns {
   }
 
   /**
-   * Load a deadline persisted before a restart
-   * (`provider_connections.rate_limited_until`). Keeps the later of the
+   * Load a deadline persisted before a restart (`provider_connections`
+   * `rate_limited_until` / `search_rate_limited_until`). Keeps the later of the
    * in-memory and stored deadlines, ignores deadlines already past, and does
    * NOT notify `onRateLimited` listeners: the value came from storage, so
    * writing it back or re-announcing it would only be noise.
    */
-  seed(accountId: string, providerId: string, untilEpochMs: number): void {
+  seed(
+    accountId: string,
+    providerId: string,
+    group: ProviderQuotaGroup,
+    untilEpochMs: number,
+  ): void {
     if (!Number.isFinite(untilEpochMs) || untilEpochMs <= this.now()) return;
-    const existing = this.untilEpochMs(accountId, providerId);
+    const existing = this.untilEpochMs(accountId, providerId, group);
     if (existing !== null && existing >= untilEpochMs) return;
-    this.until.set(cooldownKey(accountId, providerId), untilEpochMs);
+    this.until.set(cooldownKey(accountId, providerId, group), untilEpochMs);
   }
 
   /** Subscribe to cooldowns opening or being extended. */
@@ -156,18 +195,19 @@ export class ProviderCooldowns {
 
   /**
    * Wrap `fetchImpl` so every call for `(accountId, providerId)` respects
-   * and feeds the shared cooldown.
+   * and feeds the shared cooldown of the quota group its URL belongs to.
    */
   guardFetch(accountId: string, providerId: string, fetchImpl: typeof fetch): typeof fetch {
     return async (input, init) => {
-      const until = this.untilEpochMs(accountId, providerId);
-      if (until !== null) throw new ProviderRateLimitedError(providerId, until, this.now());
       const path = requestPath(input);
+      const group = quotaGroupForPath(path);
+      const until = this.untilEpochMs(accountId, providerId, group);
+      if (until !== null) throw new ProviderRateLimitedError(providerId, group, until, this.now());
       this.countCall(providerId, path);
       const response = await fetchImpl(input, init);
       if (response.status === 429) {
         const retryAfterSec = parseRetryAfterSec(response);
-        this.record(accountId, providerId, retryAfterSec);
+        this.record(accountId, providerId, group, retryAfterSec);
         await this.log429(providerId, path, retryAfterSec, response);
       }
       return response;
@@ -247,8 +287,8 @@ export class ProviderCooldowns {
   }
 }
 
-function cooldownKey(accountId: string, providerId: string): string {
-  return `${accountId}\u0000${providerId}`;
+function cooldownKey(accountId: string, providerId: string, group: ProviderQuotaGroup): string {
+  return `${accountId}\u0000${providerId}\u0000${group}`;
 }
 
 /** URL path without query or hash, for per-endpoint counts and logs. */

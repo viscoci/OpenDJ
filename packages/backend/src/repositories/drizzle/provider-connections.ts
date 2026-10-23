@@ -1,6 +1,7 @@
 import type { Database } from '@opendj/db';
 import { schema } from '@opendj/db';
 import { and, eq, sql } from 'drizzle-orm';
+import type { ProviderQuotaGroup } from '../../providers/streaming/ProviderCooldowns.js';
 import type { ProviderConnectionRecord, ProviderConnectionRepository } from '../types.js';
 
 function mapConnection(
@@ -19,6 +20,8 @@ function mapConnection(
     scopes: row.scopes,
     tokenType: row.tokenType,
     rateLimitedUntil: row.rateLimitedUntil,
+    searchRateLimitedUntil: row.searchRateLimitedUntil,
+    rateLimitedClientId: row.rateLimitedClientId,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -118,25 +121,36 @@ export class DrizzleProviderConnectionRepository implements ProviderConnectionRe
       .where(eq(schema.providerConnections.id, input.id));
   }
 
-  async extendRateLimitedUntil(
-    accountId: string,
-    providerId: string,
-    until: Date,
-  ): Promise<boolean> {
+  async extendRateLimitedUntil(input: {
+    accountId: string;
+    providerId: string;
+    group: ProviderQuotaGroup;
+    until: Date;
+    clientId: string | null;
+  }): Promise<boolean> {
     // Update only (never inserts a token-less row); GREATEST so a late,
     // shorter write can't cut a longer deadline. `updated_at` stays put:
     // a cooldown is not a credential change. NULL is ignored by GREATEST.
+    // Deadlines recorded under another client id belong to another app's
+    // quota: replace them (this group) or drop them (the other group).
+    // Every SET expression reads the pre-update row.
+    const table = schema.providerConnections;
+    const [target, other] =
+      input.group === 'search'
+        ? ([table.searchRateLimitedUntil, table.rateLimitedUntil] as const)
+        : ([table.rateLimitedUntil, table.searchRateLimitedUntil] as const);
+    const targetKey = input.group === 'search' ? 'searchRateLimitedUntil' : 'rateLimitedUntil';
+    const otherKey = input.group === 'search' ? 'rateLimitedUntil' : 'searchRateLimitedUntil';
+    const until = input.until.toISOString();
+    const sameClient = sql`${table.rateLimitedClientId} IS NOT DISTINCT FROM ${input.clientId}::text`;
     const rows = await this.db
-      .update(schema.providerConnections)
+      .update(table)
       .set({
-        rateLimitedUntil: sql`GREATEST(${schema.providerConnections.rateLimitedUntil}, ${until.toISOString()})`,
+        [targetKey]: sql`CASE WHEN ${sameClient} THEN GREATEST(${target}, ${until}::timestamptz) ELSE ${until}::timestamptz END`,
+        [otherKey]: sql`CASE WHEN ${sameClient} THEN ${other} ELSE NULL END`,
+        rateLimitedClientId: input.clientId,
       })
-      .where(
-        and(
-          eq(schema.providerConnections.accountId, accountId),
-          eq(schema.providerConnections.providerId, providerId),
-        ),
-      )
+      .where(and(eq(table.accountId, input.accountId), eq(table.providerId, input.providerId)))
       .returning({ id: schema.providerConnections.id });
     return rows.length > 0;
   }

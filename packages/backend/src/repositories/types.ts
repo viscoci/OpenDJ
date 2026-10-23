@@ -8,6 +8,7 @@
  */
 
 import type { Claim } from '@opendj/auth';
+import type { ProviderQuotaGroup } from '../providers/streaming/ProviderCooldowns.js';
 
 export interface UserRecord {
   id: string;
@@ -611,10 +612,17 @@ export interface ProviderConnectionRecord {
   scopes: string[] | null;
   tokenType: string | null;
   /**
-   * End of the provider's persisted rate-limit cooldown (see
+   * End of the provider's persisted `player` quota-group cooldown (see
    * `ProviderCooldowns`), or null. May be in the past: expired values stay.
    */
   rateLimitedUntil: Date | null;
+  /** Same as `rateLimitedUntil`, for the `search` quota group. */
+  searchRateLimitedUntil: Date | null;
+  /**
+   * Provider app client id both persisted cooldowns were recorded under,
+   * or null when unknown. Seeding ignores cooldowns from another client id.
+   */
+  rateLimitedClientId: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -680,12 +688,21 @@ export interface ProviderConnectionRepository {
     tokenType?: string | null;
   }): Promise<void>;
   /**
-   * Raise the persisted rate-limit deadline to `until` — never lowers it
-   * (`GREATEST`), so out-of-order writes keep the later deadline. Update
-   * only: a missing row is not created and the call resolves `false`.
-   * Leaves `updatedAt` alone.
+   * Raise the persisted rate-limit deadline of `group` to `until` — never
+   * lowers it (`GREATEST`), so out-of-order writes keep the later deadline —
+   * and record `clientId` as the app the cooldowns belong to. When the row
+   * holds cooldowns from a different client id, those are dropped instead
+   * (this group's deadline becomes `until`, the other group's NULL): they
+   * counted against another app's quota. Update only: a missing row is not
+   * created and the call resolves `false`. Leaves `updatedAt` alone.
    */
-  extendRateLimitedUntil(accountId: string, providerId: string, until: Date): Promise<boolean>;
+  extendRateLimitedUntil(input: {
+    accountId: string;
+    providerId: string;
+    group: ProviderQuotaGroup;
+    until: Date;
+    clientId: string | null;
+  }): Promise<boolean>;
   delete(id: string): Promise<void>;
 }
 

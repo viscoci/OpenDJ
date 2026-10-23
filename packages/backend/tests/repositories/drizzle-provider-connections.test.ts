@@ -47,6 +47,8 @@ function rowArray(overrides: Record<string, unknown> = {}): unknown[] {
     rawProfile: null,
     rawTokenResponse: null,
     rateLimitedUntil: null,
+    searchRateLimitedUntil: null,
+    rateLimitedClientId: null,
     createdAt: '2026-10-23 12:00:00+00',
     updatedAt: '2026-10-23 12:00:00+00',
     ...overrides,
@@ -60,14 +62,22 @@ describe('DrizzleProviderConnectionRepository.extendRateLimitedUntil', () => {
     const repo = new DrizzleProviderConnectionRepository(db);
     const until = new Date(Date.UTC(2026, 9, 23, 14, 0, 0, 457));
 
-    const updated = await repo.extendRateLimitedUntil('acct-1', 'spotify', until);
+    const updated = await repo.extendRateLimitedUntil({
+      accountId: 'acct-1',
+      providerId: 'spotify',
+      group: 'player',
+      until,
+      clientId: 'client-a',
+    });
 
     expect(updated).toBe(true);
     expect(queries).toHaveLength(1);
     const { sql, params } = queries[0]!;
     expect(sql).toMatch(/^update "provider_connections"/i);
     expect(sql).not.toMatch(/insert/i);
-    expect(sql).toMatch(/greatest\((?:"provider_connections"\.)?"rate_limited_until", \$\d+\)/i);
+    expect(sql).toMatch(
+      /greatest\((?:"provider_connections"\.)?"rate_limited_until", \$\d+(?:::timestamptz)?\)/i,
+    );
     expect(sql).not.toContain('updated_at');
     expect(sql).toContain('"account_id"');
     expect(sql).toContain('"provider_id"');
@@ -75,6 +85,30 @@ describe('DrizzleProviderConnectionRepository.extendRateLimitedUntil', () => {
     expect(params).toContain('2026-10-23T14:00:00.457Z');
     expect(params).toContain('acct-1');
     expect(params).toContain('spotify');
+    expect(params).toContain('client-a');
+    expect(sql).toMatch(/"rate_limited_client_id" = \$\d+/);
+    // The other group's column is only touched to drop another client's deadline.
+    expect(sql).not.toMatch(/greatest\((?:"provider_connections"\.)?"search_rate_limited_until"/i);
+  });
+
+  it('writes a search cooldown to search_rate_limited_until with GREATEST', async () => {
+    const { db, queries } = proxyDb(() => [['00000000-0000-0000-0000-000000000001']]);
+    const repo = new DrizzleProviderConnectionRepository(db);
+
+    await repo.extendRateLimitedUntil({
+      accountId: 'acct-1',
+      providerId: 'spotify',
+      group: 'search',
+      until: new Date(Date.UTC(2026, 9, 23, 14, 0, 0, 0)),
+      clientId: 'client-a',
+    });
+
+    const { sql } = queries[0]!;
+    expect(sql).toMatch(
+      /greatest\((?:"provider_connections"\.)?"search_rate_limited_until", \$\d+(?:::timestamptz)?\)/i,
+    );
+    expect(sql).not.toMatch(/greatest\((?:"provider_connections"\.)?"rate_limited_until"/i);
+    expect(sql).not.toContain('updated_at');
   });
 
   it('reports false (and does not throw) when no connection row matched', async () => {
@@ -82,7 +116,13 @@ describe('DrizzleProviderConnectionRepository.extendRateLimitedUntil', () => {
     const repo = new DrizzleProviderConnectionRepository(db);
 
     await expect(
-      repo.extendRateLimitedUntil('missing', 'spotify', new Date(Date.now() + 1_000)),
+      repo.extendRateLimitedUntil({
+        accountId: 'missing',
+        providerId: 'spotify',
+        group: 'player',
+        until: new Date(Date.now() + 1_000),
+        clientId: null,
+      }),
     ).resolves.toBe(false);
   });
 });
@@ -95,6 +135,22 @@ describe('DrizzleProviderConnectionRepository row mapping', () => {
     const row = await repo.findByAccountAndProvider('acct-1', 'spotify');
 
     expect(row?.rateLimitedUntil?.getTime()).toBe(Date.UTC(2026, 9, 23, 14, 0, 0, 457));
+  });
+
+  it('exposes the search deadline and the client id it was recorded under', async () => {
+    const { db } = proxyDb(() => [
+      rowArray({
+        searchRateLimitedUntil: '2026-10-23 14:00:00.457+00',
+        rateLimitedClientId: 'client-a',
+      }),
+    ]);
+    const repo = new DrizzleProviderConnectionRepository(db);
+
+    const row = await repo.findByAccountAndProvider('acct-1', 'spotify');
+
+    expect(row?.searchRateLimitedUntil?.getTime()).toBe(Date.UTC(2026, 9, 23, 14, 0, 0, 457));
+    expect(row?.rateLimitedClientId).toBe('client-a');
+    expect(row?.rateLimitedUntil).toBeNull();
   });
 
   it('maps a NULL rate_limited_until to null', async () => {
@@ -122,6 +178,7 @@ describe('DrizzleProviderConnectionRepository.upsert', () => {
     const conflictSet = sql.slice(lower.indexOf('on conflict'), lower.indexOf(' returning '));
     expect(conflictSet).toMatch(/do update set/i);
     expect(conflictSet).not.toContain('rate_limited_until');
+    expect(conflictSet).not.toContain('rate_limited_client_id');
     expect(row.rateLimitedUntil?.getTime()).toBe(Date.UTC(2026, 9, 23, 14, 0, 0, 0));
   });
 });

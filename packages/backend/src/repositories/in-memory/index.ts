@@ -10,6 +10,7 @@
  */
 
 import type { Claim } from '@opendj/auth';
+import type { ProviderQuotaGroup } from '../../providers/streaming/ProviderCooldowns.js';
 import type {
   AbuseSubjectRecord,
   AbuseSubjectRepository,
@@ -558,6 +559,8 @@ export class InMemoryProviderConnectionRepository implements ProviderConnectionR
       tokenType: input.tokenType ?? existing?.tokenType ?? null,
       // Never set by upsert: a reconnect keeps an open cooldown.
       rateLimitedUntil: existing?.rateLimitedUntil ?? null,
+      searchRateLimitedUntil: existing?.searchRateLimitedUntil ?? null,
+      rateLimitedClientId: existing?.rateLimitedClientId ?? null,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     };
@@ -583,15 +586,26 @@ export class InMemoryProviderConnectionRepository implements ProviderConnectionR
     }
   }
 
-  async extendRateLimitedUntil(
-    accountId: string,
-    providerId: string,
-    until: Date,
-  ): Promise<boolean> {
-    const row = this.rows.get(`${accountId}:${providerId}`);
+  async extendRateLimitedUntil(input: {
+    accountId: string;
+    providerId: string;
+    group: ProviderQuotaGroup;
+    until: Date;
+    clientId: string | null;
+  }): Promise<boolean> {
+    const row = this.rows.get(`${input.accountId}:${input.providerId}`);
     if (!row) return false;
-    if (row.rateLimitedUntil === null || row.rateLimitedUntil.getTime() < until.getTime()) {
-      row.rateLimitedUntil = new Date(until.getTime());
+    const target = input.group === 'search' ? 'searchRateLimitedUntil' : 'rateLimitedUntil';
+    const other = input.group === 'search' ? 'rateLimitedUntil' : 'searchRateLimitedUntil';
+    if (row.rateLimitedClientId !== input.clientId) {
+      // Another app's quota: its deadlines don't apply to this client id.
+      row[target] = null;
+      row[other] = null;
+      row.rateLimitedClientId = input.clientId;
+    }
+    const current = row[target];
+    if (current === null || current.getTime() < input.until.getTime()) {
+      row[target] = new Date(input.until.getTime());
     }
     return true;
   }

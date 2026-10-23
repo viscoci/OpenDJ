@@ -234,10 +234,23 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
   const cooldownMaxMs =
     (options.config.providerCooldownMaxSec ?? DEFAULT_PROVIDER_COOLDOWN_MAX_SEC) * 1000;
   const providerConnectionsRepo = repositories.providerConnections;
+  // Quotas belong to the provider app, so each stored cooldown is tagged
+  // with the client id it was earned under; a deployment switched to a
+  // different client id ignores it (see StreamingRouter.getProvider).
+  const providerClientIds: Partial<Record<string, string>> = {};
+  if (options.config.spotify?.clientId !== undefined) {
+    providerClientIds['spotify'] = options.config.spotify.clientId;
+  }
   providerCooldowns.onRateLimited((event) => {
     const until = new Date(Math.min(event.untilEpochMs, Date.now() + cooldownMaxMs));
     void providerConnectionsRepo
-      .extendRateLimitedUntil(event.accountId, event.providerId, until)
+      .extendRateLimitedUntil({
+        accountId: event.accountId,
+        providerId: event.providerId,
+        group: event.group,
+        until,
+        clientId: providerClientIds[event.providerId] ?? null,
+      })
       .then((updated) => {
         if (!updated) {
           console.warn(
@@ -259,6 +272,7 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
     registry: providerRegistry,
     context: { fetch: fetchImpl },
     cooldowns: providerCooldowns,
+    providerClientIds,
   });
 
   const searchPacing = resolveSearchPacing(options.config);
@@ -317,9 +331,13 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
       karaoke: karaokeService,
     });
     // Tell connected clients the moment any caller trips a provider rate
-    // limit, not just on the poller's next tick.
+    // limit, not just on the poller's next tick. Only the player group:
+    // a search-only quota leaves playback and queueing working, so it must
+    // not tell every guest the provider is limiting the party (search
+    // surfaces its own `provider_rate_limited` refusal).
     const poller = nowPlayingPoller;
     providerCooldowns.onRateLimited((event) => {
+      if (event.group !== 'player') return;
       void poller.notifyRateLimited(event);
     });
   }

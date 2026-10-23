@@ -234,7 +234,11 @@ export function searchRoutes(deps: SearchRouteDeps): Hono {
     const joined = lookupCached(input.cacheKey);
     if (joined) return { kind: 'search', tracks: joined, slowDown: peekSlowDown(input.providerId) };
 
-    const until = deps.streamingRouter.rateLimitedUntil(input.accountId, input.providerId);
+    const until = deps.streamingRouter.rateLimitedUntil(
+      input.accountId,
+      input.providerId,
+      'search',
+    );
     if (until !== null) {
       return {
         kind: 'provider_rate_limited',

@@ -30,7 +30,7 @@ describe('ProviderCooldowns.guardFetch', () => {
 
     expect(res.status).toBe(200);
     expect(inner).toHaveBeenCalledTimes(1);
-    expect(cooldowns.untilEpochMs('acct-1', 'spotify')).toBeNull();
+    expect(cooldowns.untilEpochMs('acct-1', 'spotify', 'player')).toBeNull();
   });
 
   it('opens a cooldown from Retry-After when the provider answers 429', async () => {
@@ -43,7 +43,7 @@ describe('ProviderCooldowns.guardFetch', () => {
 
     // The 429 response itself still reaches the caller unchanged.
     expect(res.status).toBe(429);
-    expect(cooldowns.untilEpochMs('acct-1', 'spotify')).toBe(now() + 120_000);
+    expect(cooldowns.untilEpochMs('acct-1', 'spotify', 'player')).toBe(now() + 120_000);
   });
 
   it('short-circuits every later call for that account without touching the network', async () => {
@@ -57,7 +57,7 @@ describe('ProviderCooldowns.guardFetch', () => {
     // A second provider instance for the same account (StreamingRouter builds
     // a fresh one per getProvider call) shares the cooldown.
     const second = cooldowns.guardFetch('acct-1', 'spotify', inner);
-    const err = await second('https://api.spotify.com/v1/search?q=x').catch((e: unknown) => e);
+    const err = await second('https://api.spotify.com/v1/me/player/queue').catch((e: unknown) => e);
 
     expect(err).toBeInstanceOf(ProviderRateLimitedError);
     expect((err as ProviderRateLimitedError).status).toBe(429);
@@ -89,24 +89,108 @@ describe('ProviderCooldowns.guardFetch', () => {
     const res = await cooldowns.guardFetch('acct-1', 'spotify', inner)('https://x');
 
     expect(res.status).toBe(200);
-    expect(cooldowns.untilEpochMs('acct-1', 'spotify')).toBeNull();
+    expect(cooldowns.untilEpochMs('acct-1', 'spotify', 'player')).toBeNull();
   });
 
   it('falls back to a default window when a 429 has no Retry-After header', async () => {
     const { cooldowns, now } = setup();
     await cooldowns.guardFetch('acct-1', 'spotify', async () => response(429))('https://x');
 
-    expect(cooldowns.untilEpochMs('acct-1', 'spotify')).toBe(now() + 30_000);
+    expect(cooldowns.untilEpochMs('acct-1', 'spotify', 'player')).toBe(now() + 30_000);
+  });
+});
+
+describe('ProviderCooldowns.guardFetch quota groups', () => {
+  /**
+   * Spotify development-mode quotas are per endpoint group: a search
+   * QUOTA_EXCEEDED must not freeze now-playing polling or queue pushes.
+   */
+  it('a 429 on /v1/search opens only the search cooldown', async () => {
+    const { cooldowns, now } = setup();
+    const inner = vi
+      .fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>()
+      .mockResolvedValueOnce(response(429, { 'retry-after': '77230' }))
+      .mockResolvedValue(response(200));
+    const guarded = cooldowns.guardFetch('acct-1', 'spotify', inner);
+
+    await guarded('https://api.spotify.com/v1/search?q=a&type=track');
+
+    expect(cooldowns.untilEpochMs('acct-1', 'spotify', 'search')).toBe(now() + 77_230_000);
+    expect(cooldowns.untilEpochMs('acct-1', 'spotify', 'player')).toBeNull();
+
+    // Player endpoints (and the token endpoint) still reach the provider.
+    const player = await guarded('https://api.spotify.com/v1/me/player/currently-playing');
+    const queue = await guarded('https://api.spotify.com/v1/me/player/queue?uri=x', {
+      method: 'POST',
+    });
+    const token = await guarded('https://accounts.spotify.com/api/token', { method: 'POST' });
+    expect([player.status, queue.status, token.status]).toEqual([200, 200, 200]);
+    expect(inner).toHaveBeenCalledTimes(4);
+
+    // Search itself fails fast with a search-group error.
+    const err = await guarded('https://api.spotify.com/v1/search?q=b').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ProviderRateLimitedError);
+    expect((err as ProviderRateLimitedError).group).toBe('search');
+    expect(inner).toHaveBeenCalledTimes(4);
+  });
+
+  it('a 429 on a player endpoint blocks player calls but not search', async () => {
+    const { cooldowns, now } = setup();
+    const inner = vi
+      .fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>()
+      .mockResolvedValueOnce(response(429, { 'retry-after': '60' }))
+      .mockResolvedValue(response(200));
+    const guarded = cooldowns.guardFetch('acct-1', 'spotify', inner);
+
+    await guarded('https://api.spotify.com/v1/me/player');
+
+    expect(cooldowns.untilEpochMs('acct-1', 'spotify', 'player')).toBe(now() + 60_000);
+    expect(cooldowns.untilEpochMs('acct-1', 'spotify', 'search')).toBeNull();
+    const err = await guarded('https://api.spotify.com/v1/me/player/queue').catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(ProviderRateLimitedError);
+    expect((err as ProviderRateLimitedError).group).toBe('player');
+
+    const res = await guarded('https://api.spotify.com/v1/search?q=a');
+    expect(res.status).toBe(200);
+    expect(inner).toHaveBeenCalledTimes(2);
+  });
+
+  it('a 429 from the token endpoint opens the player cooldown', async () => {
+    const { cooldowns } = setup();
+    const guarded = cooldowns.guardFetch('acct-1', 'spotify', async () =>
+      response(429, { 'retry-after': '30' }),
+    );
+
+    await guarded('https://accounts.spotify.com/api/token', { method: 'POST' });
+
+    expect(cooldowns.untilEpochMs('acct-1', 'spotify', 'player')).not.toBeNull();
+    expect(cooldowns.untilEpochMs('acct-1', 'spotify', 'search')).toBeNull();
+  });
+
+  it('a seeded search cooldown blocks only search', async () => {
+    const { cooldowns, now } = setup();
+    cooldowns.seed('acct-1', 'spotify', 'search', now() + 600_000);
+    const inner = vi.fn(async () => response(200));
+    const guarded = cooldowns.guardFetch('acct-1', 'spotify', inner);
+
+    const res = await guarded('https://api.spotify.com/v1/me/player');
+    const err = await guarded('https://api.spotify.com/v1/search?q=a').catch((e: unknown) => e);
+
+    expect(res.status).toBe(200);
+    expect(err).toBeInstanceOf(ProviderRateLimitedError);
+    expect(inner).toHaveBeenCalledTimes(1);
   });
 });
 
 describe('ProviderCooldowns.record', () => {
   it('never shortens an existing window', () => {
     const { cooldowns, now } = setup();
-    cooldowns.record('acct-1', 'spotify', 600);
-    cooldowns.record('acct-1', 'spotify', 5);
+    cooldowns.record('acct-1', 'spotify', 'player', 600);
+    cooldowns.record('acct-1', 'spotify', 'player', 5);
 
-    expect(cooldowns.untilEpochMs('acct-1', 'spotify')).toBe(now() + 600_000);
+    expect(cooldowns.untilEpochMs('acct-1', 'spotify', 'player')).toBe(now() + 600_000);
   });
 
   it('notifies listeners when a window opens or is extended', () => {
@@ -114,15 +198,36 @@ describe('ProviderCooldowns.record', () => {
     const listener = vi.fn();
     cooldowns.onRateLimited(listener);
 
-    cooldowns.record('acct-1', 'spotify', 60);
-    cooldowns.record('acct-1', 'spotify', 10); // shorter — no change, no event
-    cooldowns.record('acct-1', 'spotify', 120);
+    cooldowns.record('acct-1', 'spotify', 'player', 60);
+    cooldowns.record('acct-1', 'spotify', 'player', 10); // shorter — no change, no event
+    cooldowns.record('acct-1', 'spotify', 'player', 120);
 
     expect(listener).toHaveBeenCalledTimes(2);
     expect(listener).toHaveBeenLastCalledWith({
       accountId: 'acct-1',
       providerId: 'spotify',
+      group: 'player',
       untilEpochMs: now() + 120_000,
+    });
+  });
+
+  it('keeps each quota group window separate', () => {
+    const { cooldowns, now } = setup();
+    const listener = vi.fn();
+    cooldowns.onRateLimited(listener);
+
+    cooldowns.record('acct-1', 'spotify', 'search', 600);
+    cooldowns.record('acct-1', 'spotify', 'player', 60);
+
+    expect(cooldowns.untilEpochMs('acct-1', 'spotify', 'search')).toBe(now() + 600_000);
+    expect(cooldowns.untilEpochMs('acct-1', 'spotify', 'player')).toBe(now() + 60_000);
+    // A shorter player window opens even though search is cooling down longer.
+    expect(listener).toHaveBeenCalledTimes(2);
+    expect(listener).toHaveBeenNthCalledWith(1, {
+      accountId: 'acct-1',
+      providerId: 'spotify',
+      group: 'search',
+      untilEpochMs: now() + 600_000,
     });
   });
 });
@@ -132,9 +237,9 @@ describe('ProviderCooldowns.seed', () => {
     const { cooldowns, now } = setup();
     const until = now() + 110 * 60_000;
 
-    cooldowns.seed('acct-1', 'spotify', until);
+    cooldowns.seed('acct-1', 'spotify', 'player', until);
 
-    expect(cooldowns.untilEpochMs('acct-1', 'spotify')).toBe(until);
+    expect(cooldowns.untilEpochMs('acct-1', 'spotify', 'player')).toBe(until);
     const inner = vi.fn(async () => response(200));
     const err = await cooldowns
       .guardFetch(
@@ -150,28 +255,28 @@ describe('ProviderCooldowns.seed', () => {
   it('ignores a deadline that has already passed', () => {
     const { cooldowns, now } = setup();
 
-    cooldowns.seed('acct-1', 'spotify', now() - 1);
-    cooldowns.seed('acct-1', 'spotify', now());
+    cooldowns.seed('acct-1', 'spotify', 'player', now() - 1);
+    cooldowns.seed('acct-1', 'spotify', 'player', now());
 
-    expect(cooldowns.untilEpochMs('acct-1', 'spotify')).toBeNull();
+    expect(cooldowns.untilEpochMs('acct-1', 'spotify', 'player')).toBeNull();
   });
 
   it('never shortens an in-memory deadline recorded earlier', () => {
     const { cooldowns, now } = setup();
-    const recorded = cooldowns.record('acct-1', 'spotify', 600);
+    const recorded = cooldowns.record('acct-1', 'spotify', 'player', 600);
 
-    cooldowns.seed('acct-1', 'spotify', now() + 60_000);
+    cooldowns.seed('acct-1', 'spotify', 'player', now() + 60_000);
 
-    expect(cooldowns.untilEpochMs('acct-1', 'spotify')).toBe(recorded);
+    expect(cooldowns.untilEpochMs('acct-1', 'spotify', 'player')).toBe(recorded);
   });
 
   it('extends a shorter in-memory deadline', () => {
     const { cooldowns, now } = setup();
-    cooldowns.record('acct-1', 'spotify', 60);
+    cooldowns.record('acct-1', 'spotify', 'player', 60);
 
-    cooldowns.seed('acct-1', 'spotify', now() + 600_000);
+    cooldowns.seed('acct-1', 'spotify', 'player', now() + 600_000);
 
-    expect(cooldowns.untilEpochMs('acct-1', 'spotify')).toBe(now() + 600_000);
+    expect(cooldowns.untilEpochMs('acct-1', 'spotify', 'player')).toBe(now() + 600_000);
   });
 
   it('does not notify onRateLimited listeners', () => {
@@ -179,7 +284,7 @@ describe('ProviderCooldowns.seed', () => {
     const listener = vi.fn();
     cooldowns.onRateLimited(listener);
 
-    cooldowns.seed('acct-1', 'spotify', now() + 600_000);
+    cooldowns.seed('acct-1', 'spotify', 'player', now() + 600_000);
 
     expect(listener).not.toHaveBeenCalled();
   });
@@ -187,9 +292,9 @@ describe('ProviderCooldowns.seed', () => {
   it('ignores non-finite deadlines', () => {
     const { cooldowns } = setup();
 
-    cooldowns.seed('acct-1', 'spotify', Number.NaN);
+    cooldowns.seed('acct-1', 'spotify', 'player', Number.NaN);
 
-    expect(cooldowns.untilEpochMs('acct-1', 'spotify')).toBeNull();
+    expect(cooldowns.untilEpochMs('acct-1', 'spotify', 'player')).toBeNull();
   });
 });
 
@@ -231,7 +336,7 @@ describe('ProviderCooldowns.guardFetch 429 logging', () => {
     expect(text).toContain('/v1/search');
     expect(text).not.toContain('q=abc');
     expect(text).toContain('retry-after=120');
-    expect(cooldowns.untilEpochMs('acct-1', 'spotify')).toBe(now() + 120_000);
+    expect(cooldowns.untilEpochMs('acct-1', 'spotify', 'search')).toBe(now() + 120_000);
   });
 
   it('logs without throwing when the 429 has no body', async () => {
@@ -246,7 +351,7 @@ describe('ProviderCooldowns.guardFetch 429 logging', () => {
 
     expect(res.status).toBe(429);
     expect(allLogText(logger)).toContain('/v1/me/player');
-    expect(cooldowns.untilEpochMs('acct-1', 'spotify')).not.toBeNull();
+    expect(cooldowns.untilEpochMs('acct-1', 'spotify', 'player')).not.toBeNull();
   });
 
   it('logs without throwing when the 429 body is not JSON', async () => {
@@ -331,7 +436,7 @@ describe('ProviderCooldowns per-endpoint call counts', () => {
 
   it('does not count calls refused locally during a cooldown', async () => {
     const { cooldowns } = logSetup();
-    cooldowns.record('acct-1', 'spotify', 60);
+    cooldowns.record('acct-1', 'spotify', 'search', 60);
     const guarded = cooldowns.guardFetch('acct-1', 'spotify', async () => response(200));
 
     await guarded('https://api.spotify.com/v1/search?q=a').catch(() => undefined);

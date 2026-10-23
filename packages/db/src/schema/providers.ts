@@ -33,11 +33,20 @@ export const providerConnections = pgTable(
     rawProfile: jsonb('raw_profile'),
     rawTokenResponse: jsonb('raw_token_response'),
     /**
-     * End of the provider's open rate-limit cooldown for this connection
-     * (from its 429 `Retry-After`), so the backoff survives a restart. Only
-     * ever raised (`GREATEST`); expired values are left in place on purpose.
+     * End of the provider's open rate-limit cooldown for this connection's
+     * `player` quota group (every endpoint except search, from its 429
+     * `Retry-After`), so the backoff survives a restart. Only ever raised
+     * (`GREATEST`) under one client id; expired values are left in place.
      */
     rateLimitedUntil: timestamp('rate_limited_until', { withTimezone: true }),
+    /** Same as `rateLimitedUntil`, for the `search` quota group (`/v1/search`). */
+    searchRateLimitedUntil: timestamp('search_rate_limited_until', { withTimezone: true }),
+    /**
+     * Provider app client id the persisted cooldowns were recorded under.
+     * Quotas belong to the app, so a deployment on a different client id
+     * ignores them; NULL (recorded before this column existed) is ignored too.
+     */
+    rateLimitedClientId: text('rate_limited_client_id'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
