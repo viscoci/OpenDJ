@@ -659,3 +659,210 @@ describe('GET /sessions/:id/search — refusal jitter', () => {
     },
   );
 });
+
+describe('GET /sessions/:id/search — admitted searches that fail upstream', () => {
+  it.each([
+    ['a provider error (502)', () => new Error('boom'), 502, 'provider_error'],
+    [
+      'a provider 429 after admission',
+      () =>
+        Object.assign(new Error('Spotify Web API returned 429'), {
+          status: 429,
+          retryAfterSec: 30,
+        }),
+      503,
+      'provider_rate_limited',
+    ],
+  ])(
+    'keeps the budget and guest units spent after %s',
+    async (_label, makeError, status, error) => {
+      const { search, addGuest, limiter, mockProvider } = buildHarness({
+        pacing: { searchBudgetLimit: 3, searchGuestLimit: 3 },
+      });
+      const slotId = await addGuest('tok-a');
+      mockProvider.failWith = makeError();
+
+      const res = await search('doomed', 'tok-a');
+
+      expect(res.status).toBe(status);
+      expect(((await res.json()) as { error: string }).error).toBe(error);
+      expect(mockProvider.calls).toBe(1);
+      expect(budgetRemaining(limiter)).toBe(3 - 1);
+      expect(limiter.peekSync(SEARCH_SCOPE, searchGuestKey(slotId)).remaining).toBe(3 - 1);
+    },
+  );
+});
+
+describe('GET /sessions/:id/search — early retries', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function guestRemaining(
+    limiter: ReturnType<typeof createSearchRateLimiter>,
+    slotId: string,
+  ): number {
+    return limiter.peekSync(SEARCH_SCOPE, searchGuestKey(slotId)).remaining;
+  }
+
+  it('never charges a guest who waits out each busy refusal', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const { search, addGuest, limiter } = buildHarness({
+      pacing: { searchBudgetLimit: 1, searchGuestLimit: 3 },
+    });
+    await addGuest('tok-other');
+    const honest = await addGuest('tok-honest');
+    expect((await search('other 0', 'tok-other')).status).toBe(200);
+
+    for (let round = 1; round <= 4; round += 1) {
+      const res = await search(`honest ${round}`, 'tok-honest');
+      expect(res.status).toBe(503);
+      const body = (await res.json()) as RefusalBody;
+      expect(body.error).toBe('search_busy');
+      expect(guestRemaining(limiter, honest)).toBe(3);
+      // Waits exactly as told, but another guest takes the freed slot first.
+      vi.setSystemTime(Date.now() + body.retryAfterSec * 1000);
+      expect((await search(`other ${round}`, 'tok-other')).status).toBe(200);
+    }
+  });
+
+  it('charges a busy refusal that arrives before its deadline to the retrying guest', async () => {
+    const { search, addGuest, limiter, mockProvider } = buildHarness({
+      pacing: { searchBudgetLimit: 1, searchGuestLimit: 3 },
+    });
+    await addGuest('tok-other');
+    const rude = await addGuest('tok-rude');
+    expect((await search('other', 'tok-other')).status).toBe(200);
+
+    // The first refusal is honest: nothing to ignore yet.
+    expect(((await (await search('r0', 'tok-rude')).json()) as RefusalBody).error).toBe(
+      'search_busy',
+    );
+    expect(guestRemaining(limiter, rude)).toBe(3);
+
+    for (let i = 1; i <= 3; i += 1) {
+      const res = await search(`r${i}`, 'tok-rude');
+      expect(((await res.json()) as RefusalBody).error).toBe('search_busy');
+      expect(guestRemaining(limiter, rude)).toBe(3 - i);
+    }
+
+    const tooFast = await search('r4', 'tok-rude');
+    expect(tooFast.status).toBe(429);
+    expect(((await tooFast.json()) as RefusalBody).error).toBe('search_too_fast');
+    expect(budgetRemaining(limiter)).toBe(0);
+    expect(mockProvider.calls).toBe(1);
+  });
+
+  it('lets a guest who waited win freed slots over one who retries every 250ms', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const { search, addGuest } = buildHarness({
+      pacing: { searchBudgetLimit: 1, searchGuestLimit: 5 },
+    });
+    await addGuest('tok-other');
+    await addGuest('tok-honest');
+    await addGuest('tok-rude');
+    expect((await search('other', 'tok-other')).status).toBe(200);
+
+    const wins = { honest: 0, rude: 0 };
+    let rudeTooFast = 0;
+    let honestNextAt = Date.now();
+    const start = Date.now();
+    let n = 0;
+    // Five budget windows; the rude client always gets in first within a tick.
+    for (let t = start; t < start + 150_000; t += 250) {
+      vi.setSystemTime(t);
+      n += 1;
+      const rudeRes = await search(`rude ${n}`, 'tok-rude');
+      if (rudeRes.status === 200) wins.rude += 1;
+      if (rudeRes.status === 429) rudeTooFast += 1;
+      if (t >= honestNextAt) {
+        const res = await search(`honest ${n}`, 'tok-honest');
+        if (res.status === 200) {
+          wins.honest += 1;
+        } else {
+          honestNextAt = t + ((await res.json()) as RefusalBody).retryAfterSec * 1000;
+        }
+      }
+    }
+
+    // One slot frees per window (30s, 60s, 90s, 120s); the guest who waited takes each.
+    expect(wins.honest).toBeGreaterThanOrEqual(wins.rude);
+    expect(wins).toEqual({ honest: 4, rude: 0 });
+    expect(rudeTooFast).toBeGreaterThan(0);
+  });
+
+  it('charges early anonymous retries to the shared anon limit only', async () => {
+    const { search, addGuest, limiter } = buildHarness({
+      pacing: { searchBudgetLimit: 1, searchAnonLimit: 5, searchGuestLimit: 5 },
+    });
+    const guest = await addGuest('tok-a');
+    expect((await search('first', 'tok-a')).status).toBe(200);
+
+    expect((await search('anon 1')).status).toBe(503);
+    expect(limiter.peekSync(SEARCH_SCOPE, SEARCH_ANON_KEY).remaining).toBe(5);
+    expect((await search('anon 2')).status).toBe(503);
+    expect(limiter.peekSync(SEARCH_SCOPE, SEARCH_ANON_KEY).remaining).toBe(4);
+
+    // A guest's first busy refusal is not an early retry of the anon deadline.
+    expect((await search('guest 2', 'tok-a')).status).toBe(503);
+    expect(guestRemaining(limiter, guest)).toBe(5 - 1);
+  });
+
+  it('never charges an early retry that is served from cache or joins an in-flight search', async () => {
+    const { search, addGuest, limiter, mockProvider } = buildHarness({
+      pacing: { searchBudgetLimit: 1, searchGuestLimit: 3 },
+    });
+    await addGuest('tok-other');
+    const rude = await addGuest('tok-rude');
+    let release!: () => void;
+    mockProvider.gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const inFlight = search('shared', 'tok-other');
+    await vi.waitFor(() => expect(mockProvider.calls).toBe(1));
+
+    expect((await search('miss', 'tok-rude')).status).toBe(503);
+    const joined = search('shared', 'tok-rude');
+    release();
+    expect((await joined).status).toBe(200);
+    expect((await inFlight).status).toBe(200);
+    expect((await search('Shared', 'tok-rude')).status).toBe(200);
+
+    expect(guestRemaining(limiter, rude)).toBe(3);
+  });
+});
+
+describe('GET /sessions/:id/search — early retry with a free slot', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('refuses an early retry as too fast even once the budget frees, then admits it after the deadline', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const { search, addGuest, limiter } = buildHarness({
+      pacing: { searchBudgetLimit: 1, searchGuestLimit: 5 },
+      jitterMs: () => 1_500,
+    });
+    await addGuest('tok-other');
+    const rude = await addGuest('tok-rude');
+    const start = Date.now();
+    expect((await search('other', 'tok-other')).status).toBe(200);
+    const busy = (await (await search('r0', 'tok-rude')).json()) as RefusalBody;
+    expect(busy.error).toBe('search_busy');
+    const deadline = start + busy.retryAfterSec * 1000;
+
+    // The budget has freed (30s) but the deadline (30s + jitter) has not passed.
+    vi.setSystemTime(start + 30_500);
+    expect(budgetRemaining(limiter)).toBe(1);
+    const early = await search('r1', 'tok-rude');
+    expect(early.status).toBe(429);
+    const body = (await early.json()) as RefusalBody;
+    expect(body.error).toBe('search_too_fast');
+    expect(body.retryAfterSec).toBeGreaterThanOrEqual(Math.ceil((deadline - Date.now()) / 1000));
+    expect(limiter.peekSync(SEARCH_SCOPE, searchGuestKey(rude)).remaining).toBe(4);
+    expect(budgetRemaining(limiter)).toBe(1);
+
+    vi.setSystemTime(start + 30_500 + body.retryAfterSec * 1000);
+    expect((await search('r2', 'tok-rude')).status).toBe(200);
+  });
+});

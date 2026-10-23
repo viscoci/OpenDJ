@@ -36,6 +36,16 @@
  * cooldown, peek the guest-or-anon limit and the budget, then spend both and
  * insert the in-flight promise. Two identical misses can never both spend.
  *
+ * Early retries pay. Each busy or too-fast refusal records the retry deadline
+ * it handed out (including jitter) for its limiter key. A cache miss from
+ * that key that arrives before the deadline is refused (`search_busy` while the
+ * budget is spent, else `search_too_fast` until the deadline) and spends one
+ * unit of the key's own search limit, so a client that ignores
+ * `retryAfterSec` soon gets `search_too_fast` for the rest of the window and
+ * never wins a freed budget slot ahead of its deadline. A client that waits out its deadline is
+ * never charged for a refusal, and a busy refusal still never spends an honest
+ * guest's limit. Cache hits and in-flight joins are exempt.
+ *
  * A 200 carries `slowDown: { debounceMs, ttlSec }` when the budget's remaining
  * calls are at or below `searchSlowDownThresholdPct` of its limit. It is
  * computed per response and never cached.
@@ -60,11 +70,13 @@ import {
   searchGuestKey,
   type SlidingWindowRateLimiter,
 } from '../rate-limit/SlidingWindowRateLimiter.js';
+import { RetryDeadlines } from '../rate-limit/RetryDeadlines.js';
 import type {
   GuestSlotRepository,
   ProviderConnectionRepository,
   SessionRepository,
 } from '../repositories/types.js';
+import { bearerFromAuthHeader } from './bearer.js';
 
 export interface SearchRouteDeps {
   sessions: SessionRepository;
@@ -127,12 +139,6 @@ function toDto(track: Track): SearchResultDto {
   };
 }
 
-function bearerFromAuthHeader(header: string | undefined): string | null {
-  if (!header) return null;
-  const m = /^Bearer\s+(.+)$/i.exec(header);
-  return m ? m[1]!.trim() : null;
-}
-
 function randomJitterMs(): number {
   return Math.random() * MAX_REFUSAL_JITTER_MS;
 }
@@ -143,6 +149,7 @@ export function searchRoutes(deps: SearchRouteDeps): Hono {
   const limiter = deps.searchRateLimiter;
   const pacing = deps.searchPacing;
   const jitterMs = deps.jitterMs ?? randomJitterMs;
+  const retryDeadlines = new RetryDeadlines();
 
   /** The live cached or in-flight search for `key`; evicts an expired entry. */
   function lookupCached(key: string): Promise<Track[]> | null {
@@ -191,6 +198,17 @@ export function searchRoutes(deps: SearchRouteDeps): Hono {
     return Math.max(1, Math.ceil((retryAfterMs + jitter) / 1000));
   }
 
+  /** Refuse `limitKey` and remember the deadline it was given. */
+  function refuse(
+    kind: 'search_too_fast' | 'search_busy',
+    limitKey: string,
+    retryAfterMs: number,
+  ): Admission {
+    const retryAfterSec = refusalWaitSec(retryAfterMs);
+    retryDeadlines.record(limitKey, Date.now() + retryAfterSec * 1000);
+    return { kind, retryAfterSec };
+  }
+
   /** Limiter key for the optional slot token: a slot in this session, else `anon`. */
   async function resolveLimitKey(sessionId: string, slotToken: string | null): Promise<string> {
     if (!slotToken) return SEARCH_ANON_KEY;
@@ -203,7 +221,8 @@ export function searchRoutes(deps: SearchRouteDeps): Hono {
    * Admit one cache miss. Synchronous on purpose: an await between the cache
    * re-check and the in-flight insert would let two identical misses both
    * spend budget. Cooldown is checked first (hardest block); a busy refusal
-   * never spends the guest's limit, and a too-fast refusal never spends budget.
+   * never spends the guest's limit (an early retry is charged instead), and a
+   * too-fast refusal never spends budget.
    */
   function admit(input: {
     cacheKey: string;
@@ -225,11 +244,20 @@ export function searchRoutes(deps: SearchRouteDeps): Hono {
 
     const guest = limiter.peekSync(SEARCH_SCOPE, input.limitKey);
     if (!guest.ok) {
-      return { kind: 'search_too_fast', retryAfterSec: refusalWaitSec(guest.retryAfterMs) };
+      return refuse('search_too_fast', input.limitKey, guest.retryAfterMs);
     }
     const budget = limiter.peekSync(SEARCH_BUDGET_SCOPE, input.providerId);
+    const earlyByMs = retryDeadlines.remainingMs(input.limitKey);
+    if (earlyByMs > 0) {
+      // Retrying before the deadline we handed out costs the key one unit and
+      // is never admitted, even if a budget slot has freed in the meantime.
+      limiter.tryApply(SEARCH_SCOPE, input.limitKey);
+      return budget.ok
+        ? refuse('search_too_fast', input.limitKey, earlyByMs)
+        : refuse('search_busy', input.limitKey, budget.retryAfterMs);
+    }
     if (!budget.ok) {
-      return { kind: 'search_busy', retryAfterSec: refusalWaitSec(budget.retryAfterMs) };
+      return refuse('search_busy', input.limitKey, budget.retryAfterMs);
     }
 
     limiter.tryApply(SEARCH_SCOPE, input.limitKey);
