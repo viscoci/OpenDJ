@@ -227,7 +227,7 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
 
   const providerCooldowns = new ProviderCooldowns();
   // Persist every opened/extended cooldown so a restart mid-ban doesn't
-  // resume calling the provider (KTD6). Fire-and-forget: the provider call
+  // resume calling the provider. Fire-and-forget: the provider call
   // path never waits on, or fails because of, this write. The in-memory
   // cooldown keeps the provider's full window; only the stored copy is
   // clamped, so a bogus Retry-After can't pause the provider for days.
