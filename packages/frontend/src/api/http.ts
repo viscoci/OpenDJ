@@ -7,7 +7,7 @@
  * - Mapping non-2xx responses to `ApiError`
  * - Forwarding session cookies (browser default `credentials: 'include'`)
  *
- * Slot-token-authenticated guest endpoints take an `x-slot-token` header.
+ * Slot-token-authenticated guest endpoints take an `Authorization: Bearer` header.
  * The transport accepts a `slotToken` option to set it without leaking the
  * header into every method signature.
  */

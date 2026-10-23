@@ -172,6 +172,11 @@ export interface SearchResultWire {
 export interface SearchResponse {
   results: ReadonlyArray<SearchResultWire>;
   providerId: string;
+  /**
+   * Present when the deployment's search budget is nearly spent: lengthen the
+   * search debounce to `debounceMs` for `ttlSec` seconds.
+   */
+  slowDown?: { debounceMs: number; ttlSec: number };
 }
 
 export interface RegisterRequest {

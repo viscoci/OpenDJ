@@ -13,7 +13,7 @@ import type {
  *
  * - `list` is callable by hosts (returns all statuses) or guests (the backend
  *   filters to currently-visible items).
- * - `request` requires a slot token (guests authenticate via `x-slot-token`).
+ * - `request` requires a slot token (guests send `Authorization: Bearer <token>`).
  * - `moderate` requires a host claim — cookie session.
  * - `voteSkip` requires a slot token and is rate-limited per (item, slot).
  */
@@ -108,15 +108,30 @@ export class QueueApi {
   /**
    * Search the session's connected streaming provider.
    *
-   * Public — no slot token required. Surfaces 503 `no_provider_connected`
-   * (account hasn't linked a provider yet) and 501 `search_not_supported`
-   * (provider has no search capability) as `ApiError`s.
+   * Optional guest auth — pass the slot token so the search counts against
+   * that guest's limit; without one it shares the anonymous limit. Surfaces
+   * these as `ApiError`s (branch on `code`; `payload.retryAfterSec` carries
+   * the wait for the rate-limit codes):
+   * - 429 `search_too_fast` — this guest is searching too quickly
+   * - 503 `search_busy` — the deployment's search budget is spent
+   * - 503 `provider_rate_limited` — the provider is rate limiting the account
+   * - 503 `no_provider_connected`, 501 `search_not_supported`
+   *
+   * An aborted `signal` rejects with `NetworkError`; check `signal.aborted`
+   * to tell a cancellation from a real network failure.
    */
-  search(sessionId: string, query: string, limit?: number): Promise<SearchResponse> {
+  search(
+    sessionId: string,
+    query: string,
+    limit?: number,
+    options: { slotToken?: string; signal?: AbortSignal } = {},
+  ): Promise<SearchResponse> {
     return this.http.request<SearchResponse>(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/search`,
       {
         query: { q: query, ...(limit !== undefined && { limit }) },
+        ...(options.slotToken !== undefined && { slotToken: options.slotToken }),
+        ...(options.signal !== undefined && { signal: options.signal }),
       },
     );
   }
