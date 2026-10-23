@@ -4,7 +4,10 @@
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DeezerSearchSource } from '../../src/search-sources/DeezerSearchSource.js';
+import {
+  DeezerSearchSource,
+  type DeezerSearchSourceOptions,
+} from '../../src/search-sources/DeezerSearchSource.js';
 import { isrcFromTrackUri, isrcTrackUri } from '../../src/search-sources/isrc.js';
 
 const CTX = { accountId: 'acc-1', providerId: 'spotify' };
@@ -47,7 +50,12 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 function sourceWith(
   fetchImpl: typeof fetch,
-  opts: { rateLimit?: number; now?: () => number; timeoutMs?: number } = {},
+  opts: {
+    rateLimit?: number;
+    now?: () => number;
+    timeoutMs?: number;
+    requestedCounts?: DeezerSearchSourceOptions['requestedCounts'];
+  } = {},
 ) {
   return new DeezerSearchSource({ fetchImpl, ...opts });
 }
@@ -77,7 +85,7 @@ describe('DeezerSearchSource', () => {
     const url = new URL(String(fetchImpl.mock.calls[0]![0]));
     expect(url.origin + url.pathname).toBe('https://api.deezer.com/search');
     expect(url.searchParams.get('q')).toBe('one more time');
-    expect(url.searchParams.get('limit')).toBe('5');
+    expect(url.searchParams.get('limit')).toBe('25');
     expect(results).toEqual([
       {
         trackUri: 'opendj:isrc:GBDUW0000053',
@@ -142,5 +150,196 @@ describe('DeezerSearchSource', () => {
     await vi.advanceTimersByTimeAsync(3_000);
 
     expect(await pending).toBe('unavailable');
+  });
+});
+
+/** A Deezer search item shaped like the live API's. */
+let nextId = 1;
+function deezerItem(title: string, artist: string, rank: number, isrc: string) {
+  nextId += 1;
+  return {
+    id: nextId,
+    title,
+    title_short: title,
+    isrc,
+    duration: 222,
+    rank,
+    artist: { id: nextId * 10, name: artist },
+    album: { id: nextId * 100, cover_medium: `https://cdn.deezer/${nextId}.jpg` },
+  };
+}
+
+function rankedSource(
+  items: ReturnType<typeof deezerItem>[],
+  requestedCounts?: DeezerSearchSourceOptions['requestedCounts'],
+) {
+  const fetchImpl = vi.fn<typeof fetch>(async () =>
+    jsonResponse({ data: items, total: items.length }),
+  );
+  return {
+    fetchImpl,
+    source: sourceWith(fetchImpl, requestedCounts ? { requestedCounts } : {}),
+  };
+}
+
+const titles = (results: Awaited<ReturnType<DeezerSearchSource['search']>>) => {
+  if (results === 'unavailable') throw new Error('unexpected unavailable');
+  return results.map((r) => `${r.trackName} / ${r.artistName}`);
+};
+
+// Raw Deezer order for "mr brightside": cluttered with a remix, covers, and live takes.
+const BRIGHTSIDE = [
+  deezerItem('Mr. Brightside (Jacques Lu Cont Remix)', 'The Killers', 610_000, 'USUM70500001'),
+  deezerItem('Mr. Brightside', 'Part Time Killer', 180_000, 'QZAAA2000001'),
+  deezerItem('Mr. Brightside', 'ItaloBrothers', 420_000, 'DEA621500001'),
+  deezerItem('Mr. Brightside (Live at Wembley Stadium)', 'The Killers', 450_000, 'USUM70700002'),
+  deezerItem('Mr. Brightside', 'The Killers', 905_000, 'USIR20400274'),
+  deezerItem('Mr. Brightside (Orchestra Ver.)', 'Vitamin Strings', 300_000, 'USA2P0900001'),
+  deezerItem('Mr. Brightside - Karaoke Version', 'Karaoke Hits', 150_000, 'GBKRK0500001'),
+  deezerItem('Mr. Brightside', 'The Killers', 700_000, 'USIR20400999'),
+];
+
+const CHA_CHA = [
+  deezerItem('Cha Cha Slide', 'Party DJs', 210_000, 'QZBBB1900001'),
+  deezerItem('Cha Cha Slide (Sped Up)', 'DJ Casper', 520_000, 'USA560400001'),
+  deezerItem('Cha Cha Slide (TV Size)', 'Anime Party', 120_000, 'JPA000400001'),
+  deezerItem('Cha-Cha Slide', 'DJ Casper', 880_000, 'USA560400002'),
+  deezerItem('Cha Cha Slide (From "Shrek" Soundtrack)', 'Movie Hits', 330_000, 'USB560400003'),
+];
+
+describe('DeezerSearchSource ranking', () => {
+  it('asks Deezer for 25 hits and returns at most the requested limit', async () => {
+    const { source, fetchImpl } = rankedSource(BRIGHTSIDE);
+
+    const results = await source.search('mr brightside', 3, CTX);
+
+    const url = new URL(String(fetchImpl.mock.calls[0]![0]));
+    expect(url.searchParams.get('limit')).toBe('25');
+    expect(titles(results)).toHaveLength(3);
+  });
+
+  it('puts the original above remixes, live takes, orchestra and karaoke variants', async () => {
+    const { source } = rankedSource(BRIGHTSIDE);
+
+    const ordered = titles(await source.search('mr brightside', 20, CTX));
+
+    expect(ordered[0]).toBe('Mr. Brightside / The Killers');
+    // Every unmarked recording ranks above every marked variant.
+    const lastPlain = Math.max(
+      ordered.indexOf('Mr. Brightside / ItaloBrothers'),
+      ordered.indexOf('Mr. Brightside / Part Time Killer'),
+    );
+    for (const variant of [
+      'Mr. Brightside (Jacques Lu Cont Remix) / The Killers',
+      'Mr. Brightside (Live at Wembley Stadium) / The Killers',
+      'Mr. Brightside (Orchestra Ver.) / Vitamin Strings',
+      'Mr. Brightside - Karaoke Version / Karaoke Hits',
+    ]) {
+      expect(ordered.indexOf(variant)).toBeGreaterThan(lastPlain);
+    }
+  });
+
+  it('collapses duplicate releases of one recording, keeping the higher Deezer rank', async () => {
+    const { source } = rankedSource(BRIGHTSIDE);
+
+    const results = await source.search('mr brightside', 20, CTX);
+
+    if (results === 'unavailable') throw new Error('unexpected unavailable');
+    const killers = results.filter(
+      (r) => r.trackName === 'Mr. Brightside' && r.artistName === 'The Killers',
+    );
+    expect(killers.map((r) => r.isrc)).toEqual(['USIR20400274']);
+  });
+
+  it('keeps a remix high when the query asks for one', async () => {
+    const { source } = rankedSource(BRIGHTSIDE);
+
+    const ordered = titles(await source.search('mr brightside remix', 20, CTX));
+
+    expect(ordered[0]).toBe('Mr. Brightside (Jacques Lu Cont Remix) / The Killers');
+  });
+
+  it('demotes sped-up and TV-size takes but not a "From ..." soundtrack credit', async () => {
+    const { source } = rankedSource(CHA_CHA);
+
+    const ordered = titles(await source.search('cha cha slide', 20, CTX));
+
+    expect(ordered[0]).toBe('Cha-Cha Slide / DJ Casper');
+    const soundtrack = ordered.indexOf('Cha Cha Slide (From "Shrek" Soundtrack) / Movie Hits');
+    expect(soundtrack).toBeLessThan(ordered.indexOf('Cha Cha Slide (Sped Up) / DJ Casper'));
+    expect(soundtrack).toBeLessThan(ordered.indexOf('Cha Cha Slide (TV Size) / Anime Party'));
+  });
+
+  it("does not treat Taylor's Version as a variant", async () => {
+    const { source } = rankedSource([
+      deezerItem('Love Story (Live)', 'Taylor Swift', 600_000, 'USCJY0803275'),
+      deezerItem("Love Story (Taylor's Version)", 'Taylor Swift', 590_000, 'USUG12100342'),
+    ]);
+
+    const ordered = titles(await source.search('love story', 20, CTX));
+
+    expect(ordered[0]).toBe("Love Story (Taylor's Version) / Taylor Swift");
+  });
+
+  it('lifts tracks the local catalog says guests requested', async () => {
+    const requestedCounts = vi.fn(async (_providerId: string, _isrcs: readonly string[]) => {
+      return new Map([['DEA621500001', 3]]);
+    });
+    const { source } = rankedSource(
+      [
+        deezerItem('Mr. Brightside', 'Part Time Killer', 500_000, 'QZAAA2000001'),
+        deezerItem('Mr. Brightside', 'ItaloBrothers', 420_000, 'DEA621500001'),
+      ],
+      requestedCounts,
+    );
+
+    const ordered = titles(await source.search('mr brightside', 20, CTX));
+
+    expect(requestedCounts).toHaveBeenCalledWith(
+      'spotify',
+      expect.arrayContaining(['DEA621500001']),
+    );
+    expect(ordered[0]).toBe('Mr. Brightside / ItaloBrothers');
+  });
+
+  it('ranks without the requested bonus when the catalog lookup fails', async () => {
+    const { source } = rankedSource(
+      [
+        deezerItem('Mr. Brightside', 'Part Time Killer', 500_000, 'QZAAA2000001'),
+        deezerItem('Mr. Brightside', 'ItaloBrothers', 420_000, 'DEA621500001'),
+      ],
+      async () => {
+        throw new Error('catalog down');
+      },
+    );
+
+    const ordered = titles(await source.search('mr brightside', 20, CTX));
+
+    expect(ordered[0]).toBe('Mr. Brightside / Part Time Killer');
+  });
+
+  it('puts hits that match every query word above ones that do not', async () => {
+    const { source } = rankedSource([
+      deezerItem('Brightside', 'Someone Else', 900_000, 'QZAAA2000021'),
+      deezerItem('Mr. Brightside', 'The Killers', 800_000, 'USIR20400274'),
+    ]);
+
+    const ordered = titles(await source.search('killers brightside', 20, CTX));
+
+    expect(ordered[0]).toBe('Mr. Brightside / The Killers');
+  });
+
+  it("keeps Deezer's order between equally scored hits", async () => {
+    const { source } = rankedSource([
+      deezerItem('Song A', 'Band', 100, 'QZAAA2000011'),
+      deezerItem('Song B', 'Band', 100, 'QZAAA2000012'),
+      deezerItem('Song C', 'Band', 100, 'QZAAA2000013'),
+    ]);
+
+    expect(titles(await source.search('song', 20, CTX))).toEqual([
+      'Song A / Band',
+      'Song B / Band',
+      'Song C / Band',
+    ]);
   });
 });

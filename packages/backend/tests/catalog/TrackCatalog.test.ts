@@ -250,4 +250,27 @@ describe('TrackCatalog — ISRC', () => {
       { trackUri: 'spotify:track:2', timesRequested: 1, isrc: 'USSM10900001' },
     ]);
   });
+
+  it('sums request counts per ISRC across URIs, omitting unrequested recordings', async () => {
+    const repositories = createInMemoryRepositories();
+    await connectSpotify(repositories);
+    const catalog = catalogFor(repositories);
+
+    catalog.recordRequested(ACCOUNT, { ...TRACKS[1]!, isrc: 'USSM10900001' });
+    catalog.recordRequested(ACCOUNT, {
+      ...TRACKS[1]!,
+      uri: 'opendj:isrc:USSM10900001',
+      isrc: 'USSM10900001',
+    });
+    catalog.recordSeen('spotify', [{ ...TRACKS[0]!, isrc: 'USSM10304476' }]);
+    await catalog.whenIdle();
+
+    const counts = await catalog.requestedCountsByIsrc('spotify', [
+      'USSM10900001',
+      'USSM10304476',
+      'QZAAA2000001',
+    ]);
+    expect([...counts]).toEqual([['USSM10900001', 2]]);
+    expect([...(await catalog.requestedCountsByIsrc('soundtrack', ['USSM10900001']))]).toEqual([]);
+  });
 });

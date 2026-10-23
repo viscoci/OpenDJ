@@ -32,6 +32,7 @@ import {
   searchGuestKey,
 } from '../../src/rate-limit/SlidingWindowRateLimiter.js';
 import { StreamingRouter } from '../../src/providers/streaming/StreamingRouter.js';
+import { ProviderCooldowns } from '../../src/providers/streaming/ProviderCooldowns.js';
 import type { ProviderRegistry } from '../../src/providers/streaming/providerRegistry.js';
 import type {
   SearchSource,
@@ -66,6 +67,7 @@ function buildHarness(
     deezer?: SourceTrack[] | 'unavailable';
     sonovault?: SourceTrack[] | 'unavailable';
     pacing?: Partial<SearchPacingConfig>;
+    cooldowns?: ProviderCooldowns;
   } = {},
 ) {
   const sessions = new InMemorySessionRepository();
@@ -74,7 +76,11 @@ function buildHarness(
   const pacing: SearchPacingConfig = { ...DEFAULT_SEARCH_PACING, ...opts.pacing };
   const limiter = createSearchRateLimiter(pacing, () => Date.now());
 
-  const providerSearch = vi.fn(async (_q: string, limit = 20) => PROVIDER_TRACKS.slice(0, limit));
+  let providerFailure: Error | null = null;
+  const providerSearch = vi.fn(async (_q: string, limit = 20) => {
+    if (providerFailure) throw providerFailure;
+    return PROVIDER_TRACKS.slice(0, limit);
+  });
   const provider: IStreamingProvider & ISupportsSearch = {
     providerId: 'mock-streamer',
     displayName: 'Mock',
@@ -99,6 +105,7 @@ function buildHarness(
     providerConnections,
     registry: { 'mock-streamer': () => provider } as unknown as ProviderRegistry,
     context: { fetch: globalThis.fetch },
+    ...(opts.cooldowns && { cooldowns: opts.cooldowns }),
   });
 
   const catalog = new TrackCatalog({
@@ -184,8 +191,12 @@ function buildHarness(
     providerSearch,
     deezerSearch,
     sonovaultSearch,
+    accountId,
     setDeezer: (answer: SourceTrack[] | 'unavailable') => {
       deezerAnswer = answer;
+    },
+    failProviderWith: (err: Error | null) => {
+      providerFailure = err;
     },
   };
 }
@@ -440,5 +451,143 @@ describe('GET /sessions/:id/search — search sources', () => {
     const body = (await res.json()) as { results: Array<{ trackUri: string }>; source: string };
     expect(body.source).toBe('local');
     expect(body.results.map((r) => r.trackUri)).toEqual(['mock:track:1']);
+  });
+});
+
+describe('GET /sessions/:id/search — fall-through after a provider refusal', () => {
+  const FALL_THROUGH: SearchSourceId[] = ['provider', 'deezer', 'catalog', 'sonovault'];
+  const rateLimited = () =>
+    Object.assign(new Error('Spotify Web API returned 429'), { status: 429, retryAfterSec: 30 });
+
+  type Body = { source?: string; fallbackReason?: string; error?: string; results?: unknown[] };
+
+  it('asks deezer when the provider budget is busy and answers external without a notice', async () => {
+    const { search, addGuest, limiter, providerSearch, deezerSearch } = buildHarness({
+      order: FALL_THROUGH,
+      pacing: { searchBudgetLimit: 1, searchGuestLimit: 10 },
+    });
+    const slotId = await addGuest('tok-a');
+
+    expect((await search('first', 'tok-a')).status).toBe(200);
+    const res = await search('second', 'tok-a');
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Body;
+    expect(body.source).toBe('external');
+    expect(body.fallbackReason).toBeUndefined();
+    expect(body.results).toEqual(DEEZER_TRACKS);
+    expect(providerSearch).toHaveBeenCalledTimes(1);
+    expect(deezerSearch).toHaveBeenCalledTimes(1);
+    // One unit per request: the provider answer, then the deezer answer.
+    expect(limiter.peekSync(SEARCH_SCOPE, searchGuestKey(slotId)).remaining).toBe(8);
+  });
+
+  it('asks deezer when the daily cap is spent', async () => {
+    const { search, deezerSearch } = buildHarness({
+      order: FALL_THROUGH,
+      pacing: { searchDailyLimit: 1 },
+    });
+
+    expect((await search('first')).status).toBe(200);
+    const res = await search('second');
+
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as Body).source).toBe('external');
+    expect(deezerSearch).toHaveBeenCalledTimes(1);
+  });
+
+  it('asks deezer while the provider search cooldown is open', async () => {
+    const cooldowns = new ProviderCooldowns();
+    const { search, accountId, providerSearch, deezerSearch } = buildHarness({
+      order: FALL_THROUGH,
+      cooldowns,
+    });
+    cooldowns.record(accountId, 'mock-streamer', 'search', 600);
+
+    const res = await search('one more');
+
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as Body).source).toBe('external');
+    expect(providerSearch).not.toHaveBeenCalled();
+    expect(deezerSearch).toHaveBeenCalledTimes(1);
+  });
+
+  it('asks deezer after a provider 429 at call time, charging the guest once', async () => {
+    const { search, addGuest, limiter, failProviderWith, deezerSearch } = buildHarness({
+      order: FALL_THROUGH,
+      pacing: { searchGuestLimit: 10 },
+    });
+    const slotId = await addGuest('tok-a');
+    failProviderWith(rateLimited());
+
+    const res = await search('one more', 'tok-a');
+
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as Body).source).toBe('external');
+    expect(deezerSearch).toHaveBeenCalledTimes(1);
+    expect(limiter.peekSync(SEARCH_SCOPE, searchGuestKey(slotId)).remaining).toBe(9);
+  });
+
+  it('answers from the catalog with a fallbackReason when deezer is unavailable too', async () => {
+    const { search, catalog, deezerSearch } = buildHarness({
+      order: FALL_THROUGH,
+      deezer: 'unavailable',
+      pacing: { searchBudgetLimit: 1 },
+    });
+    catalog.recordSeen('mock-streamer', PROVIDER_TRACKS);
+    await catalog.whenIdle();
+
+    expect((await search('first')).status).toBe(200);
+    const res = await search('one more');
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Body;
+    expect(body.source).toBe('local');
+    expect(body.fallbackReason).toBe('busy');
+    expect(deezerSearch).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns the provider's refusal when every later source fails", async () => {
+    const { search, deezerSearch, sonovaultSearch } = buildHarness({
+      order: FALL_THROUGH,
+      deezer: 'unavailable',
+      pacing: { searchDailyLimit: 1 },
+    });
+
+    expect((await search('first')).status).toBe(200);
+    const res = await search('nothing in the catalog');
+
+    expect(res.status).toBe(503);
+    expect(((await res.json()) as Body).error).toBe('search_daily_limit');
+    expect(deezerSearch).toHaveBeenCalledTimes(1);
+    expect(sonovaultSearch).toHaveBeenCalledTimes(1);
+  });
+
+  it('still refuses a too-fast guest before asking deezer', async () => {
+    const { search, addGuest, deezerSearch } = buildHarness({
+      order: FALL_THROUGH,
+      pacing: { searchGuestLimit: 1, searchBudgetLimit: 1 },
+    });
+    await addGuest('tok-a');
+
+    expect((await search('first', 'tok-a')).status).toBe(200);
+    const res = await search('second', 'tok-a');
+
+    expect(res.status).toBe(429);
+    expect(((await res.json()) as Body).error).toBe('search_too_fast');
+    expect(deezerSearch).not.toHaveBeenCalled();
+  });
+
+  it('keeps the default order: busy falls back to the catalog only', async () => {
+    const { search, catalog, deezerSearch } = buildHarness({ pacing: { searchBudgetLimit: 1 } });
+    catalog.recordSeen('mock-streamer', PROVIDER_TRACKS);
+    await catalog.whenIdle();
+
+    expect((await search('first')).status).toBe(200);
+    const res = await search('one more');
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ source: 'local', fallbackReason: 'busy' });
+    expect(deezerSearch).not.toHaveBeenCalled();
   });
 });

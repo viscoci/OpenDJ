@@ -44,15 +44,22 @@
  * `search_unavailable` (with `retryAfterSec` + `Retry-After`) when no
  * provider refusal applies and an external source couldn't be asked.
  *
- * Local fallback. When a cache miss can't go to the provider because the
- * budget is busy, the daily cap is spent, or the provider's search cooldown
- * is open (or the provider answers 429 at call time), the route searches the
- * local track catalog (tracks seen in earlier provider results or requested
- * by guests). One or more matches return 200 `{ results, providerId,
+ * Fall-through after a provider refusal. When a cache miss can't go to the
+ * provider because the budget is busy, the daily cap is spent, or the
+ * provider's search cooldown is open (or the provider answers 429 at call
+ * time), the route asks the sources listed after `provider`, in order. A
+ * `deezer` / `sonovault` answer is a normal `source: 'external'` 200 (full
+ * quality, no notice). A local catalog answer (tracks seen in earlier
+ * results or requested by guests) is 200 `{ results, providerId,
  * source: 'local', fallbackReason: 'busy' | 'daily_limit' |
- * 'provider_limited' }` and spend nothing. No match returns the refusal
- * above. Per-guest `search_too_fast` and early-retry refusals never get
- * local results. Every successful provider call adds its results to the
+ * 'provider_limited' }`, which the guest UI shows as limited results. The
+ * guest-or-anon unit is spent at most once per request: a refused admission
+ * spends none, and a provider 429 after admission has already spent it, so
+ * the next external source spends no second one. When nothing after the
+ * provider answers, the provider's refusal above is returned. Per-guest
+ * `search_too_fast` and early-retry refusals return at once, before any later
+ * source. With the default `provider,catalog` this is the local-catalog
+ * fallback alone. Every successful provider call adds its results to the
  * catalog (fire-and-forget). With the default order the catalog is only
  * reached this way; placed before the provider, it answers `source: 'local'`
  * without a `fallbackReason`. Catalog rows minted by an external source are

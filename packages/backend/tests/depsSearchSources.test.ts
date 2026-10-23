@@ -19,10 +19,14 @@ function fakeConfig(overrides: Partial<Config> = {}): Config {
   };
 }
 
-function build(config: Config, fetchImpl: typeof fetch = vi.fn<typeof fetch>()) {
+function build(
+  config: Config,
+  fetchImpl: typeof fetch = vi.fn<typeof fetch>(),
+  repositories = createInMemoryRepositories(),
+) {
   return createDeps({
     config,
-    repositories: createInMemoryRepositories(),
+    repositories,
     realtime: 'none',
     fetchImpl,
   });
@@ -40,6 +44,56 @@ describe('createDeps — search sources and track resolution', () => {
     const deps = build(fakeConfig({ searchSources: ['deezer', 'catalog', 'provider'] }));
     expect(deps.searchSources).toEqual(['deezer', 'catalog', 'provider']);
     expect(deps.externalSearchSources.deezer).toBeInstanceOf(DeezerSearchSource);
+  });
+
+  it("ranks Deezer hits with the catalog's request counts", async () => {
+    const item = (title: string, artist: string, rank: number, isrc: string) => ({
+      id: rank,
+      title,
+      isrc,
+      duration: 200,
+      rank,
+      artist: { name: artist },
+      album: { cover_medium: null },
+    });
+    const fetchImpl = vi.fn<typeof fetch>(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: [
+              item('Mr. Brightside', 'Part Time Killer', 500_000, 'QZAAA2000001'),
+              item('Mr. Brightside', 'ItaloBrothers', 420_000, 'DEA621500001'),
+            ],
+          }),
+        ),
+    );
+    const repositories = createInMemoryRepositories();
+    await repositories.providerConnections.upsert({
+      accountId: 'acc-1',
+      providerId: 'spotify',
+      accessToken: 'tok',
+    });
+    const deps = build(
+      fakeConfig({ searchSources: ['deezer', 'catalog'] }),
+      fetchImpl,
+      repositories,
+    );
+    deps.trackCatalog.recordRequested('acc-1', {
+      uri: 'spotify:track:italo',
+      name: 'Mr. Brightside',
+      artist: 'ItaloBrothers',
+      albumArt: null,
+      durationMs: 200_000,
+      isrc: 'DEA621500001',
+    });
+    await deps.trackCatalog.whenIdle();
+
+    const results = await deps.externalSearchSources.deezer!.search('mr brightside', 5, {
+      accountId: 'acc-1',
+      providerId: 'spotify',
+    });
+
+    expect(results !== 'unavailable' && results[0]?.artistName).toBe('ItaloBrothers');
   });
 
   it('wires Sonovault search when SEARCH_SOURCES lists it and a key is set', () => {

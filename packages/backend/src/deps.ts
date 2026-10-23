@@ -332,6 +332,7 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
     externalSearchSources.deezer = new DeezerSearchSource({
       fetchImpl,
       rateLimit: options.config.deezerRateLimit ?? DEFAULT_DEEZER_RATE_LIMIT,
+      requestedCounts: (providerId, isrcs) => trackCatalog.requestedCountsByIsrc(providerId, isrcs),
     });
   }
   const sonovaultApiKey = options.config.sonovaultApiKey;

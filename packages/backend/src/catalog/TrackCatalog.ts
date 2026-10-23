@@ -113,6 +113,27 @@ export class TrackCatalog {
     return this.deps.repository.findByIsrc({ providerId, isrc });
   }
 
+  /**
+   * How often guests requested each of `isrcs` under `providerId`, summed
+   * over every URI carrying that ISRC. Recordings never requested are
+   * absent. Reads the index only; empty if the catalog can't load.
+   */
+  async requestedCountsByIsrc(
+    providerId: string,
+    isrcs: readonly string[],
+  ): Promise<Map<string, number>> {
+    const counts = new Map<string, number>();
+    if (isrcs.length === 0 || !(await this.ensureLoaded())) return counts;
+    const wanted = new Set(isrcs);
+    for (const { record } of this.index?.get(providerId)?.values() ?? []) {
+      if (record.isrc === undefined || record.timesRequested <= 0 || !wanted.has(record.isrc)) {
+        continue;
+      }
+      counts.set(record.isrc, (counts.get(record.isrc) ?? 0) + record.timesRequested);
+    }
+    return counts;
+  }
+
   /** Resolves once the load and every write queued so far have settled. For tests and shutdown. */
   async whenIdle(): Promise<void> {
     for (;;) {
