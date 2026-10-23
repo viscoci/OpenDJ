@@ -45,4 +45,12 @@ describe('createDeps — search sources and track resolution', () => {
     const deps = build(fakeConfig({ sonovaultApiKey: 'sv-key' }));
     expect(deps.trackResolver.ids).toEqual(['catalog', 'sonovault', 'provider']);
   });
+
+  it('verifies Spotify resolutions by default', () => {
+    expect(build(fakeConfig()).trackResolver.verifiedProviders).toEqual(['spotify']);
+  });
+
+  it('wires no verifier when track verification is off', () => {
+    expect(build(fakeConfig({ trackVerify: false })).trackResolver.verifiedProviders).toEqual([]);
+  });
 });

@@ -194,6 +194,8 @@ describe('QueueService.requestTrack — track resolution', () => {
       accountId: ACCOUNT_ID,
       providerId: 'spotify',
       isrc: 'GBDUW0000053',
+      trackName: TRACK.name,
+      artistName: TRACK.artist,
     });
     expect(created.trackUri).toBe('spotify:track:native');
     expect((await queueItems.findAllForSession(SESSION_ID))[0]?.trackUri).toBe(

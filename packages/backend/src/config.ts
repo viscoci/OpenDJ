@@ -85,6 +85,11 @@ const ConfigSchema = v.object({
   deezerRateLimit: v.optional(PositiveInt),
   /** Enables Sonovault ISRC → provider link lookups at add time (`SONOVAULT_API_KEY`). */
   sonovaultApiKey: v.optional(v.pipe(v.string(), v.nonEmpty())),
+  /**
+   * Verify non-catalog add-time resolutions against the provider's own title
+   * (Spotify oEmbed). On unless `TRACK_VERIFY=off`; absent means on.
+   */
+  trackVerify: v.optional(v.boolean()),
 });
 
 export type Config = v.InferOutput<typeof ConfigSchema>;
@@ -235,6 +240,7 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
   if (sonovaultApiKey !== undefined && sonovaultApiKey !== '') {
     candidate['sonovaultApiKey'] = sonovaultApiKey;
   }
+  candidate['trackVerify'] = env['TRACK_VERIFY']?.trim().toLowerCase() !== 'off';
   const valkey = env['VALKEY_URL'];
   if (valkey !== undefined && valkey !== '') candidate['valkeyUrl'] = valkey;
 

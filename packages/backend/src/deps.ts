@@ -68,6 +68,7 @@ import { DeezerSearchSource } from './search-sources/DeezerSearchSource.js';
 import type { SearchSource } from './search-sources/SearchSource.js';
 import { SessionAuditService } from './session/SessionAuditService.js';
 import { SonovaultTrackResolver } from './track-resolution/SonovaultTrackResolver.js';
+import { SpotifyOEmbedVerifier } from './track-resolution/SpotifyOEmbedVerifier.js';
 import {
   CatalogTrackResolver,
   ProviderIsrcTrackResolver,
@@ -332,7 +333,12 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
     );
   }
   resolvers.push(new ProviderIsrcTrackResolver({ streamingRouter, searchRateLimiter }));
-  const trackResolver = new TrackResolverChain(resolvers);
+  // Non-catalog answers for Spotify are checked against Spotify's own title
+  // (oEmbed) unless TRACK_VERIFY=off.
+  const trackResolver = new TrackResolverChain(resolvers, console, {
+    verifiers:
+      options.config.trackVerify === false ? [] : [new SpotifyOEmbedVerifier({ fetchImpl })],
+  });
 
   const sessionAuditService = new SessionAuditService({
     repository: repositories.sessionAuditEvents,

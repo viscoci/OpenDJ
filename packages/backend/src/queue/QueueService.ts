@@ -1005,7 +1005,13 @@ export class QueueService {
     const isrc = isrcFromTrackUri(track.uri) ?? normalizeIsrc(track.isrc);
     const resolved =
       providerId !== undefined && isrc !== null
-        ? await resolver.resolve({ accountId, providerId, isrc })
+        ? await resolver.resolve({
+            accountId,
+            providerId,
+            isrc,
+            trackName: track.name,
+            artistName: track.artist,
+          })
         : null;
     if (!resolved || isrc === null) {
       throw new QueueServiceError(

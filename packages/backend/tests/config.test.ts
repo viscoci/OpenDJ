@@ -250,4 +250,11 @@ describe('loadConfig — search sources', () => {
     expect(config.sonovaultApiKey).toBe('sv-key');
     expect(() => loadConfig({ ...minimalEnv, DEEZER_RATE_LIMIT: '0' })).toThrow(ConfigError);
   });
+
+  it('turns track verification on unless TRACK_VERIFY=off', () => {
+    expect(loadConfig(minimalEnv).trackVerify).toBe(true);
+    expect(loadConfig({ ...minimalEnv, TRACK_VERIFY: 'on' }).trackVerify).toBe(true);
+    expect(loadConfig({ ...minimalEnv, TRACK_VERIFY: 'off' }).trackVerify).toBe(false);
+    expect(loadConfig({ ...minimalEnv, TRACK_VERIFY: ' OFF ' }).trackVerify).toBe(false);
+  });
 });
