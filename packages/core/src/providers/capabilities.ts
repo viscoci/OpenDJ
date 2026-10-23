@@ -9,6 +9,34 @@
 
 export type ProviderId = 'spotify' | 'soundtrack' | 'apple-music' | (string & {});
 
+/**
+ * Track URI scheme per provider: a URI is native to a provider when it starts
+ * with `scheme`; `trackPrefix` + a provider track id builds one. Providers
+ * without an entry accept any URI except OpenDJ's own `opendj:` URIs.
+ * Apple Music is reserved for when its provider can play tracks.
+ */
+export const PROVIDER_TRACK_URI_SCHEMES: Readonly<
+  Partial<Record<ProviderId, { scheme: string; trackPrefix: string }>>
+> = Object.freeze({
+  spotify: { scheme: 'spotify:', trackPrefix: 'spotify:track:' },
+});
+
+/** Scheme of provider-agnostic URIs OpenDJ mints itself (e.g. `opendj:isrc:<ISRC>`). */
+export const OPENDJ_TRACK_URI_SCHEME = 'opendj:';
+
+/** Whether `uri` can be handed to `providerId` as-is (see `PROVIDER_TRACK_URI_SCHEMES`). */
+export function isNativeTrackUri(providerId: ProviderId, uri: string): boolean {
+  if (uri.startsWith(OPENDJ_TRACK_URI_SCHEME)) return false;
+  const known = PROVIDER_TRACK_URI_SCHEMES[providerId];
+  return known === undefined || uri.startsWith(known.scheme);
+}
+
+/** The native URI for a provider track id, or null when the provider's scheme is unknown. */
+export function providerTrackUri(providerId: ProviderId, trackId: string): string | null {
+  const known = PROVIDER_TRACK_URI_SCHEMES[providerId];
+  return known === undefined ? null : `${known.trackPrefix}${trackId}`;
+}
+
 export const PROVIDER_FEATURES = {
   Search: 'search',
   NowPlayingRead: 'now_playing.read',

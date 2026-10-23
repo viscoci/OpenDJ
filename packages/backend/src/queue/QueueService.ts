@@ -14,6 +14,7 @@
 import {
   applyModerationDecision,
   canEnqueue,
+  isNativeTrackUri,
   supportsQueueTrack,
   supportsSkipTrack,
   type CanEnqueueResult,
@@ -36,6 +37,8 @@ import type {
 import type { TrackCatalog } from '../catalog/TrackCatalog.js';
 import { sanitizeKaraokeDisplayName } from '../karaoke/displayName.js';
 import type { StreamingRouter } from '../providers/streaming/StreamingRouter.js';
+import { isrcFromTrackUri, normalizeIsrc } from '../search-sources/isrc.js';
+import type { TrackResolverChain } from '../track-resolution/TrackResolver.js';
 import {
   guestLabelFromFingerprint,
   type SessionAuditService,
@@ -104,6 +107,14 @@ export interface QueueServiceDeps {
    * the request.
    */
   trackCatalog?: Pick<TrackCatalog, 'recordRequested'>;
+  /**
+   * Optional add-time resolution. A requested uri that isn't native to the
+   * account's provider (e.g. `opendj:isrc:<ISRC>` from an external search
+   * source) is resolved to a native uri before any check, insert, or push;
+   * when it can't be, the request fails with `track_unresolvable`. Without
+   * it, uris are used as sent.
+   */
+  trackResolver?: Pick<TrackResolverChain, 'resolve'>;
 }
 
 export interface RealtimeRoomRegistry {
@@ -176,16 +187,23 @@ export class QueueService {
 
     const existingRecords = await this.deps.queueItems.findAllForSession(input.sessionId);
     const existing = existingRecords.map(recordToDomain);
-    const decision: CanEnqueueResult = canEnqueue(
-      sessionToDomain(session),
-      guestToDomain(guest),
-      existing,
-      new Date(now),
-      input.track.uri,
-    );
-    if (!decision.ok) {
-      throw new QueueServiceError(decision.reason, `canEnqueue rejected: ${decision.reason}`);
-    }
+    const enqueueCheck = (uri: string): void => {
+      const decision: CanEnqueueResult = canEnqueue(
+        sessionToDomain(session),
+        guestToDomain(guest),
+        existing,
+        new Date(now),
+        uri,
+      );
+      if (!decision.ok) {
+        throw new QueueServiceError(decision.reason, `canEnqueue rejected: ${decision.reason}`);
+      }
+    };
+    // Checked once before resolving so a guest at their cap never spends a
+    // resolution, and again with the resolved uri for the duplicate check.
+    enqueueCheck(input.track.uri);
+    const track = await this.resolveTrack(session.accountId, input.track);
+    if (track.uri !== input.track.uri) enqueueCheck(track.uri);
 
     // Karaoke gate — ALL checks run BEFORE the item insert so a rejected
     // claim never strands a claimless item in `required` mode.
@@ -219,11 +237,11 @@ export class QueueService {
     const created = await this.deps.queueItems.create({
       sessionId: input.sessionId,
       guestId: guest.id,
-      trackUri: input.track.uri,
-      trackName: input.track.name,
-      artistName: input.track.artist,
-      albumArtUrl: input.track.albumArt,
-      durationMs: input.track.durationMs,
+      trackUri: track.uri,
+      trackName: track.name,
+      artistName: track.artist,
+      albumArtUrl: track.albumArt,
+      durationMs: track.durationMs,
       status: initialStatus,
     });
 
@@ -258,7 +276,7 @@ export class QueueService {
         type: 'queue.item_approved',
         itemId: created.id,
       });
-      const pushed = await this.pushToProviderQueue(session.accountId, input.track);
+      const pushed = await this.pushToProviderQueue(session.accountId, track);
       if (pushed.kind === 'rate_limited') {
         // The push tripped the provider's rate limit: roll the request back
         // so the guest gets a real error and keeps their slot.
@@ -272,7 +290,7 @@ export class QueueService {
     }
 
     try {
-      this.deps.trackCatalog?.recordRequested(session.accountId, input.track);
+      this.deps.trackCatalog?.recordRequested(session.accountId, track);
     } catch (err) {
       console.error('[QueueService] track catalog recordRequested failed', err);
     }
@@ -285,9 +303,9 @@ export class QueueService {
       action: 'queue.requested',
       details: {
         itemId: created.id,
-        trackUri: input.track.uri,
-        trackName: input.track.name,
-        artistName: input.track.artist,
+        trackUri: track.uri,
+        trackName: track.name,
+        artistName: track.artist,
         moderation: session.moderationEnabled ? 'pending' : 'auto_approved',
         ...(karaokeDisplayName !== null && { karaokeDisplayName }),
       },
@@ -972,6 +990,32 @@ export class QueueService {
    * inside a rate-limit cooldown (see ProviderCooldowns). No-op when the
    * streaming integration isn't wired or nothing is connected.
    */
+  /**
+   * `track` with a uri native to the account's provider. Native uris (and
+   * every uri when no resolver is wired) pass through untouched; any other
+   * is resolved by its ISRC (from an `opendj:isrc:` uri, else `track.isrc`).
+   * Throws `track_unresolvable` when that fails.
+   */
+  private async resolveTrack(accountId: string, track: Track): Promise<Track> {
+    const resolver = this.deps.trackResolver;
+    if (!resolver) return track;
+    const providerId = (await this.deps.providerConnections?.findAllForAccount(accountId))?.[0]
+      ?.providerId;
+    if (providerId !== undefined && isNativeTrackUri(providerId, track.uri)) return track;
+    const isrc = isrcFromTrackUri(track.uri) ?? normalizeIsrc(track.isrc);
+    const resolved =
+      providerId !== undefined && isrc !== null
+        ? await resolver.resolve({ accountId, providerId, isrc })
+        : null;
+    if (!resolved || isrc === null) {
+      throw new QueueServiceError(
+        'track_unresolvable',
+        "This track can't be found on the host's music provider.",
+      );
+    }
+    return { ...track, uri: resolved.uri, isrc };
+  }
+
   private async assertProviderNotRateLimited(accountId: string, nowEpochMs: number): Promise<void> {
     if (!this.deps.streamingRouter || !this.deps.providerConnections) return;
     const conn = (await this.deps.providerConnections.findAllForAccount(accountId))[0];

@@ -119,6 +119,8 @@ export function createApp(options: AppOptions): Hono<{ Variables: AuthVariables 
       searchRateLimiter: deps.searchRateLimiter,
       searchPacing: deps.searchPacing,
       trackCatalog: deps.trackCatalog,
+      searchSources: deps.searchSources,
+      externalSearchSources: deps.externalSearchSources,
     }),
   );
   v1.route(

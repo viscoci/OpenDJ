@@ -27,10 +27,13 @@ import {
   type LoginProviderRegistry,
 } from './auth/loginProviders/index.js';
 import {
+  DEFAULT_DEEZER_RATE_LIMIT,
   DEFAULT_PROVIDER_COOLDOWN_MAX_SEC,
   resolveSearchPacing,
+  resolveSearchSources,
   type Config,
   type SearchPacingConfig,
+  type SearchSourceId,
 } from './config.js';
 import {
   ConsoleEmailAdapter,
@@ -60,7 +63,17 @@ import {
 import { RoomRegistryImpl, type RealtimeRoomManager } from './realtime/RoomRegistryImpl.js';
 import { createDrizzleRepositories } from './repositories/drizzle/index.js';
 import type { Repositories } from './repositories/types.js';
+import type { ExternalSearchSourceId } from './routes/search.js';
+import { DeezerSearchSource } from './search-sources/DeezerSearchSource.js';
+import type { SearchSource } from './search-sources/SearchSource.js';
 import { SessionAuditService } from './session/SessionAuditService.js';
+import { SonovaultTrackResolver } from './track-resolution/SonovaultTrackResolver.js';
+import {
+  CatalogTrackResolver,
+  ProviderIsrcTrackResolver,
+  TrackResolverChain,
+  type TrackResolver,
+} from './track-resolution/TrackResolver.js';
 import { SessionService } from './session/SessionService.js';
 
 export interface AppDeps {
@@ -90,6 +103,15 @@ export interface AppDeps {
    * guests; search falls back to it when the provider can't be asked.
    */
   trackCatalog: TrackCatalog;
+  /** Guest search sources in the order they are asked (`SEARCH_SOURCES`). */
+  searchSources: SearchSourceId[];
+  /** External search sources listed in `searchSources` (e.g. Deezer). */
+  externalSearchSources: Partial<Record<ExternalSearchSourceId, SearchSource>>;
+  /**
+   * Add-time resolution of non-native track uris: catalog, then Sonovault
+   * (with `SONOVAULT_API_KEY`), then the provider's own ISRC search.
+   */
+  trackResolver: TrackResolverChain;
   streamingProviderOAuthConfigs: StreamingProviderOAuthRegistry;
   lyricsLookupService: LyricsLookupService;
   abuseModerationService: AbuseModerationService;
@@ -295,6 +317,23 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
   // background so boot never waits on it.
   trackCatalog.warm();
 
+  const searchSources = resolveSearchSources(options.config);
+  const externalSearchSources: Partial<Record<ExternalSearchSourceId, SearchSource>> = {};
+  if (searchSources.includes('deezer')) {
+    externalSearchSources.deezer = new DeezerSearchSource({
+      fetchImpl,
+      rateLimit: options.config.deezerRateLimit ?? DEFAULT_DEEZER_RATE_LIMIT,
+    });
+  }
+  const resolvers: TrackResolver[] = [new CatalogTrackResolver(trackCatalog)];
+  if (options.config.sonovaultApiKey !== undefined) {
+    resolvers.push(
+      new SonovaultTrackResolver({ apiKey: options.config.sonovaultApiKey, fetchImpl }),
+    );
+  }
+  resolvers.push(new ProviderIsrcTrackResolver({ streamingRouter, searchRateLimiter }));
+  const trackResolver = new TrackResolverChain(resolvers);
+
   const sessionAuditService = new SessionAuditService({
     repository: repositories.sessionAuditEvents,
   });
@@ -314,6 +353,7 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
     providerConnections: repositories.providerConnections,
     audit: sessionAuditService,
     trackCatalog,
+    trackResolver,
   });
 
   const karaokeService = new KaraokeService({
@@ -432,6 +472,9 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
     searchPacing,
     searchRateLimiter,
     trackCatalog,
+    searchSources,
+    externalSearchSources,
+    trackResolver,
     streamingProviderOAuthConfigs:
       options.streamingProviderOAuthConfigs ?? defaultStreamingProviderOAuthConfigs,
     lyricsLookupService,

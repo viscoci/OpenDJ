@@ -2,6 +2,7 @@
 '@opendj/backend': minor
 '@opendj/frontend': minor
 '@opendj/db': minor
+'@opendj/core': minor
 ---
 
 Pace guest search so it can't exhaust the Spotify quota, and keep Spotify cooldowns across restarts.
@@ -15,3 +16,4 @@ Pace guest search so it can't exhaust the Spotify quota, and keep Spotify cooldo
 - Search accepts optional guest auth (`Authorization: Bearer <slotToken>`); `QueueApi.search` takes `{ slotToken, signal }`.
 - Provider cooldowns are kept per quota group (`search` for `/v1/search`, `player` for everything else), so a search quota no longer pauses now-playing or queue pushes, and only player cooldowns are announced to the party. They persist in `provider_connections.rate_limited_until` / `search_rate_limited_until` (migrations 0008, 0009), clamped to `PROVIDER_COOLDOWN_MAX_SEC` (default 24h), and `StreamingRouter` seeds them back on load so a restart never calls the provider inside a cooldown. Each stored cooldown records the Spotify client id (`rate_limited_client_id`); one from a different or unknown client id is ignored.
 - Provider 429s log their `reason` and `Retry-After`, and per-endpoint provider call counts log every 30s.
+- Optional search sources: `SEARCH_SOURCES` (default `provider,catalog`) sets where guest search answers from, in order; `deezer` adds Deezer's public search (`source: 'external'`, `opendj:isrc:<ISRC>` uris, own `DEEZER_RATE_LIMIT` per 5s, no provider quota spent), and such uris are resolved to the host's provider when requested (catalog by ISRC, then Sonovault with `SONOVAULT_API_KEY`, then a quota-checked provider ISRC search), else 422 `track_unresolvable`. `track_catalog` gains an `isrc` column (migration 0011); `Track` gains optional `isrc`.

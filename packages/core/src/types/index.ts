@@ -26,6 +26,8 @@ export interface Track {
   /** Direct URL to the album art. `null` when the provider has no art. */
   albumArt: string | null;
   durationMs: number;
+  /** International Standard Recording Code, when the source reports one. */
+  isrc?: string;
 }
 
 /**

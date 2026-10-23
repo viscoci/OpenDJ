@@ -1375,6 +1375,12 @@ export class InMemoryTrackCatalogRepository implements TrackCatalogRepository {
     const own = [...this.rows.values()].filter((row) => row.providerId === input.providerId);
     return rankCatalogMatches(own, input.query, input.limit).map((row) => ({ ...row }));
   }
+
+  async findByIsrc(input: { providerId: string; isrc: string }): Promise<TrackCatalogRecord[]> {
+    return [...this.rows.values()]
+      .filter((row) => row.providerId === input.providerId && row.isrc === input.isrc)
+      .map((row) => ({ ...row }));
+  }
 }
 
 export function createInMemoryRepositories(clock: InMemoryClock = systemClock): Repositories {

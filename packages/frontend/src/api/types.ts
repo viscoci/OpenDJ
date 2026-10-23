@@ -143,6 +143,11 @@ export interface RequestTrackBody {
   albumArt: string | null;
   durationMs: number;
   /**
+   * Optional ISRC. Pass a search result's `isrc` so the server can resolve a
+   * `uri` that isn't native to the session's provider.
+   */
+  isrc?: string;
+  /**
    * Optional mic claim bundled with the request. Required by the server
    * when the session's `karaokeMode` is `'required'` (else the request is
    * rejected with `karaoke_claim_required`).
@@ -167,6 +172,8 @@ export interface SearchResultWire {
   artistName: string;
   albumArtUrl: string | null;
   durationMs: number | null;
+  /** The recording's ISRC, when the source reported one. */
+  isrc?: string;
 }
 
 export interface SearchResponse {
@@ -178,12 +185,16 @@ export interface SearchResponse {
    */
   slowDown?: { debounceMs: number; ttlSec: number };
   /**
-   * `'provider'` for a live (or cached) provider answer. `'local'` when the
-   * provider couldn't be asked and these are matches from tracks the
-   * deployment has already seen or queued; `fallbackReason` says why.
+   * `'provider'` for a live (or cached) provider answer. `'external'` for an
+   * answer from a provider-agnostic source such as Deezer (`SEARCH_SOURCES`):
+   * its `trackUri`s look like `opendj:isrc:<ISRC>` and are resolved to the
+   * host's provider when requested (the request may then fail with 422
+   * `track_unresolvable`). `'local'` for matches from tracks the deployment
+   * has already seen or queued; `fallbackReason` says why when the provider
+   * couldn't be asked.
    */
-  source?: 'provider' | 'local';
-  /** Why a `'local'` answer was served instead of the provider's. */
+  source?: 'provider' | 'external' | 'local';
+  /** Why a `'local'` answer was served instead of the provider's, when it was. */
   fallbackReason?: 'busy' | 'daily_limit' | 'provider_limited';
 }
 

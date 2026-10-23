@@ -1,4 +1,4 @@
-import { integer, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { index, integer, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 
 /**
  * Local track catalog: every track a provider search has returned or a guest
@@ -8,6 +8,8 @@ import { integer, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-or
  * Shared across accounts and sessions; a track is identified by
  * `(provider_id, track_uri)`. `times_seen` counts provider search results,
  * `times_requested` counts accepted queue requests; both rank local matches.
+ * `isrc` is the recording's ISRC when a source reported one; add-time
+ * resolution looks up a provider-native URI by `(provider_id, isrc)`.
  */
 export const trackCatalog = pgTable(
   'track_catalog',
@@ -22,12 +24,14 @@ export const trackCatalog = pgTable(
     timesSeen: integer('times_seen').notNull().default(0),
     timesRequested: integer('times_requested').notNull().default(0),
     lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).notNull().defaultNow(),
+    isrc: text('isrc'),
   },
   (table) => ({
     providerTrackIdx: uniqueIndex('track_catalog_provider_track').on(
       table.providerId,
       table.trackUri,
     ),
+    providerIsrcIdx: index('track_catalog_provider_isrc').on(table.providerId, table.isrc),
   }),
 );
 

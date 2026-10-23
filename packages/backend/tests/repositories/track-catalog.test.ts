@@ -101,6 +101,20 @@ describe('InMemoryTrackCatalogRepository', () => {
   });
 });
 
+describe('InMemoryTrackCatalogRepository — ISRC', () => {
+  it('keeps a known ISRC and finds rows by (provider, ISRC)', async () => {
+    const repo = new InMemoryTrackCatalogRepository();
+    await repo.upsertMany([upsert({ trackUri: 'u:1', isrc: 'USSM10304476' })]);
+    await repo.upsertMany([upsert({ trackUri: 'u:1' })]);
+
+    expect((await repo.findAll())[0]?.isrc).toBe('USSM10304476');
+    expect(await repo.findByIsrc({ providerId: 'spotify', isrc: 'USSM10304476' })).toMatchObject([
+      { trackUri: 'u:1' },
+    ]);
+    expect(await repo.findByIsrc({ providerId: 'soundtrack', isrc: 'USSM10304476' })).toEqual([]);
+  });
+});
+
 describe('DrizzleTrackCatalogRepository', () => {
   it('upserts one deduplicated batch that increments the counters', async () => {
     const { db, queries } = proxyDb(() => []);
@@ -125,6 +139,30 @@ describe('DrizzleTrackCatalogRepository', () => {
     // Two rows, not three: duplicates in one batch are folded first.
     expect(params.filter((p) => p === 'u:1')).toHaveLength(1);
     expect(params.filter((p) => p === 'u:2')).toHaveLength(1);
+  });
+
+  it('writes the ISRC and never erases a known one', async () => {
+    const { db, queries } = proxyDb(() => []);
+    await new DrizzleTrackCatalogRepository(db).upsertMany([
+      upsert({ trackUri: 'u:1', isrc: 'USSM10304476' }),
+    ]);
+
+    const { sql, params } = queries[0]!;
+    expect(sql).toMatch(/"isrc"/);
+    expect(sql).toMatch(/coalesce\(excluded\."isrc", "track_catalog"\."isrc"\)/i);
+    expect(params).toContain('USSM10304476');
+  });
+
+  it('finds rows by provider and ISRC', async () => {
+    const { db, queries } = proxyDb(() => []);
+    expect(
+      await new DrizzleTrackCatalogRepository(db).findByIsrc({
+        providerId: 'spotify',
+        isrc: 'USSM10304476',
+      }),
+    ).toEqual([]);
+    expect(queries[0]!.sql).toMatch(/"provider_id" = \$1 and "track_catalog"\."isrc" = \$2/i);
+    expect(queries[0]!.params).toEqual(['spotify', 'USSM10304476']);
   });
 
   it('skips the round trip for an empty batch', async () => {

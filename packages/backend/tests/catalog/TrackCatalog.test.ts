@@ -215,3 +215,39 @@ describe('TrackCatalog', () => {
     expect(await catalog.search('other-provider', 'halo', 10)).toEqual([]);
   });
 });
+
+describe('TrackCatalog — ISRC', () => {
+  it('keeps the ISRC of a track and finds rows by (provider, ISRC)', async () => {
+    const repositories = createInMemoryRepositories();
+    const catalog = catalogFor(repositories);
+
+    catalog.recordSeen('spotify', [{ ...TRACKS[0]!, isrc: 'USSM10304476' }, { ...TRACKS[1]! }]);
+    // A later write without an ISRC never erases a known one.
+    catalog.recordSeen('spotify', [{ ...TRACKS[0]! }]);
+    await catalog.whenIdle();
+
+    const rows = await repositories.trackCatalog.findAll();
+    expect(rows.find((r) => r.trackUri === 'spotify:track:1')?.isrc).toBe('USSM10304476');
+    expect(rows.find((r) => r.trackUri === 'spotify:track:2')?.isrc).toBeUndefined();
+    expect(await catalog.search('spotify', 'crazy', 5)).toMatchObject([
+      { trackUri: 'spotify:track:1', isrc: 'USSM10304476' },
+    ]);
+    expect(await catalog.findByIsrc('spotify', 'USSM10304476')).toMatchObject([
+      { trackUri: 'spotify:track:1' },
+    ]);
+    expect(await catalog.findByIsrc('soundtrack', 'USSM10304476')).toEqual([]);
+  });
+
+  it('stores a requested track under its ISRC', async () => {
+    const repositories = createInMemoryRepositories();
+    await connectSpotify(repositories);
+    const catalog = catalogFor(repositories);
+
+    catalog.recordRequested(ACCOUNT, { ...TRACKS[1]!, isrc: 'USSM10900001' });
+    await catalog.whenIdle();
+
+    expect(await catalog.findByIsrc('spotify', 'USSM10900001')).toMatchObject([
+      { trackUri: 'spotify:track:2', timesRequested: 1, isrc: 'USSM10900001' },
+    ]);
+  });
+});

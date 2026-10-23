@@ -751,6 +751,8 @@ export interface TrackCatalogRecord {
   timesSeen: number;
   timesRequested: number;
   lastSeenAt: Date;
+  /** The recording's ISRC, when a source reported one. Absent when unknown. */
+  isrc?: string;
 }
 
 /**
@@ -769,6 +771,8 @@ export interface TrackCatalogUpsert {
   seenIncrement: number;
   requestedIncrement: number;
   seenAt: Date;
+  /** The recording's ISRC. A write without one never erases a known one. */
+  isrc?: string;
 }
 
 export interface TrackCatalogRepository {
@@ -786,6 +790,8 @@ export interface TrackCatalogRepository {
     query: string;
     limit: number;
   }): Promise<TrackCatalogRecord[]>;
+  /** One provider's rows for a recording, any URI. */
+  findByIsrc(input: { providerId: string; isrc: string }): Promise<TrackCatalogRecord[]>;
 }
 
 export interface Repositories {

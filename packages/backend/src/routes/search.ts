@@ -27,6 +27,23 @@
  *
  * A 200 carries `source: 'provider'` for a provider answer (live or cached).
  *
+ * Search sources. `SEARCH_SOURCES` (default `provider,catalog`) lists where
+ * answers come from, in order; the first source with at least one result
+ * answers. A source that can't be asked (refusal, rate limit, error) or
+ * finds nothing passes to the next one, except that a provider answer
+ * (even an empty one) is final and a provider error (non-429) is a 502.
+ * External sources (`deezer`) answer `source: 'external'` with
+ * `opendj:isrc:<ISRC>` track URIs (resolved to the provider when a guest
+ * adds one), share the result cache below (keyed by source), spend no
+ * provider budget or daily unit, and add their results to the catalog. A
+ * cache miss to an external source spends one unit of the guest-or-anon
+ * limit, at most once per request, after the same too-fast and early-retry
+ * checks the provider uses; those refusals are returned at once. When every
+ * source comes up empty the answer is a 200 with no results. Otherwise, when
+ * nothing answered, the provider's refusal below is returned, or 503
+ * `search_unavailable` (with `retryAfterSec` + `Retry-After`) when no
+ * provider refusal applies and an external source couldn't be asked.
+ *
  * Local fallback. When a cache miss can't go to the provider because the
  * budget is busy, the daily cap is spent, or the provider's search cooldown
  * is open (or the provider answers 429 at call time), the route searches the
@@ -36,7 +53,10 @@
  * 'provider_limited' }` and spend nothing. No match returns the refusal
  * above. Per-guest `search_too_fast` and early-retry refusals never get
  * local results. Every successful provider call adds its results to the
- * catalog (fire-and-forget).
+ * catalog (fire-and-forget). With the default order the catalog is only
+ * reached this way; placed before the provider, it answers `source: 'local'`
+ * without a `fallbackReason`. Catalog rows minted by an external source are
+ * hidden when a resolved row with the same ISRC also matches.
  *
  * Clients branch on `error`, not the status. Our own refusal waits add 0-1.5s
  * of server jitter so refused clients don't retry in lockstep.
@@ -76,7 +96,13 @@ import { Hono } from 'hono';
 import * as v from 'valibot';
 import { InvalidProviderCredentialsError, supportsSearch, type Track } from '@opendj/core';
 import type { TrackCatalog } from '../catalog/TrackCatalog.js';
-import type { SearchPacingConfig } from '../config.js';
+import { DEFAULT_SEARCH_SOURCES, type SearchPacingConfig, type SearchSourceId } from '../config.js';
+import { createCatalogSearchSource } from '../search-sources/CatalogSearchSource.js';
+import type {
+  SearchSource,
+  SearchSourceContext,
+  SourceTrack,
+} from '../search-sources/SearchSource.js';
 import {
   ProviderConnectionNotFoundError,
   StreamingRouter,
@@ -95,7 +121,6 @@ import type {
   GuestSlotRepository,
   ProviderConnectionRepository,
   SessionRepository,
-  TrackCatalogRecord,
 } from '../repositories/types.js';
 import { bearerFromAuthHeader } from './bearer.js';
 
@@ -112,7 +137,14 @@ export interface SearchRouteDeps {
   trackCatalog?: Pick<TrackCatalog, 'recordSeen' | 'search'>;
   /** Server jitter added to our own refusal waits, in ms (clamped to 0-1500). Default random. */
   jitterMs?: () => number;
+  /** Sources asked in order (`SEARCH_SOURCES`). Default `['provider', 'catalog']`. */
+  searchSources?: ReadonlyArray<SearchSourceId>;
+  /** External source implementations; a listed source without one is skipped. */
+  externalSearchSources?: Partial<Record<ExternalSearchSourceId, SearchSource>>;
 }
+
+/** Sources other than the provider and the local catalog. */
+export type ExternalSearchSourceId = Exclude<SearchSourceId, 'provider' | 'catalog'>;
 
 const QuerySchema = v.object({
   q: v.pipe(v.string(), v.minLength(1), v.maxLength(200)),
@@ -125,19 +157,21 @@ const SEARCH_CACHE_TTL_MS = 60_000;
 const SEARCH_CACHE_MAX_ENTRIES = 500;
 /** Upper bound on the server jitter added to our own refusal waits. */
 const MAX_REFUSAL_JITTER_MS = 1_500;
+/** Wait suggested by `search_unavailable` (an external source's rate window). */
+const UNAVAILABLE_RETRY_MS = 5_000;
 
 interface CachedSearch {
   expiresAtEpochMs: number;
-  tracks: Promise<Track[]>;
+  tracks: Promise<SourceTrack[]>;
 }
 
-export interface SearchResultDto {
-  trackUri: string;
-  trackName: string;
-  artistName: string;
-  albumArtUrl: string | null;
-  durationMs: number | null;
-}
+/** Rejection of a cached external search whose source was unavailable. */
+const SOURCE_UNAVAILABLE = Symbol('source_unavailable');
+
+export type SearchResultDto = SourceTrack;
+
+/** Where a 200's results came from. */
+export type SearchResultSource = 'provider' | 'external' | 'local';
 
 /** Tells the client to lengthen its search debounce for a while. */
 export interface SearchSlowDownDto {
@@ -148,31 +182,41 @@ export interface SearchSlowDownDto {
 /** Why a local catalog answer was served instead of the provider's. */
 export type SearchFallbackReason = 'busy' | 'daily_limit' | 'provider_limited';
 
+type RefusalKind = 'search_too_fast' | 'search_busy';
+/** A refusal that never gets local results (per-guest limits, early retries). */
+type Refusal = { kind: RefusalKind; retryAfterSec: number };
+
 type Admission =
-  | { kind: 'search'; tracks: Promise<Track[]>; slowDown: SearchSlowDownDto | null }
-  /** A refusal that never gets local results (per-guest limits, early retries). */
-  | { kind: 'search_too_fast' | 'search_busy'; retryAfterSec: number }
+  | { kind: 'search'; tracks: Promise<SourceTrack[]>; slowDown: SearchSlowDownDto | null }
+  | Refusal
   /** The provider can't be asked right now; try the local catalog, else refuse. */
   | { kind: 'unavailable'; reason: SearchFallbackReason; retryAfterMs: number };
 
-function toDto(track: Track): SearchResultDto {
+function trackToSource(track: Track): SourceTrack {
   return {
     trackUri: track.uri,
     trackName: track.name,
     artistName: track.artist,
     albumArtUrl: track.albumArt,
     durationMs: track.durationMs,
+    ...(track.isrc !== undefined && { isrc: track.isrc }),
   };
 }
 
-function catalogToDto(record: TrackCatalogRecord): SearchResultDto {
+function sourceToTrack(track: SourceTrack): Track {
   return {
-    trackUri: record.trackUri,
-    trackName: record.trackName,
-    artistName: record.artistName,
-    albumArtUrl: record.albumArtUrl,
-    durationMs: record.durationMs,
+    uri: track.trackUri,
+    name: track.trackName,
+    artist: track.artistName,
+    albumArt: track.albumArtUrl,
+    durationMs: track.durationMs ?? 0,
+    ...(track.isrc !== undefined && { isrc: track.isrc }),
   };
+}
+
+/** Normalised query text for cache keys. */
+function normalizeQuery(query: string): string {
+  return query.trim().replace(/\s+/g, ' ').toLowerCase();
 }
 
 /** Whole seconds, at least 1. */
@@ -191,9 +235,11 @@ export function searchRoutes(deps: SearchRouteDeps): Hono {
   const pacing = deps.searchPacing;
   const jitterMs = deps.jitterMs ?? randomJitterMs;
   const retryDeadlines = new RetryDeadlines();
+  const order = deps.searchSources ?? DEFAULT_SEARCH_SOURCES;
+  const catalogSource = deps.trackCatalog ? createCatalogSearchSource(deps.trackCatalog) : null;
 
   /** The live cached or in-flight search for `key`; evicts an expired entry. */
-  function lookupCached(key: string): Promise<Track[]> | null {
+  function lookupCached(key: string): Promise<SourceTrack[]> | null {
     const hit = cache.get(key);
     if (!hit) return null;
     if (hit.expiresAtEpochMs > Date.now()) return hit.tracks;
@@ -201,27 +247,30 @@ export function searchRoutes(deps: SearchRouteDeps): Hono {
     return null;
   }
 
+  /** Add `tracks` to the catalog under `providerId`; never throws. */
+  function recordInCatalog(providerId: string, tracks: Track[]): void {
+    try {
+      deps.trackCatalog?.recordSeen(providerId, tracks);
+    } catch (err) {
+      console.error('[search] failed to record results in the track catalog', err);
+    }
+  }
+
   /**
    * Start `search` and cache its promise so identical queries share one
-   * provider call. Rejected promises are evicted so failures are never served
-   * from cache.
+   * call. Results are added to the catalog under `providerId`. Rejected
+   * promises are evicted so failures are never served from cache.
    */
   function startCachedSearch(
     key: string,
     providerId: string,
-    search: () => Promise<Track[]>,
-  ): Promise<Track[]> {
+    search: () => Promise<SourceTrack[]>,
+  ): Promise<SourceTrack[]> {
     const tracks = search();
     const entry: CachedSearch = { expiresAtEpochMs: Date.now() + SEARCH_CACHE_TTL_MS, tracks };
     cache.set(key, entry);
     tracks.then(
-      (results) => {
-        try {
-          deps.trackCatalog?.recordSeen(providerId, results);
-        } catch (err) {
-          console.error('[search] failed to record results in the track catalog', err);
-        }
-      },
+      (results) => recordInCatalog(providerId, results.map(sourceToTrack)),
       () => {
         if (cache.get(key) === entry) cache.delete(key);
       },
@@ -253,11 +302,7 @@ export function searchRoutes(deps: SearchRouteDeps): Hono {
   }
 
   /** Refuse `limitKey` and remember the deadline it was given. */
-  function refuse(
-    kind: 'search_too_fast' | 'search_busy',
-    limitKey: string,
-    retryAfterMs: number,
-  ): { kind: 'search_too_fast' | 'search_busy'; retryAfterSec: number } {
+  function refuse(kind: RefusalKind, limitKey: string, retryAfterMs: number): Refusal {
     const retryAfterSec = refusalWaitSec(retryAfterMs);
     retryDeadlines.record(limitKey, Date.now() + retryAfterSec * 1000);
     return { kind, retryAfterSec };
@@ -272,19 +317,39 @@ export function searchRoutes(deps: SearchRouteDeps): Hono {
   }
 
   /**
+   * The guest-or-anon gate for a cache miss to an external source: the same
+   * too-fast and early-retry refusals the provider admission applies, then
+   * one unit spent. Synchronous, like `admit`.
+   */
+  function gateGuest(limitKey: string): Refusal | null {
+    const guest = limiter.peekSync(SEARCH_SCOPE, limitKey);
+    if (!guest.ok) return refuse('search_too_fast', limitKey, guest.retryAfterMs);
+    const earlyByMs = retryDeadlines.remainingMs(limitKey);
+    if (earlyByMs > 0) {
+      limiter.tryApply(SEARCH_SCOPE, limitKey);
+      return refuse('search_too_fast', limitKey, earlyByMs);
+    }
+    limiter.tryApply(SEARCH_SCOPE, limitKey);
+    return null;
+  }
+
+  /**
    * Admit one cache miss. Synchronous on purpose: an await between the cache
    * re-check and the in-flight insert would let two identical misses both
    * spend budget. Cooldown is checked first (hardest block); a busy or
    * daily-cap answer never spends the guest's limit (an early retry is
    * charged instead), and a too-fast refusal never spends budget. Guest,
-   * budget, and daily units are spent together or not at all.
+   * budget, and daily units are spent together or not at all. A request
+   * that already passed the guest gate at an earlier external source
+   * (`guestGated`) skips the guest checks and spends no second unit.
    */
   function admit(input: {
     cacheKey: string;
     accountId: string;
     providerId: string;
     limitKey: string;
-    search: () => Promise<Track[]>;
+    guestGated: boolean;
+    search: () => Promise<SourceTrack[]>;
   }): Admission {
     const joined = lookupCached(input.cacheKey);
     if (joined) return { kind: 'search', tracks: joined, slowDown: peekSlowDown(input.providerId) };
@@ -298,13 +363,15 @@ export function searchRoutes(deps: SearchRouteDeps): Hono {
       return { kind: 'unavailable', reason: 'provider_limited', retryAfterMs: until - Date.now() };
     }
 
-    const guest = limiter.peekSync(SEARCH_SCOPE, input.limitKey);
-    if (!guest.ok) {
-      return refuse('search_too_fast', input.limitKey, guest.retryAfterMs);
+    if (!input.guestGated) {
+      const guest = limiter.peekSync(SEARCH_SCOPE, input.limitKey);
+      if (!guest.ok) {
+        return refuse('search_too_fast', input.limitKey, guest.retryAfterMs);
+      }
     }
     const budget = limiter.peekSync(SEARCH_BUDGET_SCOPE, input.providerId);
     const daily = limiter.peekSync(SEARCH_DAILY_SCOPE, input.providerId);
-    const earlyByMs = retryDeadlines.remainingMs(input.limitKey);
+    const earlyByMs = input.guestGated ? 0 : retryDeadlines.remainingMs(input.limitKey);
     if (earlyByMs > 0) {
       // Retrying before the deadline we handed out costs the key one unit and
       // is never admitted, even if a budget slot has freed in the meantime.
@@ -320,7 +387,7 @@ export function searchRoutes(deps: SearchRouteDeps): Hono {
       return { kind: 'unavailable', reason: 'busy', retryAfterMs: budget.retryAfterMs };
     }
 
-    limiter.tryApply(SEARCH_SCOPE, input.limitKey);
+    if (!input.guestGated) limiter.tryApply(SEARCH_SCOPE, input.limitKey);
     limiter.tryApply(SEARCH_DAILY_SCOPE, input.providerId);
     const spent = limiter.tryApply(SEARCH_BUDGET_SCOPE, input.providerId);
     return {
@@ -328,21 +395,6 @@ export function searchRoutes(deps: SearchRouteDeps): Hono {
       tracks: startCachedSearch(input.cacheKey, input.providerId, input.search),
       slowDown: slowDownFor(spent.remaining, spent.limit),
     };
-  }
-
-  /** Local catalog matches for `query`; [] without a catalog or on any failure. */
-  async function localResults(
-    providerId: string,
-    query: string,
-    limit: number,
-  ): Promise<SearchResultDto[]> {
-    if (!deps.trackCatalog) return [];
-    try {
-      return (await deps.trackCatalog.search(providerId, query, limit)).map(catalogToDto);
-    } catch (err) {
-      console.error('[search] local catalog search failed', err);
-      return [];
-    }
   }
 
   app.get('/', async (c) => {
@@ -385,103 +437,166 @@ export function searchRoutes(deps: SearchRouteDeps): Hono {
       throw err;
     }
 
-    if (!supportsSearch(provider)) {
+    const searchable = supportsSearch(provider) ? provider : null;
+    if (!searchable && order.includes('provider')) {
       return c.json({ error: 'search_not_supported', providerId }, 501);
     }
 
     const query = parsed.output.q;
     const limit = parsed.output.limit ?? 20;
-    const cacheKey = [
-      session.accountId,
-      providerId,
-      limit,
-      query.trim().replace(/\s+/g, ' ').toLowerCase(),
-    ].join('\u0000');
+    const normalizedQuery = normalizeQuery(query);
+    const ctx: SearchSourceContext = { accountId: session.accountId, providerId };
 
-    // Fast path: a live cached or in-flight result skips the slot lookup and
-    // never touches the limits.
-    let tracks = lookupCached(cacheKey);
-    let slowDown: SearchSlowDownDto | null;
-    if (tracks) {
-      slowDown = peekSlowDown(providerId);
-    } else {
-      const limitKey = await resolveLimitKey(
+    let limitKey: string | null = null;
+    const getLimitKey = async (): Promise<string> =>
+      (limitKey ??= await resolveLimitKey(
         session.id,
         bearerFromAuthHeader(c.req.header('authorization')),
+      ));
+    /** Set once this request has spent its guest-or-anon unit. */
+    let guestGated = false;
+    /** Why the provider couldn't be asked, for a later catalog answer. */
+    let fallbackReason: SearchFallbackReason | null = null;
+    /** The provider's refusal, returned if no later source answers. */
+    let providerRefusal: (() => Response) | null = null;
+    /** The first source that was asked and found nothing. */
+    let emptySource: SearchResultSource | null = null;
+    /** Set when an external source couldn't be asked. */
+    let externalUnavailable = false;
+
+    const refusalResponse = (refusal: Refusal): Response => {
+      c.header('Retry-After', String(refusal.retryAfterSec));
+      return c.json(
+        { error: refusal.kind, retryAfterSec: refusal.retryAfterSec },
+        refusal.kind === 'search_too_fast' ? 429 : 503,
       );
-      // No awaits from here until the in-flight promise is inserted.
-      const admission = admit({
-        cacheKey,
-        accountId: session.accountId,
-        providerId,
-        limitKey,
-        search: () => provider.search(query, limit),
-      });
-      if (admission.kind === 'unavailable') {
-        const results = await localResults(providerId, query, limit);
+    };
+
+    for (const sourceId of order) {
+      if (sourceId === 'provider') {
+        if (!searchable) continue;
+        const cacheKey = [session.accountId, providerId, limit, normalizedQuery].join('\u0000');
+        // Fast path: a live cached or in-flight result skips the slot lookup
+        // and never touches the limits.
+        let tracks = lookupCached(cacheKey);
+        let slowDown: SearchSlowDownDto | null;
+        if (tracks) {
+          slowDown = peekSlowDown(providerId);
+        } else {
+          const key = await getLimitKey();
+          // No awaits from here until the in-flight promise is inserted.
+          const admission = admit({
+            cacheKey,
+            accountId: session.accountId,
+            providerId,
+            limitKey: key,
+            guestGated,
+            search: async () => (await searchable.search(query, limit)).map(trackToSource),
+          });
+          if (admission.kind === 'unavailable') {
+            fallbackReason = admission.reason;
+            providerRefusal = () => {
+              switch (admission.reason) {
+                case 'provider_limited': {
+                  const retryAfterSec = waitSec(admission.retryAfterMs);
+                  c.header('Retry-After', String(retryAfterSec));
+                  return c.json({ error: 'provider_rate_limited', providerId, retryAfterSec }, 503);
+                }
+                case 'daily_limit': {
+                  // No retry deadline: an early retry would lose its local fallback for hours.
+                  const retryAfterSec = waitSec(admission.retryAfterMs);
+                  c.header('Retry-After', String(retryAfterSec));
+                  return c.json({ error: 'search_daily_limit', retryAfterSec }, 503);
+                }
+                case 'busy':
+                  return refusalResponse(refuse('search_busy', key, admission.retryAfterMs));
+              }
+            };
+            continue;
+          }
+          if (admission.kind !== 'search') return refusalResponse(admission);
+          tracks = admission.tracks;
+          slowDown = admission.slowDown;
+          guestGated = true;
+        }
+
+        try {
+          const results = await tracks;
+          return c.json({ results, providerId, source: 'provider', ...(slowDown && { slowDown }) });
+        } catch (err) {
+          const rateLimit = err as { status?: number; retryAfterSec?: number | null };
+          if (rateLimit?.status !== 429) {
+            return c.json(
+              { error: 'provider_error', providerId, message: (err as Error).message },
+              502,
+            );
+          }
+          fallbackReason = 'provider_limited';
+          providerRefusal = () => {
+            const retryAfterSec =
+              typeof rateLimit.retryAfterSec === 'number' && rateLimit.retryAfterSec > 0
+                ? rateLimit.retryAfterSec
+                : null;
+            if (retryAfterSec !== null) c.header('Retry-After', String(retryAfterSec));
+            return c.json({ error: 'provider_rate_limited', providerId, retryAfterSec }, 503);
+          };
+          continue;
+        }
+      }
+
+      if (sourceId === 'catalog') {
+        if (!catalogSource) continue;
+        const results = await catalogSource.search(query, limit, ctx);
+        if (results === 'unavailable') continue;
         if (results.length > 0) {
           return c.json({
             results,
             providerId,
             source: 'local',
-            fallbackReason: admission.reason,
+            ...(fallbackReason !== null && { fallbackReason }),
           });
         }
-        switch (admission.reason) {
-          case 'provider_limited': {
-            const retryAfterSec = waitSec(admission.retryAfterMs);
-            c.header('Retry-After', String(retryAfterSec));
-            return c.json({ error: 'provider_rate_limited', providerId, retryAfterSec }, 503);
-          }
-          case 'daily_limit': {
-            // No retry deadline: an early retry would lose its local fallback for hours.
-            const retryAfterSec = waitSec(admission.retryAfterMs);
-            c.header('Retry-After', String(retryAfterSec));
-            return c.json({ error: 'search_daily_limit', retryAfterSec }, 503);
-          }
-          case 'busy': {
-            const refusal = refuse('search_busy', limitKey, admission.retryAfterMs);
-            c.header('Retry-After', String(refusal.retryAfterSec));
-            return c.json({ error: 'search_busy', retryAfterSec: refusal.retryAfterSec }, 503);
-          }
+        emptySource ??= 'local';
+        continue;
+      }
+
+      const source = deps.externalSearchSources?.[sourceId];
+      if (!source) continue;
+      const cacheKey = [`source:${sourceId}`, limit, normalizedQuery].join('\u0000');
+      let tracks = lookupCached(cacheKey);
+      if (!tracks && !guestGated) {
+        const key = await getLimitKey();
+        // No awaits from here until the in-flight promise is inserted.
+        tracks = lookupCached(cacheKey);
+        if (!tracks) {
+          const refusal = gateGuest(key);
+          if (refusal) return refusalResponse(refusal);
+          guestGated = true;
         }
       }
-      if (admission.kind !== 'search') {
-        const { retryAfterSec } = admission;
-        c.header('Retry-After', String(retryAfterSec));
-        return c.json(
-          { error: admission.kind, retryAfterSec },
-          admission.kind === 'search_too_fast' ? 429 : 503,
-        );
+      tracks ??= startCachedSearch(cacheKey, providerId, async () => {
+        const results = await source.search(query, limit, ctx);
+        if (results === 'unavailable') throw SOURCE_UNAVAILABLE;
+        return results;
+      });
+      let results: SourceTrack[];
+      try {
+        results = await tracks;
+      } catch {
+        externalUnavailable = true;
+        continue;
       }
-      tracks = admission.tracks;
-      slowDown = admission.slowDown;
+      if (results.length > 0) return c.json({ results, providerId, source: 'external' });
+      emptySource ??= 'external';
     }
 
-    try {
-      const results = (await tracks).map(toDto);
-      return c.json({ results, providerId, source: 'provider', ...(slowDown && { slowDown }) });
-    } catch (err) {
-      const rateLimit = err as { status?: number; retryAfterSec?: number | null };
-      if (rateLimit?.status === 429) {
-        const local = await localResults(providerId, query, limit);
-        if (local.length > 0) {
-          return c.json({
-            results: local,
-            providerId,
-            source: 'local',
-            fallbackReason: 'provider_limited',
-          });
-        }
-        const retryAfterSec =
-          typeof rateLimit.retryAfterSec === 'number' && rateLimit.retryAfterSec > 0
-            ? rateLimit.retryAfterSec
-            : null;
-        if (retryAfterSec !== null) c.header('Retry-After', String(retryAfterSec));
-        return c.json({ error: 'provider_rate_limited', providerId, retryAfterSec }, 503);
-      }
-      return c.json({ error: 'provider_error', providerId, message: (err as Error).message }, 502);
+    if (providerRefusal) return providerRefusal();
+    if (emptySource && !externalUnavailable) {
+      return c.json({ results: [], providerId, source: emptySource });
     }
+    const retryAfterSec = refusalWaitSec(UNAVAILABLE_RETRY_MS);
+    c.header('Retry-After', String(retryAfterSec));
+    return c.json({ error: 'search_unavailable', retryAfterSec }, 503);
   });
 
   return app;

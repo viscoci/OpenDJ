@@ -18,6 +18,16 @@ const LoginProviderCredsSchema = v.object({
 
 const PositiveInt = v.pipe(v.number(), v.integer(), v.minValue(1));
 
+/** Where guest search can get answers (see `SEARCH_SOURCES`). */
+export const SEARCH_SOURCE_IDS = ['provider', 'deezer', 'catalog'] as const;
+export type SearchSourceId = (typeof SEARCH_SOURCE_IDS)[number];
+
+const SearchSourcesSchema = v.pipe(
+  v.array(v.picklist(SEARCH_SOURCE_IDS, 'must be one of provider, deezer, catalog')),
+  v.minLength(1, 'must name at least one source'),
+  v.check((ids) => new Set(ids).size === ids.length, 'must not repeat a source'),
+);
+
 const ConfigSchema = v.object({
   databaseUrl: v.pipe(v.string(), v.url(), v.nonEmpty()),
   baseUrl: v.pipe(v.string(), v.url()),
@@ -66,6 +76,15 @@ const ConfigSchema = v.object({
    * Optional for hand-built configs; defaults to `DEFAULT_PROVIDER_COOLDOWN_MAX_SEC`.
    */
   providerCooldownMaxSec: v.optional(PositiveInt),
+  /**
+   * Guest search sources, in the order they are asked (`SEARCH_SOURCES`).
+   * Optional for hand-built configs; read through `resolveSearchSources`.
+   */
+  searchSources: v.optional(SearchSourcesSchema),
+  /** Deezer searches allowed per 5s across the deployment (`DEEZER_RATE_LIMIT`). */
+  deezerRateLimit: v.optional(PositiveInt),
+  /** Enables Sonovault ISRC → provider link lookups at add time (`SONOVAULT_API_KEY`). */
+  sonovaultApiKey: v.optional(v.pipe(v.string(), v.nonEmpty())),
 });
 
 export type Config = v.InferOutput<typeof ConfigSchema>;
@@ -100,6 +119,22 @@ export const DEFAULT_SEARCH_PACING: Readonly<SearchPacingConfig> = Object.freeze
   searchSlowDownTtlSec: 30,
   searchDailyLimit: 400,
 });
+
+/** Default search source order: the provider, then the local catalog as its fallback. */
+export const DEFAULT_SEARCH_SOURCES: ReadonlyArray<SearchSourceId> = Object.freeze([
+  'provider',
+  'catalog',
+]);
+
+/** Default Deezer searches per 5s, under Deezer's documented 50 per 5s. */
+export const DEFAULT_DEEZER_RATE_LIMIT = 45;
+
+/** Search source order from `config`, defaulting to `DEFAULT_SEARCH_SOURCES`. */
+export function resolveSearchSources(config: {
+  searchSources?: ReadonlyArray<SearchSourceId> | undefined;
+}): SearchSourceId[] {
+  return [...(config.searchSources ?? DEFAULT_SEARCH_SOURCES)];
+}
 
 /** Default cap on a persisted provider cooldown: 24h. */
 export const DEFAULT_PROVIDER_COOLDOWN_MAX_SEC = 86_400;
@@ -190,6 +225,16 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
       DEFAULT_PROVIDER_COOLDOWN_MAX_SEC,
     ),
   };
+  const searchSources = env['SEARCH_SOURCES'];
+  candidate['searchSources'] =
+    searchSources === undefined || searchSources.trim() === ''
+      ? [...DEFAULT_SEARCH_SOURCES]
+      : searchSources.split(',').map((id) => id.trim().toLowerCase());
+  candidate['deezerRateLimit'] = parseInteger(env['DEEZER_RATE_LIMIT'], DEFAULT_DEEZER_RATE_LIMIT);
+  const sonovaultApiKey = env['SONOVAULT_API_KEY'];
+  if (sonovaultApiKey !== undefined && sonovaultApiKey !== '') {
+    candidate['sonovaultApiKey'] = sonovaultApiKey;
+  }
   const valkey = env['VALKEY_URL'];
   if (valkey !== undefined && valkey !== '') candidate['valkeyUrl'] = valkey;
 

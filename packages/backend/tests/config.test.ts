@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   ConfigError,
+  DEFAULT_DEEZER_RATE_LIMIT,
   DEFAULT_PROVIDER_COOLDOWN_MAX_SEC,
   DEFAULT_SEARCH_PACING,
   loadConfig,
   resolveSearchPacing,
+  resolveSearchSources,
 } from '../src/config.js';
 
 const minimalEnv = {
@@ -203,5 +205,49 @@ describe('loadConfig', () => {
   it('attaches VALKEY_URL when provided', () => {
     const config = loadConfig({ ...minimalEnv, VALKEY_URL: 'redis://localhost:6379' });
     expect(config.valkeyUrl).toBe('redis://localhost:6379');
+  });
+});
+
+describe('loadConfig — search sources', () => {
+  it('defaults SEARCH_SOURCES to provider,catalog and leaves the extras off', () => {
+    const config = loadConfig(minimalEnv);
+    expect(config.searchSources).toEqual(['provider', 'catalog']);
+    expect(resolveSearchSources(config)).toEqual(['provider', 'catalog']);
+    expect(config.deezerRateLimit).toBe(DEFAULT_DEEZER_RATE_LIMIT);
+    expect(config.sonovaultApiKey).toBeUndefined();
+  });
+
+  it('parses a comma list in order, trimming and lowercasing', () => {
+    const config = loadConfig({ ...minimalEnv, SEARCH_SOURCES: ' Deezer, catalog ,PROVIDER ' });
+    expect(config.searchSources).toEqual(['deezer', 'catalog', 'provider']);
+  });
+
+  it('treats an empty SEARCH_SOURCES as the default', () => {
+    expect(loadConfig({ ...minimalEnv, SEARCH_SOURCES: '' }).searchSources).toEqual([
+      'provider',
+      'catalog',
+    ]);
+  });
+
+  it.each([['provider,bogus'], ['deezer,deezer'], [' , ']])(
+    'rejects SEARCH_SOURCES=%j',
+    (value) => {
+      expect(() => loadConfig({ ...minimalEnv, SEARCH_SOURCES: value })).toThrow(ConfigError);
+    },
+  );
+
+  it('resolveSearchSources defaults a hand-built config without the field', () => {
+    expect(resolveSearchSources({})).toEqual(['provider', 'catalog']);
+  });
+
+  it('parses DEEZER_RATE_LIMIT and SONOVAULT_API_KEY', () => {
+    const config = loadConfig({
+      ...minimalEnv,
+      DEEZER_RATE_LIMIT: '20',
+      SONOVAULT_API_KEY: 'sv-key',
+    });
+    expect(config.deezerRateLimit).toBe(20);
+    expect(config.sonovaultApiKey).toBe('sv-key');
+    expect(() => loadConfig({ ...minimalEnv, DEEZER_RATE_LIMIT: '0' })).toThrow(ConfigError);
   });
 });

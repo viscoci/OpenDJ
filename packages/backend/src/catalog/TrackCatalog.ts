@@ -31,6 +31,7 @@ import {
   indexCatalogRecord,
   matchIndexedEntries,
   mergeCatalogUpserts,
+  withIsrc,
   type IndexedCatalogEntry,
 } from './catalogSearch.js';
 
@@ -95,6 +96,21 @@ export class TrackCatalog {
     const entries = this.index?.get(providerId);
     if (!entries) return [];
     return matchIndexedEntries(entries.values(), query, limit);
+  }
+
+  /**
+   * `providerId`'s rows for the recording `isrc` (any URI), for add-time
+   * resolution. Reads the index when it loads, else the repository.
+   */
+  async findByIsrc(providerId: string, isrc: string): Promise<TrackCatalogRecord[]> {
+    if (await this.ensureLoaded()) {
+      const matches: TrackCatalogRecord[] = [];
+      for (const entry of this.index?.get(providerId)?.values() ?? []) {
+        if (entry.record.isrc === isrc) matches.push(entry.record);
+      }
+      return matches;
+    }
+    return this.deps.repository.findByIsrc({ providerId, isrc });
   }
 
   /** Resolves once the load and every write queued so far have settled. For tests and shutdown. */
@@ -232,5 +248,6 @@ function toUpsert(
     seenIncrement: increments.seen,
     requestedIncrement: increments.requested,
     seenAt,
+    ...withIsrc(track.isrc),
   };
 }

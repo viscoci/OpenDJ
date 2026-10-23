@@ -79,8 +79,8 @@ export function rankCatalogMatches(
 /**
  * Fold duplicate `(providerId, trackUri)` writes in one batch into one (a
  * single SQL upsert can't touch the same row twice). Increments add up; the
- * later write's metadata wins, except a missing album art or duration never
- * replaces a known one; `seenAt` is the later of the two. First-seen order is kept.
+ * later write's metadata wins, except a missing album art, duration, or ISRC
+ * never replaces a known one; `seenAt` is the later of the two. First-seen order is kept.
  */
 export function mergeCatalogUpserts(
   entries: ReadonlyArray<TrackCatalogUpsert>,
@@ -97,6 +97,7 @@ export function mergeCatalogUpserts(
       ...entry,
       albumArtUrl: entry.albumArtUrl ?? prev.albumArtUrl,
       durationMs: entry.durationMs ?? prev.durationMs,
+      ...withIsrc(entry.isrc ?? prev.isrc),
       seenIncrement: prev.seenIncrement + entry.seenIncrement,
       requestedIncrement: prev.requestedIncrement + entry.requestedIncrement,
       seenAt: laterOf(prev.seenAt, entry.seenAt),
@@ -120,7 +121,13 @@ export function applyCatalogUpsert(
     timesSeen: (existing?.timesSeen ?? 0) + upsert.seenIncrement,
     timesRequested: (existing?.timesRequested ?? 0) + upsert.requestedIncrement,
     lastSeenAt: existing ? laterOf(existing.lastSeenAt, upsert.seenAt) : upsert.seenAt,
+    ...withIsrc(upsert.isrc ?? existing?.isrc),
   };
+}
+
+/** `{ isrc }` when known, else nothing (records omit an unknown ISRC). */
+export function withIsrc(isrc: string | null | undefined): { isrc?: string } {
+  return isrc ? { isrc } : {};
 }
 
 export function catalogKey(providerId: string, trackUri: string): string {

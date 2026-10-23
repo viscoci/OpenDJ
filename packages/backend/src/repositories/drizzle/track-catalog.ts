@@ -1,10 +1,10 @@
 import type { Database } from '@opendj/db';
 import { schema } from '@opendj/db';
-import { eq, sql } from 'drizzle-orm';
-import { mergeCatalogUpserts, rankCatalogMatches } from '../../catalog/catalogSearch.js';
+import { and, eq, sql } from 'drizzle-orm';
+import { mergeCatalogUpserts, rankCatalogMatches, withIsrc } from '../../catalog/catalogSearch.js';
 import type { TrackCatalogRecord, TrackCatalogRepository, TrackCatalogUpsert } from '../types.js';
 
-/** Rows per INSERT, well under Postgres' 65535 bind-parameter limit (9 per row). */
+/** Rows per INSERT, well under Postgres' 65535 bind-parameter limit (10 per row). */
 const UPSERT_CHUNK_ROWS = 1_000;
 
 function mapRow(row: typeof schema.trackCatalog.$inferSelect): TrackCatalogRecord {
@@ -18,6 +18,7 @@ function mapRow(row: typeof schema.trackCatalog.$inferSelect): TrackCatalogRecor
     timesSeen: row.timesSeen,
     timesRequested: row.timesRequested,
     lastSeenAt: row.lastSeenAt,
+    ...withIsrc(row.isrc),
   };
 }
 
@@ -41,6 +42,7 @@ export class DrizzleTrackCatalogRepository implements TrackCatalogRepository {
             timesSeen: e.seenIncrement,
             timesRequested: e.requestedIncrement,
             lastSeenAt: e.seenAt,
+            isrc: e.isrc ?? null,
           })),
         )
         .onConflictDoUpdate({
@@ -53,6 +55,7 @@ export class DrizzleTrackCatalogRepository implements TrackCatalogRepository {
             timesSeen: sql`"track_catalog"."times_seen" + excluded."times_seen"`,
             timesRequested: sql`"track_catalog"."times_requested" + excluded."times_requested"`,
             lastSeenAt: sql`greatest("track_catalog"."last_seen_at", excluded."last_seen_at")`,
+            isrc: sql`coalesce(excluded."isrc", "track_catalog"."isrc")`,
           },
         });
     }
@@ -78,5 +81,18 @@ export class DrizzleTrackCatalogRepository implements TrackCatalogRepository {
       .from(schema.trackCatalog)
       .where(eq(schema.trackCatalog.providerId, input.providerId));
     return rankCatalogMatches(rows.map(mapRow), input.query, input.limit);
+  }
+
+  async findByIsrc(input: { providerId: string; isrc: string }): Promise<TrackCatalogRecord[]> {
+    const rows = await this.db
+      .select()
+      .from(schema.trackCatalog)
+      .where(
+        and(
+          eq(schema.trackCatalog.providerId, input.providerId),
+          eq(schema.trackCatalog.isrc, input.isrc),
+        ),
+      );
+    return rows.map(mapRow);
   }
 }
