@@ -119,7 +119,12 @@
 
 import { Hono } from 'hono';
 import * as v from 'valibot';
-import { InvalidProviderCredentialsError, supportsSearch, type Track } from '@opendj/core';
+import {
+  InvalidProviderCredentialsError,
+  isNativeTrackUri,
+  supportsSearch,
+  type Track,
+} from '@opendj/core';
 import type { TrackCatalog } from '../catalog/TrackCatalog.js';
 import { DEFAULT_SEARCH_SOURCES, type SearchPacingConfig, type SearchSourceId } from '../config.js';
 import { createCatalogSearchSource } from '../search-sources/CatalogSearchSource.js';
@@ -147,6 +152,7 @@ import type {
   ProviderConnectionRepository,
   SessionRepository,
 } from '../repositories/types.js';
+import { isrcFromTrackUri } from '../search-sources/isrc.js';
 import { bearerFromAuthHeader } from './bearer.js';
 
 export interface SearchRouteDeps {
@@ -159,7 +165,8 @@ export interface SearchRouteDeps {
   searchRateLimiter: SlidingWindowRateLimiter;
   searchPacing: SearchPacingConfig;
   /** Local catalog for fallback answers. Without one, refusals are never softened. */
-  trackCatalog?: Pick<TrackCatalog, 'recordSeen' | 'search'>;
+  trackCatalog?: Pick<TrackCatalog, 'recordSeen' | 'search'> &
+    Partial<Pick<TrackCatalog, 'findByIsrc'>>;
   /** Server jitter added to our own refusal waits, in ms (clamped to 0-1500). Default random. */
   jitterMs?: () => number;
   /** Sources asked in order (`SEARCH_SOURCES`). Default `['provider', 'catalog']`. */
@@ -272,6 +279,34 @@ export function searchRoutes(deps: SearchRouteDeps): Hono {
     if (hit.expiresAtEpochMs > Date.now()) return hit.tracks;
     cache.delete(key);
     return null;
+  }
+
+  /**
+   * External results with the provider's native URI swapped in wherever the
+   * catalog already knows the recording (an earlier add resolved its ISRC),
+   * so guests' clients match them against queued items. Unknown ISRCs keep
+   * their `opendj:isrc:` URI; lookups never fail the response.
+   */
+  async function withKnownNativeUris(
+    providerId: string,
+    results: SourceTrack[],
+  ): Promise<SourceTrack[]> {
+    const findByIsrc = deps.trackCatalog?.findByIsrc?.bind(deps.trackCatalog);
+    if (!findByIsrc) return results;
+    return Promise.all(
+      results.map(async (track) => {
+        const isrc = isrcFromTrackUri(track.trackUri);
+        if (isrc === null) return track;
+        try {
+          const native = (await findByIsrc(providerId, isrc)).find((record) =>
+            isNativeTrackUri(providerId, record.trackUri),
+          );
+          return native ? { ...track, trackUri: native.trackUri } : track;
+        } catch {
+          return track;
+        }
+      }),
+    );
   }
 
   /** Add `tracks` to the catalog under `providerId`; never throws. */
@@ -683,7 +718,11 @@ export function searchRoutes(deps: SearchRouteDeps): Hono {
           const escalated = await escalateToProvider(sourceId);
           if (escalated) return escalated;
         }
-        return c.json({ results, providerId, source: 'external' });
+        return c.json({
+          results: await withKnownNativeUris(providerId, results),
+          providerId,
+          source: 'external',
+        });
       }
       emptySource ??= 'external';
     }

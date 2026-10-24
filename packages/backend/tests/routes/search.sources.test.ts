@@ -291,6 +291,41 @@ describe('GET /sessions/:id/search — search sources', () => {
     ]);
   });
 
+  it('swaps in the native URI the catalog knows for an external result', async () => {
+    const { search, catalog } = buildHarness({ order: ['deezer', 'catalog'] });
+    catalog.recordSeen('mock-streamer', [
+      {
+        uri: 'mock:track:resolved',
+        name: 'One More Time',
+        artist: 'Daft Punk',
+        albumArt: null,
+        durationMs: 320_000,
+        isrc: 'GBDUW0000053',
+      },
+    ]);
+    await catalog.whenIdle();
+
+    const body = (await (await search('one more')).json()) as {
+      results: SourceTrack[];
+      source: string;
+    };
+
+    expect(body.source).toBe('external');
+    expect(body.results[0]).toMatchObject({
+      trackUri: 'mock:track:resolved',
+      trackName: 'One More Time',
+      albumArtUrl: 'https://cdn.deezer/cover.jpg',
+    });
+  });
+
+  it('keeps the ISRC URI when the catalog has no native URI for it', async () => {
+    const { search } = buildHarness({ order: ['deezer', 'catalog'] });
+
+    const body = (await (await search('one more')).json()) as { results: SourceTrack[] };
+
+    expect(body.results[0]?.trackUri).toBe('opendj:isrc:GBDUW0000053');
+  });
+
   it('moves on to the next source when the external one is unavailable, charging the guest once', async () => {
     const { search, addGuest, limiter, providerSearch } = buildHarness({
       order: ['deezer', 'provider'],
