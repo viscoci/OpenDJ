@@ -116,6 +116,26 @@ describe('SpotifyProvider.search', () => {
     });
   });
 
+  it("carries a track's ISRC from external_ids", async () => {
+    const { provider } = await connected(() =>
+      jsonResponse({
+        tracks: {
+          items: [
+            {
+              uri: 'spotify:track:abc',
+              name: 'Hello',
+              artists: [{ name: 'A' }],
+              album: { images: [] },
+              duration_ms: 1,
+              external_ids: { isrc: 'gbduw0000053' },
+            },
+          ],
+        },
+      }),
+    );
+    expect((await provider.search('isrc:GBDUW0000053'))[0]?.isrc).toBe('GBDUW0000053');
+  });
+
   it('returns empty array when Spotify omits tracks block', async () => {
     const { provider } = await connected(() => jsonResponse({}));
     expect(await provider.search('x')).toEqual([]);

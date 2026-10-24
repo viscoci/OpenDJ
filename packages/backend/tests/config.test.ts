@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { ConfigError, loadConfig } from '../src/config.js';
+import {
+  ConfigError,
+  DEFAULT_DEEZER_CONFIDENT_RANK,
+  DEFAULT_DEEZER_RATE_LIMIT,
+  DEFAULT_PROVIDER_COOLDOWN_MAX_SEC,
+  DEFAULT_SEARCH_PACING,
+  loadConfig,
+  resolveSearchPacing,
+  resolveSearchSources,
+} from '../src/config.js';
 
 const minimalEnv = {
   DATABASE_URL: 'postgres://postgres:postgres@localhost:5432/opendj',
@@ -92,8 +101,178 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ DATABASE_URL: 'not-a-url' })).toThrow(ConfigError);
   });
 
+  it('defaults the search pacing fields when their env vars are absent', () => {
+    const config = loadConfig(minimalEnv);
+    expect(DEFAULT_SEARCH_PACING).toEqual({
+      searchBudgetLimit: 3,
+      searchBudgetWindowMs: 30_000,
+      searchGuestLimit: 5,
+      searchAnonLimit: 5,
+      searchWindowMs: 30_000,
+      searchSlowDownThresholdPct: 30,
+      searchSlowDownDebounceMs: 1_200,
+      searchSlowDownTtlSec: 30,
+      searchDailyLimit: 400,
+    });
+    expect(resolveSearchPacing(config)).toEqual(DEFAULT_SEARCH_PACING);
+    expect(config).toMatchObject(DEFAULT_SEARCH_PACING);
+  });
+
+  it('parses the search pacing env vars', () => {
+    const config = loadConfig({
+      ...minimalEnv,
+      SEARCH_BUDGET_LIMIT: '8',
+      SEARCH_BUDGET_WINDOW_MS: '60000',
+      SEARCH_GUEST_LIMIT: '6',
+      SEARCH_ANON_LIMIT: '4',
+      SEARCH_WINDOW_MS: '20000',
+      SEARCH_SLOWDOWN_THRESHOLD_PCT: '50',
+      SEARCH_SLOWDOWN_DEBOUNCE_MS: '900',
+      SEARCH_SLOWDOWN_TTL_SEC: '45',
+      SEARCH_DAILY_LIMIT: '250',
+    });
+    expect(resolveSearchPacing(config)).toEqual({
+      searchBudgetLimit: 8,
+      searchBudgetWindowMs: 60_000,
+      searchGuestLimit: 6,
+      searchAnonLimit: 4,
+      searchWindowMs: 20_000,
+      searchSlowDownThresholdPct: 50,
+      searchSlowDownDebounceMs: 900,
+      searchSlowDownTtlSec: 45,
+      searchDailyLimit: 250,
+    });
+  });
+
+  it('falls back to defaults when a search pacing env var is unparseable', () => {
+    expect(loadConfig({ ...minimalEnv, SEARCH_BUDGET_LIMIT: 'lots' }).searchBudgetLimit).toBe(3);
+  });
+
+  it.each([
+    'SEARCH_BUDGET_LIMIT',
+    'SEARCH_BUDGET_WINDOW_MS',
+    'SEARCH_GUEST_LIMIT',
+    'SEARCH_ANON_LIMIT',
+    'SEARCH_WINDOW_MS',
+    'SEARCH_SLOWDOWN_DEBOUNCE_MS',
+    'SEARCH_SLOWDOWN_TTL_SEC',
+    'SEARCH_DAILY_LIMIT',
+  ])('rejects a non-positive %s', (name) => {
+    expect(() => loadConfig({ ...minimalEnv, [name]: '0' })).toThrow(ConfigError);
+    expect(() => loadConfig({ ...minimalEnv, [name]: '-3' })).toThrow(ConfigError);
+  });
+
+  it('accepts a slow-down threshold of 0..100 and rejects values outside it', () => {
+    expect(
+      loadConfig({ ...minimalEnv, SEARCH_SLOWDOWN_THRESHOLD_PCT: '0' }).searchSlowDownThresholdPct,
+    ).toBe(0);
+    expect(
+      loadConfig({ ...minimalEnv, SEARCH_SLOWDOWN_THRESHOLD_PCT: '100' })
+        .searchSlowDownThresholdPct,
+    ).toBe(100);
+    expect(() => loadConfig({ ...minimalEnv, SEARCH_SLOWDOWN_THRESHOLD_PCT: '101' })).toThrow(
+      ConfigError,
+    );
+    expect(() => loadConfig({ ...minimalEnv, SEARCH_SLOWDOWN_THRESHOLD_PCT: '-1' })).toThrow(
+      ConfigError,
+    );
+  });
+
+  it('resolveSearchPacing fills defaults for a hand-built config missing the fields', () => {
+    const { searchBudgetLimit: _a, searchAnonLimit: _b, ...partial } = loadConfig(minimalEnv);
+    expect(resolveSearchPacing({ ...partial, searchAnonLimit: 9 })).toEqual({
+      ...DEFAULT_SEARCH_PACING,
+      searchAnonLimit: 9,
+    });
+  });
+
+  it('defaults the persisted provider cooldown cap to 24h', () => {
+    expect(DEFAULT_PROVIDER_COOLDOWN_MAX_SEC).toBe(86_400);
+    expect(loadConfig(minimalEnv).providerCooldownMaxSec).toBe(86_400);
+  });
+
+  it('parses PROVIDER_COOLDOWN_MAX_SEC and rejects non-positive values', () => {
+    expect(
+      loadConfig({ ...minimalEnv, PROVIDER_COOLDOWN_MAX_SEC: '3600' }).providerCooldownMaxSec,
+    ).toBe(3600);
+    expect(
+      loadConfig({ ...minimalEnv, PROVIDER_COOLDOWN_MAX_SEC: 'soon' }).providerCooldownMaxSec,
+    ).toBe(86_400);
+    expect(() => loadConfig({ ...minimalEnv, PROVIDER_COOLDOWN_MAX_SEC: '0' })).toThrow(
+      ConfigError,
+    );
+  });
+
   it('attaches VALKEY_URL when provided', () => {
     const config = loadConfig({ ...minimalEnv, VALKEY_URL: 'redis://localhost:6379' });
     expect(config.valkeyUrl).toBe('redis://localhost:6379');
+  });
+});
+
+describe('loadConfig — search sources', () => {
+  it('defaults SEARCH_SOURCES to provider,catalog and leaves the extras off', () => {
+    const config = loadConfig(minimalEnv);
+    expect(config.searchSources).toEqual(['provider', 'catalog']);
+    expect(resolveSearchSources(config)).toEqual(['provider', 'catalog']);
+    expect(config.deezerRateLimit).toBe(DEFAULT_DEEZER_RATE_LIMIT);
+    expect(config.deezerConfidentRank).toBe(DEFAULT_DEEZER_CONFIDENT_RANK);
+    expect(DEFAULT_DEEZER_CONFIDENT_RANK).toBe(500_000);
+    expect(config.sonovaultApiKey).toBeUndefined();
+  });
+
+  it('parses a comma list in order, trimming and lowercasing', () => {
+    const config = loadConfig({ ...minimalEnv, SEARCH_SOURCES: ' Deezer, catalog ,PROVIDER ' });
+    expect(config.searchSources).toEqual(['deezer', 'catalog', 'provider']);
+  });
+
+  it('accepts sonovault in SEARCH_SOURCES (with or without a key; deps decides)', () => {
+    expect(
+      loadConfig({ ...minimalEnv, SEARCH_SOURCES: 'deezer,catalog,sonovault,provider' })
+        .searchSources,
+    ).toEqual(['deezer', 'catalog', 'sonovault', 'provider']);
+  });
+
+  it('treats an empty SEARCH_SOURCES as the default', () => {
+    expect(loadConfig({ ...minimalEnv, SEARCH_SOURCES: '' }).searchSources).toEqual([
+      'provider',
+      'catalog',
+    ]);
+  });
+
+  it.each([['provider,bogus'], ['deezer,deezer'], ['sonovault,sonovault'], [' , ']])(
+    'rejects SEARCH_SOURCES=%j',
+    (value) => {
+      expect(() => loadConfig({ ...minimalEnv, SEARCH_SOURCES: value })).toThrow(ConfigError);
+    },
+  );
+
+  it('resolveSearchSources defaults a hand-built config without the field', () => {
+    expect(resolveSearchSources({})).toEqual(['provider', 'catalog']);
+  });
+
+  it('parses DEEZER_RATE_LIMIT and SONOVAULT_API_KEY', () => {
+    const config = loadConfig({
+      ...minimalEnv,
+      DEEZER_RATE_LIMIT: '20',
+      SONOVAULT_API_KEY: 'sv-key',
+    });
+    expect(config.deezerRateLimit).toBe(20);
+    expect(config.sonovaultApiKey).toBe('sv-key');
+    expect(() => loadConfig({ ...minimalEnv, DEEZER_RATE_LIMIT: '0' })).toThrow(ConfigError);
+  });
+
+  it('parses DEEZER_CONFIDENT_RANK as a positive integer', () => {
+    expect(loadConfig({ ...minimalEnv, DEEZER_CONFIDENT_RANK: '650000' }).deezerConfidentRank).toBe(
+      650_000,
+    );
+    expect(() => loadConfig({ ...minimalEnv, DEEZER_CONFIDENT_RANK: '0' })).toThrow(ConfigError);
+    expect(() => loadConfig({ ...minimalEnv, DEEZER_CONFIDENT_RANK: '-5' })).toThrow(ConfigError);
+  });
+
+  it('turns track verification on unless TRACK_VERIFY=off', () => {
+    expect(loadConfig(minimalEnv).trackVerify).toBe(true);
+    expect(loadConfig({ ...minimalEnv, TRACK_VERIFY: 'on' }).trackVerify).toBe(true);
+    expect(loadConfig({ ...minimalEnv, TRACK_VERIFY: 'off' }).trackVerify).toBe(false);
+    expect(loadConfig({ ...minimalEnv, TRACK_VERIFY: ' OFF ' }).trackVerify).toBe(false);
   });
 });

@@ -3,8 +3,119 @@ import {
   createInMemoryRepositories,
   InMemoryAuthSessionRepository,
   InMemoryKaraokeClaimRepository,
+  InMemoryProviderConnectionRepository,
   InMemoryUserRepository,
 } from '../../src/repositories/in-memory/index.js';
+
+describe('InMemoryProviderConnectionRepository.extendRateLimitedUntil', () => {
+  const base = Date.UTC(2026, 9, 23, 12, 0, 0, 0);
+
+  function ext(
+    accountId: string,
+    until: Date,
+    group: 'search' | 'player' = 'player',
+    clientId: string | null = 'client-a',
+  ) {
+    return { accountId, providerId: 'spotify', group, until, clientId };
+  }
+
+  async function withConnection() {
+    let now = new Date(base);
+    const repo = new InMemoryProviderConnectionRepository({ now: () => now });
+    await repo.upsert({ accountId: 'acct-1', providerId: 'spotify', accessToken: 'tok' });
+    return {
+      repo,
+      setNow(d: Date) {
+        now = d;
+      },
+    };
+  }
+
+  it('starts with no rate-limit deadline', async () => {
+    const { repo } = await withConnection();
+    const row = await repo.findByAccountAndProvider('acct-1', 'spotify');
+    expect(row?.rateLimitedUntil).toBeNull();
+    expect(row?.searchRateLimitedUntil).toBeNull();
+    expect(row?.rateLimitedClientId).toBeNull();
+  });
+
+  it('stores the deadline at millisecond precision', async () => {
+    const { repo } = await withConnection();
+    const until = new Date(base + 123_457);
+
+    expect(await repo.extendRateLimitedUntil(ext('acct-1', until))).toBe(true);
+
+    const row = await repo.findByAccountAndProvider('acct-1', 'spotify');
+    expect(row?.rateLimitedUntil?.getTime()).toBe(until.getTime());
+  });
+
+  it('keeps the larger deadline when writes land out of order', async () => {
+    const { repo } = await withConnection();
+    await repo.extendRateLimitedUntil(ext('acct-1', new Date(base + 200_000)));
+    await repo.extendRateLimitedUntil(ext('acct-1', new Date(base + 100_000)));
+
+    const row = await repo.findByAccountAndProvider('acct-1', 'spotify');
+    expect(row?.rateLimitedUntil?.getTime()).toBe(base + 200_000);
+  });
+
+  it('keeps the larger deadline per quota group, each in its own column', async () => {
+    const { repo } = await withConnection();
+    await repo.extendRateLimitedUntil(ext('acct-1', new Date(base + 900_000), 'search'));
+    await repo.extendRateLimitedUntil(ext('acct-1', new Date(base + 100_000), 'player'));
+    await repo.extendRateLimitedUntil(ext('acct-1', new Date(base + 300_000), 'search'));
+
+    const row = await repo.findByAccountAndProvider('acct-1', 'spotify');
+    expect(row?.searchRateLimitedUntil?.getTime()).toBe(base + 900_000);
+    expect(row?.rateLimitedUntil?.getTime()).toBe(base + 100_000);
+    expect(row?.rateLimitedClientId).toBe('client-a');
+  });
+
+  it('a write under a new client id replaces the old client deadlines', async () => {
+    const { repo } = await withConnection();
+    await repo.extendRateLimitedUntil(ext('acct-1', new Date(base + 900_000), 'search', 'old'));
+    await repo.extendRateLimitedUntil(ext('acct-1', new Date(base + 800_000), 'player', 'old'));
+
+    await repo.extendRateLimitedUntil(ext('acct-1', new Date(base + 60_000), 'player', 'new'));
+
+    const row = await repo.findByAccountAndProvider('acct-1', 'spotify');
+    expect(row?.rateLimitedUntil?.getTime()).toBe(base + 60_000);
+    expect(row?.searchRateLimitedUntil).toBeNull();
+    expect(row?.rateLimitedClientId).toBe('new');
+  });
+
+  it('is a no-op that does not throw when the connection row is missing', async () => {
+    const { repo } = await withConnection();
+
+    expect(await repo.extendRateLimitedUntil(ext('acct-2', new Date(base + 1_000)))).toBe(false);
+    expect(await repo.findByAccountAndProvider('acct-2', 'spotify')).toBeNull();
+    expect(repo.rows.size).toBe(1);
+  });
+
+  it('leaves updatedAt untouched', async () => {
+    const { repo, setNow } = await withConnection();
+    const before = (await repo.findByAccountAndProvider('acct-1', 'spotify'))!.updatedAt;
+    setNow(new Date(base + 60_000));
+
+    await repo.extendRateLimitedUntil(ext('acct-1', new Date(base + 600_000)));
+
+    const row = await repo.findByAccountAndProvider('acct-1', 'spotify');
+    expect(row?.updatedAt.getTime()).toBe(before.getTime());
+  });
+
+  it('a reconnect upsert keeps an existing future deadline', async () => {
+    const { repo } = await withConnection();
+    await repo.extendRateLimitedUntil(ext('acct-1', new Date(base + 600_000)));
+
+    const upserted = await repo.upsert({
+      accountId: 'acct-1',
+      providerId: 'spotify',
+      accessToken: 'new-tok',
+    });
+
+    expect(upserted.accessToken).toBe('new-tok');
+    expect(upserted.rateLimitedUntil?.getTime()).toBe(base + 600_000);
+  });
+});
 
 describe('createInMemoryRepositories', () => {
   it('returns one of each repository', () => {

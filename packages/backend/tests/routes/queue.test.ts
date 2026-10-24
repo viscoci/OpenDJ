@@ -55,3 +55,14 @@ describe('POST /sessions/:id/queue — provider rate limited', () => {
     expect(await res.json()).toEqual({ error: 'cap_reached' });
   });
 });
+
+describe('POST /sessions/:id/queue — unresolvable track', () => {
+  it('returns 422 track_unresolvable', async () => {
+    const app = appWithFailingRequest(new QueueServiceError('track_unresolvable', 'nope'));
+
+    const res = await requestTrack(app);
+
+    expect(res.status).toBe(422);
+    expect(await res.json()).toEqual({ error: 'track_unresolvable' });
+  });
+});

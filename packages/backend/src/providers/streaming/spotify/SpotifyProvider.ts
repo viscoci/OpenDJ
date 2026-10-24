@@ -181,6 +181,7 @@ interface SpotifyTrack {
   artists: SpotifyArtist[];
   album: { images: SpotifyImage[] };
   duration_ms: number;
+  external_ids?: { isrc?: string };
 }
 
 interface SpotifySearchResponse {
@@ -222,6 +223,8 @@ function toTrack(spotify: SpotifyTrack): Track {
     artist: joinArtists(spotify.artists),
     albumArt: pickAlbumArt(spotify.album.images),
     durationMs: spotify.duration_ms,
+    ...(typeof spotify.external_ids?.isrc === 'string' &&
+      spotify.external_ids.isrc !== '' && { isrc: spotify.external_ids.isrc.toUpperCase() }),
   };
 }
 

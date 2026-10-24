@@ -21,11 +21,21 @@ import { ClaimsService } from './auth/ClaimsService.js';
 import { EmailPasswordService } from './auth/EmailPasswordService.js';
 import { LoginAuthService, type LoginCredentials } from './auth/LoginAuthService.js';
 import { AccountService } from './account/AccountService.js';
+import { TrackCatalog } from './catalog/TrackCatalog.js';
 import {
   createDefaultLoginProviderRegistry,
   type LoginProviderRegistry,
 } from './auth/loginProviders/index.js';
-import type { Config } from './config.js';
+import {
+  DEFAULT_DEEZER_CONFIDENT_RANK,
+  DEFAULT_DEEZER_RATE_LIMIT,
+  DEFAULT_PROVIDER_COOLDOWN_MAX_SEC,
+  resolveSearchPacing,
+  resolveSearchSources,
+  type Config,
+  type SearchPacingConfig,
+  type SearchSourceId,
+} from './config.js';
 import {
   ConsoleEmailAdapter,
   EmailVerificationService,
@@ -44,13 +54,36 @@ import type { ProviderRegistry } from './providers/streaming/providerRegistry.js
 import { SoundtrackProvider } from './providers/streaming/SoundtrackProvider.js';
 import { SpotifyProvider } from './providers/streaming/spotify/SpotifyProvider.js';
 import { StreamingRouter } from './providers/streaming/StreamingRouter.js';
-import { QueueService, type RealtimeRoomRegistry } from './queue/QueueService.js';
+import {
+  QueueService,
+  roomProviderQueueView,
+  type RealtimeRoomRegistry,
+} from './queue/QueueService.js';
 import { NowPlayingPoller } from './realtime/NowPlayingPoller.js';
 import { ProviderCooldowns } from './providers/streaming/ProviderCooldowns.js';
+import {
+  createSearchRateLimiter,
+  type SlidingWindowRateLimiter,
+} from './rate-limit/SlidingWindowRateLimiter.js';
 import { RoomRegistryImpl, type RealtimeRoomManager } from './realtime/RoomRegistryImpl.js';
 import { createDrizzleRepositories } from './repositories/drizzle/index.js';
 import type { Repositories } from './repositories/types.js';
+import type { ExternalSearchSourceId } from './routes/search.js';
+import { DeezerSearchSource } from './search-sources/DeezerSearchSource.js';
+import type { SearchSource } from './search-sources/SearchSource.js';
 import { SessionAuditService } from './session/SessionAuditService.js';
+import { SonovaultSearchSource } from './search-sources/SonovaultSearchSource.js';
+import {
+  createSonovaultLimiter,
+  SonovaultTrackResolver,
+} from './track-resolution/SonovaultTrackResolver.js';
+import { SpotifyOEmbedVerifier } from './track-resolution/SpotifyOEmbedVerifier.js';
+import {
+  CatalogTrackResolver,
+  ProviderIsrcTrackResolver,
+  TrackResolverChain,
+  type TrackResolver,
+} from './track-resolution/TrackResolver.js';
 import { SessionService } from './session/SessionService.js';
 
 export interface AppDeps {
@@ -67,6 +100,28 @@ export interface AppDeps {
   streamingRouter: StreamingRouter;
   /** Shared per-account provider rate-limit cooldowns (see ProviderCooldowns). */
   providerCooldowns: ProviderCooldowns;
+  /** Guest search pacing settings, with defaults applied. */
+  searchPacing: SearchPacingConfig;
+  /**
+   * The process's one guest-search limiter: scope `'search'` (keys
+   * `guest:<slotId>` / `anon`), scope `'search_budget'` (key `<providerId>`),
+   * and scope `'search_daily'` (key `<providerId>`, 24h window).
+   */
+  searchRateLimiter: SlidingWindowRateLimiter;
+  /**
+   * Local catalog of tracks seen in provider searches or requested by
+   * guests; search falls back to it when the provider can't be asked.
+   */
+  trackCatalog: TrackCatalog;
+  /** Guest search sources in the order they are asked (`SEARCH_SOURCES`). */
+  searchSources: SearchSourceId[];
+  /** External search sources listed in `searchSources` (Deezer; Sonovault with a key). */
+  externalSearchSources: Partial<Record<ExternalSearchSourceId, SearchSource>>;
+  /**
+   * Add-time resolution of non-native track uris: catalog, then Sonovault
+   * (with `SONOVAULT_API_KEY`), then the provider's own ISRC search.
+   */
+  trackResolver: TrackResolverChain;
   streamingProviderOAuthConfigs: StreamingProviderOAuthRegistry;
   lyricsLookupService: LyricsLookupService;
   abuseModerationService: AbuseModerationService;
@@ -130,6 +185,12 @@ export interface CreateDepsOptions {
    * adapter.
    */
   emailAdapter?: EmailAdapter;
+  /**
+   * Override the guest-search limiter (e.g. one built with
+   * `createSearchRateLimiter(pacing, fakeClock)` in tests). Defaults to one
+   * built from the config's search pacing.
+   */
+  searchRateLimiter?: SlidingWindowRateLimiter;
 }
 
 const NULL_ROOM_REGISTRY: RealtimeRoomRegistry = {
@@ -204,11 +265,107 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
     } as ProviderRegistry);
 
   const providerCooldowns = new ProviderCooldowns();
+  // Persist every opened/extended cooldown so a restart mid-ban doesn't
+  // resume calling the provider. Fire-and-forget: the provider call
+  // path never waits on, or fails because of, this write. The in-memory
+  // cooldown keeps the provider's full window; only the stored copy is
+  // clamped, so a bogus Retry-After can't pause the provider for days.
+  const cooldownMaxMs =
+    (options.config.providerCooldownMaxSec ?? DEFAULT_PROVIDER_COOLDOWN_MAX_SEC) * 1000;
+  const providerConnectionsRepo = repositories.providerConnections;
+  // Quotas belong to the provider app, so each stored cooldown is tagged
+  // with the client id it was earned under; a deployment switched to a
+  // different client id ignores it (see StreamingRouter.getProvider).
+  const providerClientIds: Partial<Record<string, string>> = {};
+  if (options.config.spotify?.clientId !== undefined) {
+    providerClientIds['spotify'] = options.config.spotify.clientId;
+  }
+  providerCooldowns.onRateLimited((event) => {
+    const until = new Date(Math.min(event.untilEpochMs, Date.now() + cooldownMaxMs));
+    void providerConnectionsRepo
+      .extendRateLimitedUntil({
+        accountId: event.accountId,
+        providerId: event.providerId,
+        group: event.group,
+        until,
+        clientId: providerClientIds[event.providerId] ?? null,
+      })
+      .then((updated) => {
+        if (!updated) {
+          console.warn(
+            '[provider-cooldown] no connection row to persist the cooldown on;',
+            `provider=${event.providerId} account=${event.accountId}`,
+          );
+        }
+      })
+      .catch((err: unknown) => {
+        console.error(
+          '[provider-cooldown] failed to persist the cooldown;',
+          `provider=${event.providerId} account=${event.accountId}`,
+          err,
+        );
+      });
+  });
   const streamingRouter = new StreamingRouter({
     providerConnections: repositories.providerConnections,
     registry: providerRegistry,
     context: { fetch: fetchImpl },
     cooldowns: providerCooldowns,
+    providerClientIds,
+  });
+
+  const searchPacing = resolveSearchPacing(options.config);
+  const searchRateLimiter = options.searchRateLimiter ?? createSearchRateLimiter(searchPacing);
+
+  const trackCatalog = new TrackCatalog({
+    repository: repositories.trackCatalog,
+    queueItems: repositories.queueItems,
+    sessions: repositories.sessions,
+    providerConnections: repositories.providerConnections,
+  });
+  // Load the index (and backfill an empty table from queue items) in the
+  // background so boot never waits on it.
+  trackCatalog.warm();
+
+  const searchSources = resolveSearchSources(options.config);
+  const externalSearchSources: Partial<Record<ExternalSearchSourceId, SearchSource>> = {};
+  if (searchSources.includes('deezer')) {
+    externalSearchSources.deezer = new DeezerSearchSource({
+      fetchImpl,
+      rateLimit: options.config.deezerRateLimit ?? DEFAULT_DEEZER_RATE_LIMIT,
+      confidentRank: options.config.deezerConfidentRank ?? DEFAULT_DEEZER_CONFIDENT_RANK,
+      requestedCounts: (providerId, isrcs) => trackCatalog.requestedCountsByIsrc(providerId, isrcs),
+    });
+  }
+  const sonovaultApiKey = options.config.sonovaultApiKey;
+  // One Sonovault budget for search and add-time resolution; search leaves a
+  // reserve for resolution (see SonovaultSearchSource).
+  const sonovaultLimiter = createSonovaultLimiter();
+  if (searchSources.includes('sonovault')) {
+    if (sonovaultApiKey !== undefined) {
+      externalSearchSources.sonovault = new SonovaultSearchSource({
+        apiKey: sonovaultApiKey,
+        fetchImpl,
+        limiter: sonovaultLimiter,
+      });
+    } else {
+      console.warn(
+        '[search] SEARCH_SOURCES lists sonovault but SONOVAULT_API_KEY is not set; sonovault search is disabled',
+      );
+    }
+  }
+  const resolvers: TrackResolver[] = [new CatalogTrackResolver(trackCatalog)];
+  if (sonovaultApiKey !== undefined) {
+    resolvers.push(
+      new SonovaultTrackResolver({ apiKey: sonovaultApiKey, fetchImpl, limiter: sonovaultLimiter }),
+    );
+  }
+  resolvers.push(new ProviderIsrcTrackResolver({ streamingRouter, searchRateLimiter }));
+  // Non-catalog answers for Spotify are checked against Spotify's own title
+  // (oEmbed) unless TRACK_VERIFY=off.
+  const trackResolver = new TrackResolverChain(resolvers, console, {
+    verifiers:
+      options.config.trackVerify === false ? [] : [new SpotifyOEmbedVerifier({ fetchImpl })],
   });
 
   const sessionAuditService = new SessionAuditService({
@@ -229,6 +386,11 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
     streamingRouter,
     providerConnections: repositories.providerConnections,
     audit: sessionAuditService,
+    trackCatalog,
+    trackResolver,
+    // Duplicate check also covers what Spotify already has queued/playing,
+    // read from the poller-maintained room snapshot (no extra API call).
+    providerQueueView: roomProviderQueueView(rooms),
   });
 
   const karaokeService = new KaraokeService({
@@ -264,9 +426,13 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
       karaoke: karaokeService,
     });
     // Tell connected clients the moment any caller trips a provider rate
-    // limit, not just on the poller's next tick.
+    // limit, not just on the poller's next tick. Only the player group:
+    // a search-only quota leaves playback and queueing working, so it must
+    // not tell every guest the provider is limiting the party (search
+    // surfaces its own `provider_rate_limited` refusal).
     const poller = nowPlayingPoller;
     providerCooldowns.onRateLimited((event) => {
+      if (event.group !== 'player') return;
       void poller.notifyRateLimited(event);
     });
   }
@@ -340,6 +506,12 @@ export function createDeps(options: CreateDepsOptions): AppDeps {
     sessionAuditService,
     streamingRouter,
     providerCooldowns,
+    searchPacing,
+    searchRateLimiter,
+    trackCatalog,
+    searchSources,
+    externalSearchSources,
+    trackResolver,
     streamingProviderOAuthConfigs:
       options.streamingProviderOAuthConfigs ?? defaultStreamingProviderOAuthConfigs,
     lyricsLookupService,

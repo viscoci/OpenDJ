@@ -204,7 +204,7 @@ describe('StreamingRouter rate-limit cooldowns', () => {
 
   it('hands providers a fetch that fails fast while the account is cooling down', async () => {
     const { router, contexts, innerFetch, cooldowns } = await setupWithCooldowns();
-    cooldowns.record('acct-1', 'stub', 60);
+    cooldowns.record('acct-1', 'stub', 'player', 60);
 
     await router.getProvider('acct-1', 'stub');
     const err = await contexts[0]!.fetch('https://example.test').catch((e: unknown) => e);
@@ -217,8 +217,187 @@ describe('StreamingRouter rate-limit cooldowns', () => {
     const { router, cooldowns } = await setupWithCooldowns();
     expect(router.rateLimitedUntil('acct-1', 'stub')).toBeNull();
 
-    const until = cooldowns.record('acct-1', 'stub', 60);
+    const until = cooldowns.record('acct-1', 'stub', 'player', 60);
 
     expect(router.rateLimitedUntil('acct-1', 'stub')).toBe(until);
+  });
+});
+
+describe('StreamingRouter persisted cooldowns', () => {
+  /**
+   * A connection row that already carries `rate_limited_until`, then a
+   * brand-new cooldown registry + router — the state right after a restart.
+   */
+  async function freshProcess(
+    persistedUntil: Date | null,
+    startMs = 5_000_000,
+    opts: {
+      group?: 'search' | 'player';
+      storedClientId?: string | null;
+      currentClientId?: string;
+    } = {},
+  ) {
+    let now = startMs;
+    const providerConnections = new InMemoryProviderConnectionRepository();
+    await providerConnections.upsert({ accountId: 'acct-1', providerId: 'stub', accessToken: 't' });
+    if (persistedUntil) {
+      await providerConnections.extendRateLimitedUntil({
+        accountId: 'acct-1',
+        providerId: 'stub',
+        group: opts.group ?? 'player',
+        until: persistedUntil,
+        clientId: opts.storedClientId === undefined ? 'client-a' : opts.storedClientId,
+      });
+    }
+    const contexts: ProviderContext[] = [];
+    const registry: ProviderRegistry = {
+      stub: (ctx) => {
+        contexts.push(ctx);
+        return makeStubProvider();
+      },
+    };
+    const innerFetch = vi.fn(async () => new Response('{}', { status: 200 }));
+    const cooldowns = new ProviderCooldowns({ now: () => now, callSummaryIntervalMs: 0 });
+    const router = new StreamingRouter({
+      providerConnections,
+      registry,
+      context: { fetch: innerFetch as unknown as typeof fetch },
+      cooldowns,
+      providerClientIds: { stub: opts.currentClientId ?? 'client-a' },
+    });
+    return {
+      router,
+      contexts,
+      innerFetch,
+      cooldowns,
+      setNow(ms: number) {
+        now = ms;
+      },
+    };
+  }
+
+  it('a fresh router never calls the provider before a persisted deadline (AE7)', async () => {
+    const start = 5_000_000;
+    const until = start + 110 * 60_000; // 1h50m still to go
+    const { router, contexts, innerFetch, setNow } = await freshProcess(new Date(until), start);
+
+    await router.getProvider('acct-1', 'stub');
+    const err = await contexts[0]!.fetch('https://example.test/v1/me').catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(ProviderRateLimitedError);
+    expect((err as ProviderRateLimitedError).retryAfterSec).toBe(110 * 60);
+    expect(innerFetch).not.toHaveBeenCalled();
+    expect(router.rateLimitedUntil('acct-1', 'stub')).toBe(until);
+
+    // Once the stored deadline passes, calls go through again.
+    setNow(until);
+    await router.getProvider('acct-1', 'stub');
+    const res = await contexts[1]!.fetch('https://example.test/v1/me');
+    expect(res.status).toBe(200);
+    expect(innerFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('seeds nothing from a persisted deadline that has already passed', async () => {
+    const start = 5_000_000;
+    const { router, contexts, innerFetch } = await freshProcess(new Date(start - 1_000), start);
+
+    await router.getProvider('acct-1', 'stub');
+    await contexts[0]!.fetch('https://example.test/v1/me');
+
+    expect(innerFetch).toHaveBeenCalledTimes(1);
+    expect(router.rateLimitedUntil('acct-1', 'stub')).toBeNull();
+  });
+
+  it('seeds nothing when the row has no persisted deadline', async () => {
+    const { router, contexts, innerFetch } = await freshProcess(null);
+
+    await router.getProvider('acct-1', 'stub');
+    await contexts[0]!.fetch('https://example.test/v1/me');
+
+    expect(innerFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not notify onRateLimited listeners when seeding (no write-back loop)', async () => {
+    const start = 5_000_000;
+    const { router, cooldowns } = await freshProcess(new Date(start + 600_000), start);
+    const listener = vi.fn();
+    cooldowns.onRateLimited(listener);
+
+    await router.getProvider('acct-1', 'stub');
+
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it('seeds a persisted search cooldown into the search group only', async () => {
+    const start = 5_000_000;
+    const until = start + 600_000;
+    const { router, contexts, innerFetch } = await freshProcess(new Date(until), start, {
+      group: 'search',
+    });
+
+    await router.getProvider('acct-1', 'stub');
+
+    expect(router.rateLimitedUntil('acct-1', 'stub', 'search')).toBe(until);
+    expect(router.rateLimitedUntil('acct-1', 'stub', 'player')).toBeNull();
+    expect(router.rateLimitedUntil('acct-1', 'stub')).toBeNull();
+    const res = await contexts[0]!.fetch('https://example.test/v1/me/player');
+    expect(res.status).toBe(200);
+    const err = await contexts[0]!
+      .fetch('https://example.test/v1/search?q=a')
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ProviderRateLimitedError);
+    expect(innerFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores a persisted cooldown recorded under a different client id', async () => {
+    const start = 5_000_000;
+    const { router, contexts, innerFetch } = await freshProcess(new Date(start + 600_000), start, {
+      storedClientId: 'old-client',
+      currentClientId: 'new-client',
+    });
+
+    await router.getProvider('acct-1', 'stub');
+    const res = await contexts[0]!.fetch('https://example.test/v1/me');
+
+    expect(res.status).toBe(200);
+    expect(innerFetch).toHaveBeenCalledTimes(1);
+    expect(router.rateLimitedUntil('acct-1', 'stub')).toBeNull();
+  });
+
+  it('ignores a persisted cooldown with no recorded client id', async () => {
+    const start = 5_000_000;
+    const { router, contexts, innerFetch } = await freshProcess(new Date(start + 600_000), start, {
+      storedClientId: null,
+    });
+
+    await router.getProvider('acct-1', 'stub');
+    await contexts[0]!.fetch('https://example.test/v1/me');
+
+    expect(innerFetch).toHaveBeenCalledTimes(1);
+    expect(router.rateLimitedUntil('acct-1', 'stub')).toBeNull();
+  });
+
+  it('honours a persisted cooldown recorded under the current client id', async () => {
+    const start = 5_000_000;
+    const until = start + 600_000;
+    const { router } = await freshProcess(new Date(until), start, {
+      storedClientId: 'client-b',
+      currentClientId: 'client-b',
+    });
+
+    await router.getProvider('acct-1', 'stub');
+
+    expect(router.rateLimitedUntil('acct-1', 'stub', 'player')).toBe(until);
+  });
+
+  it('switchProvider keeps honouring a persisted cooldown after a reconnect', async () => {
+    const start = 5_000_000;
+    const { router, contexts, innerFetch } = await freshProcess(new Date(start + 600_000), start);
+
+    await router.switchProvider('acct-1', 'stub', { accessToken: 'fresh' });
+    const err = await contexts[0]!.fetch('https://example.test/v1/me').catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(ProviderRateLimitedError);
+    expect(innerFetch).not.toHaveBeenCalled();
   });
 });

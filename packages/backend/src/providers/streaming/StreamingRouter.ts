@@ -22,7 +22,7 @@ import {
   type ProviderCredentials,
 } from '@opendj/core';
 import type { ProviderConnectionRepository } from '../../repositories/types.js';
-import type { ProviderCooldowns } from './ProviderCooldowns.js';
+import type { ProviderCooldowns, ProviderQuotaGroup } from './ProviderCooldowns.js';
 import type { ProviderContext, ProviderRegistry } from './providerRegistry.js';
 
 export class ProviderConnectionNotFoundError extends Error {
@@ -55,6 +55,12 @@ export interface StreamingRouterDeps {
    * opens a cooldown on any 429 — see `ProviderCooldowns`.
    */
   cooldowns?: ProviderCooldowns;
+  /**
+   * App client id each provider currently runs under (e.g. `SPOTIFY_CLIENT_ID`).
+   * Provider quotas belong to the app, so persisted cooldowns are only
+   * seeded back when they were recorded under this same client id.
+   */
+  providerClientIds?: Readonly<Partial<Record<string, string>>>;
 }
 
 export class StreamingRouter {
@@ -82,6 +88,30 @@ export class StreamingRouter {
       throw new InvalidProviderCredentialsError(providerId, 'No access token stored.');
     }
 
+    // Seed cooldowns persisted before a restart before building the
+    // guarded fetch, so this provider can't call out inside the window.
+    // Every guarded fetch is built here (switchProvider delegates to us).
+    // Only cooldowns recorded under the current app client id count: a
+    // different (or unknown) client id has its own quota.
+    const clientId = this.clientIdFor(providerId);
+    if (this.deps.cooldowns && clientId !== null && connection.rateLimitedClientId === clientId) {
+      if (connection.rateLimitedUntil) {
+        this.deps.cooldowns.seed(
+          accountId,
+          providerId,
+          'player',
+          connection.rateLimitedUntil.getTime(),
+        );
+      }
+      if (connection.searchRateLimitedUntil) {
+        this.deps.cooldowns.seed(
+          accountId,
+          providerId,
+          'search',
+          connection.searchRateLimitedUntil.getTime(),
+        );
+      }
+    }
     const context: ProviderContext = this.deps.cooldowns
       ? {
           ...this.deps.context,
@@ -127,11 +157,21 @@ export class StreamingRouter {
   }
 
   /**
-   * End of the open rate-limit cooldown for this account's provider, or
-   * null when calls are allowed (or no cooldown registry is wired).
+   * End of the open rate-limit cooldown for this account's provider in the
+   * given quota group, or null when calls are allowed (or no cooldown
+   * registry is wired).
    */
-  rateLimitedUntil(accountId: string, providerId: string): number | null {
-    return this.deps.cooldowns?.untilEpochMs(accountId, providerId) ?? null;
+  rateLimitedUntil(
+    accountId: string,
+    providerId: string,
+    group: ProviderQuotaGroup = 'player',
+  ): number | null {
+    return this.deps.cooldowns?.untilEpochMs(accountId, providerId, group) ?? null;
+  }
+
+  /** App client id `providerId` currently runs under, or null when unknown. */
+  clientIdFor(providerId: string): string | null {
+    return this.deps.providerClientIds?.[providerId] ?? null;
   }
 
   /**

@@ -231,7 +231,7 @@ describe('NowPlayingPoller — provider status', () => {
 
   it('publishes rate_limited when a tick is refused by the cooldown', async () => {
     const { poller, sessionId, stub, statusEvents } = await setup();
-    stub.setError(new ProviderRateLimitedError('spotify', NOW + 600_000, NOW));
+    stub.setError(new ProviderRateLimitedError('spotify', 'player', NOW + 600_000, NOW));
     poller.start(sessionId);
     await vi.advanceTimersByTimeAsync(0);
 
@@ -246,7 +246,7 @@ describe('NowPlayingPoller — provider status', () => {
 
   it('publishes ok again on the first successful tick after the window', async () => {
     const { poller, sessionId, stub, statusEvents, room } = await setup();
-    stub.setError(new ProviderRateLimitedError('spotify', NOW + 60_000, NOW));
+    stub.setError(new ProviderRateLimitedError('spotify', 'player', NOW + 60_000, NOW));
     poller.start(sessionId);
     await vi.advanceTimersByTimeAsync(0);
 
@@ -271,11 +271,13 @@ describe('NowPlayingPoller — provider status', () => {
     await poller.notifyRateLimited({
       accountId: ACCOUNT_ID,
       providerId: 'spotify',
+      group: 'player',
       untilEpochMs: NOW + 900_000,
     });
     await poller.notifyRateLimited({
       accountId: 'someone-else',
       providerId: 'spotify',
+      group: 'player',
       untilEpochMs: NOW + 900_000,
     });
 

@@ -18,6 +18,7 @@ import { QueueService, QueueServiceError } from '../queue/QueueService.js';
 import { toQueueItemSummary, type KaraokeClaimSummary } from '@opendj/realtime';
 import { groupClaimSummaries, toKaraokeClaimSummary } from '../karaoke/claimSummaries.js';
 import type { KaraokeClaimRepository } from '../repositories/types.js';
+import { bearerFromAuthHeader } from './bearer.js';
 
 export interface QueueRouteDeps {
   authService: AuthService;
@@ -35,15 +36,11 @@ const TrackBody = v.object({
   artist: v.pipe(v.string(), v.nonEmpty()),
   albumArt: v.union([v.pipe(v.string(), v.url()), v.null()]),
   durationMs: v.pipe(v.number(), v.integer(), v.minValue(0)),
+  /** Optional ISRC, used to resolve a `uri` that isn't native to the session's provider. */
+  isrc: v.optional(v.pipe(v.string(), v.nonEmpty(), v.maxLength(32))),
   /** Optional mic claim bundled with the request (karaoke sessions). */
   karaoke: v.optional(v.object({ displayName: v.string() })),
 });
-
-function bearerFromAuthHeader(header: string | undefined): string | null {
-  if (!header) return null;
-  const m = /^Bearer\s+(.+)$/i.exec(header);
-  return m ? m[1]!.trim() : null;
-}
 
 function mapErrorToStatus(code: string): { status: number; payload: { error: string } } {
   switch (code) {
@@ -72,6 +69,8 @@ function mapErrorToStatus(code: string): { status: number; payload: { error: str
       return { status: 400, payload: { error: code } };
     case 'not_owner':
       return { status: 403, payload: { error: code } };
+    case 'track_unresolvable':
+      return { status: 422, payload: { error: code } };
     default:
       return { status: 400, payload: { error: code } };
   }
@@ -88,7 +87,7 @@ function queueErrorResponse(c: Context, err: QueueServiceError): Response {
     return c.json({ error: err.code, retryAfterSec: err.retryAfterSec }, 503);
   }
   const { status, payload } = mapErrorToStatus(err.code);
-  return c.json(payload, status as 400 | 401 | 403 | 404);
+  return c.json(payload, status as 400 | 401 | 403 | 404 | 422);
 }
 
 export function queueRoutes(deps: QueueRouteDeps): Hono<{ Variables: AuthVariables }> {
@@ -113,7 +112,12 @@ export function queueRoutes(deps: QueueRouteDeps): Hono<{ Variables: AuthVariabl
     });
   });
 
-  /** POST /queue — guest requests a track via slot token. */
+  /**
+   * POST /queue — guest requests a track via slot token. A `uri` that isn't
+   * native to the session's provider (e.g. `opendj:isrc:<ISRC>` from an
+   * external search source) is resolved first; 422 `track_unresolvable`
+   * when it can't be, with nothing stored.
+   */
   app.post('/', async (c) => {
     const sessionId = c.req.param('id') ?? '';
     const slotToken = bearerFromAuthHeader(c.req.header('authorization'));

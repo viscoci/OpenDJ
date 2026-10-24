@@ -12,6 +12,7 @@ export default defineConfig({
     './src/schema/sessions.ts',
     './src/schema/lyrics.ts',
     './src/schema/abuse.ts',
+    './src/schema/catalog.ts',
   ],
   out: './migrations',
   dialect: 'postgresql',

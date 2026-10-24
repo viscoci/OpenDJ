@@ -14,6 +14,7 @@ import {
   SessionEndedError,
   SessionNotFoundError,
 } from '../guest/GuestIdentityService.js';
+import { bearerFromAuthHeader } from './bearer.js';
 
 export interface GuestRouteDeps {
   guestIdentity: GuestIdentityService;
@@ -23,12 +24,6 @@ const IdentityBody = v.object({
   fingerprintHash: v.pipe(v.string(), v.nonEmpty()),
   eventSlug: v.pipe(v.string(), v.nonEmpty()),
 });
-
-function bearerFromAuthHeader(header: string | undefined): string | null {
-  if (!header) return null;
-  const m = /^Bearer\s+(.+)$/i.exec(header);
-  return m ? m[1]!.trim() : null;
-}
 
 export function guestRoutes(deps: GuestRouteDeps): Hono {
   const app = new Hono();

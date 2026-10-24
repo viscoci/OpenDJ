@@ -19,6 +19,7 @@ import type { AuthContext } from '@opendj/auth';
 import type { AuthService } from '../auth/AuthService.js';
 import { requireClaim, type AuthVariables } from '../auth/middleware.js';
 import { KaraokeService, KaraokeServiceError } from '../karaoke/KaraokeService.js';
+import { bearerFromAuthHeader } from './bearer.js';
 
 export interface KaraokeRouteDeps {
   authService: AuthService;
@@ -29,12 +30,6 @@ const ClaimBody = v.object({
   queueItemId: v.pipe(v.string(), v.nonEmpty()),
   displayName: v.string(),
 });
-
-function bearerFromAuthHeader(header: string | undefined): string | null {
-  if (!header) return null;
-  const m = /^Bearer\s+(.+)$/i.exec(header);
-  return m ? m[1]!.trim() : null;
-}
 
 function mapErrorToStatus(code: string): { status: number; payload: { error: string } } {
   switch (code) {

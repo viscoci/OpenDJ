@@ -10,6 +10,7 @@
  */
 
 import type { Claim } from '@opendj/auth';
+import type { ProviderQuotaGroup } from '../../providers/streaming/ProviderCooldowns.js';
 import type {
   AbuseSubjectRecord,
   AbuseSubjectRepository,
@@ -56,9 +57,18 @@ import type {
   SessionAuditEventRepository,
   SessionRecord,
   SessionRepository,
+  TrackCatalogRecord,
+  TrackCatalogRepository,
+  TrackCatalogUpsert,
   UserRecord,
   UserRepository,
 } from '../types.js';
+import {
+  applyCatalogUpsert,
+  catalogKey,
+  mergeCatalogUpserts,
+  rankCatalogMatches,
+} from '../../catalog/catalogSearch.js';
 
 export interface InMemoryClock {
   now(): Date;
@@ -556,6 +566,10 @@ export class InMemoryProviderConnectionRepository implements ProviderConnectionR
       expiresAt: input.expiresAt ?? existing?.expiresAt ?? null,
       scopes: input.scopes ?? existing?.scopes ?? null,
       tokenType: input.tokenType ?? existing?.tokenType ?? null,
+      // Never set by upsert: a reconnect keeps an open cooldown.
+      rateLimitedUntil: existing?.rateLimitedUntil ?? null,
+      searchRateLimitedUntil: existing?.searchRateLimitedUntil ?? null,
+      rateLimitedClientId: existing?.rateLimitedClientId ?? null,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     };
@@ -579,6 +593,30 @@ export class InMemoryProviderConnectionRepository implements ProviderConnectionR
       row.updatedAt = this.clock.now();
       return;
     }
+  }
+
+  async extendRateLimitedUntil(input: {
+    accountId: string;
+    providerId: string;
+    group: ProviderQuotaGroup;
+    until: Date;
+    clientId: string | null;
+  }): Promise<boolean> {
+    const row = this.rows.get(`${input.accountId}:${input.providerId}`);
+    if (!row) return false;
+    const target = input.group === 'search' ? 'searchRateLimitedUntil' : 'rateLimitedUntil';
+    const other = input.group === 'search' ? 'rateLimitedUntil' : 'searchRateLimitedUntil';
+    if (row.rateLimitedClientId !== input.clientId) {
+      // Another app's quota: its deadlines don't apply to this client id.
+      row[target] = null;
+      row[other] = null;
+      row.rateLimitedClientId = input.clientId;
+    }
+    const current = row[target];
+    if (current === null || current.getTime() < input.until.getTime()) {
+      row[target] = new Date(input.until.getTime());
+    }
+    return true;
   }
 
   async delete(id: string): Promise<void> {
@@ -897,6 +935,10 @@ export class InMemoryQueueItemRepository implements QueueItemRepository {
     }
     out.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
     return out;
+  }
+
+  async findAll(): Promise<QueueItemRecord[]> {
+    return [...this.rows.values()];
   }
 
   async create(input: {
@@ -1310,6 +1352,37 @@ export class InMemoryActionEventRepository implements ActionEventRepository {
   }
 }
 
+export class InMemoryTrackCatalogRepository implements TrackCatalogRepository {
+  /** Rows keyed by `catalogKey(providerId, trackUri)`, in insertion order. */
+  readonly rows = new Map<string, TrackCatalogRecord>();
+
+  async upsertMany(entries: ReadonlyArray<TrackCatalogUpsert>): Promise<void> {
+    for (const entry of mergeCatalogUpserts(entries)) {
+      const key = catalogKey(entry.providerId, entry.trackUri);
+      this.rows.set(key, applyCatalogUpsert(this.rows.get(key), entry));
+    }
+  }
+
+  async findAll(): Promise<TrackCatalogRecord[]> {
+    return [...this.rows.values()].map((row) => ({ ...row }));
+  }
+
+  async search(input: {
+    providerId: string;
+    query: string;
+    limit: number;
+  }): Promise<TrackCatalogRecord[]> {
+    const own = [...this.rows.values()].filter((row) => row.providerId === input.providerId);
+    return rankCatalogMatches(own, input.query, input.limit).map((row) => ({ ...row }));
+  }
+
+  async findByIsrc(input: { providerId: string; isrc: string }): Promise<TrackCatalogRecord[]> {
+    return [...this.rows.values()]
+      .filter((row) => row.providerId === input.providerId && row.isrc === input.isrc)
+      .map((row) => ({ ...row }));
+  }
+}
+
 export function createInMemoryRepositories(clock: InMemoryClock = systemClock): Repositories {
   // queueItems is shared with queueSkipVotes — declare first so we can hand
   // the same instance to the votes repo for atomic counter increments.
@@ -1337,5 +1410,6 @@ export function createInMemoryRepositories(clock: InMemoryClock = systemClock): 
     lyricsFeedback: new InMemoryLyricsFeedbackRepository(clock),
     abuseSubjects: new InMemoryAbuseSubjectRepository(clock),
     actionEvents: new InMemoryActionEventRepository(clock),
+    trackCatalog: new InMemoryTrackCatalogRepository(),
   };
 }

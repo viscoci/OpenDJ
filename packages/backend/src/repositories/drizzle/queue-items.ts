@@ -41,6 +41,11 @@ export class DrizzleQueueItemRepository implements QueueItemRepository {
     return rows.map(mapItem);
   }
 
+  async findAll(): Promise<QueueItemRecord[]> {
+    const rows = await this.db.select().from(schema.queueItems);
+    return rows.map(mapItem);
+  }
+
   async create(input: {
     sessionId: string;
     guestId: string;

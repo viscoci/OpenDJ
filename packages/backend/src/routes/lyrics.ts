@@ -12,6 +12,7 @@ import type { LyricsFeedbackKind } from '@opendj/lyrics';
 import type { AuthVariables } from '../auth/middleware.js';
 import { LyricsLookupService } from '../lyrics/LyricsLookupService.js';
 import type { GuestSlotRepository, GuestRepository } from '../repositories/types.js';
+import { bearerFromAuthHeader } from './bearer.js';
 
 export interface LyricsRouteDeps {
   lyricsLookup: LyricsLookupService;
@@ -46,12 +47,6 @@ const FeedbackBody = v.object({
   lineId: v.optional(v.pipe(v.string(), v.nonEmpty())),
   comment: v.optional(v.pipe(v.string(), v.maxLength(2000))),
 });
-
-function bearerFromAuthHeader(header: string | undefined): string | null {
-  if (!header) return null;
-  const m = /^Bearer\s+(.+)$/i.exec(header);
-  return m ? m[1]!.trim() : null;
-}
 
 export function lyricsRoutes(deps: LyricsRouteDeps): Hono<{ Variables: AuthVariables }> {
   const app = new Hono<{ Variables: AuthVariables }>();

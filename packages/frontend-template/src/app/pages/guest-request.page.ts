@@ -53,6 +53,7 @@ import { getOrCreateGuestFingerprintHash } from '../services/guest-fingerprint.j
 import { OpenDjClientService } from '../services/opendj-client.service.js';
 import { SnackbarService } from '../services/snackbar.service.js';
 import { buildQueueEtaMs, formatEta } from '../utils/queue-eta.js';
+import { searchRateLimitMessage } from '../utils/search-errors.js';
 
 @Component({
   selector: 'app-guest-request',
@@ -783,7 +784,9 @@ export class GuestRequestPage {
     this.searchStatus.set('searching');
     this.searchError.set(null);
     try {
-      const res = await this.clientService.client.queue.search(session.id, query, 20);
+      const res = await this.clientService.client.queue.search(session.id, query, 20, {
+        slotToken: this.slot()?.slotToken,
+      });
       // Drop stale responses if the user kept typing.
       if (this.latestQuery !== query) return;
       this.searchResults.set(res.results);
@@ -791,7 +794,11 @@ export class GuestRequestPage {
     } catch (err) {
       if (this.latestQuery !== query) return;
       const code = err instanceof ApiError ? err.code : 'error';
-      if (code === 'no_provider_connected') {
+      const rateLimitMessage = searchRateLimitMessage(err);
+      if (rateLimitMessage !== null) {
+        this.searchError.set(rateLimitMessage);
+        this.searchStatus.set('error');
+      } else if (code === 'no_provider_connected') {
         this.searchDisabledReason.set("The host hasn't connected a streaming service yet.");
         this.searchStatus.set('idle');
       } else if (code === 'search_not_supported') {

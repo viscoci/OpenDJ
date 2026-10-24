@@ -14,3 +14,4 @@ export * from './providers.js';
 export * from './sessions.js';
 export * from './lyrics.js';
 export * from './abuse.js';
+export * from './catalog.js';

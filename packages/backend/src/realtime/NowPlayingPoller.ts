@@ -229,6 +229,14 @@ const SKIP_SETTLE_MS = 1500;
  */
 const RECONCILE_GRACE_MS = 30_000;
 
+/**
+ * Spotify's GET /me/player/queue only returns about the next 20 upcoming
+ * tracks (observed cap; not documented). A provider queue read at or over
+ * this length is treated as truncated: a request missing from it may simply
+ * be further back, so its absence is not evidence it already played.
+ */
+const PROVIDER_QUEUE_VISIBLE_LIMIT = 20;
+
 export class NowPlayingPoller {
   private readonly intervalMs: number;
   private readonly idleIntervalMs: number;
@@ -563,9 +571,9 @@ export class NowPlayingPoller {
       }
 
       // Reconcile OpenDJ queue items against the provider's reality:
-      // anything `approved` whose URI no longer appears in (now-playing ∪
-      // providerQueue) has rolled past, mark it `played` so it stops
-      // counting against the per-guest cap. 30s grace window prevents
+      // anything `approved` that has provably rolled past (see
+      // `reconcileQueue`) is marked `played` so it stops counting against
+      // the per-guest cap. 30s grace window prevents
       // racing newly-pushed items that haven't yet shown up on the next
       // queue read.
       if (items) {
@@ -722,9 +730,15 @@ export class NowPlayingPoller {
    *    came online late, transient network blip).
    *
    * 2. **Status reconciliation**: items older than the grace window get
-   *    a deterministic terminal status — `playing` if their URI is now
-   *    playing, `played` if they're past the queue + now-playing, so
-   *    they stop counting against the per-guest cap.
+   *    `playing` once their URI is now playing, and `played` only on
+   *    evidence they are gone — they were seen playing and no longer are,
+   *    or they're absent from a visible queue that isn't truncated (see
+   *    `PROVIDER_QUEUE_VISIBLE_LIMIT`). Unseen items behind a full visible
+   *    queue stay `approved` (and keep counting against the per-guest cap).
+   *
+   * Both passes treat "missing from a truncated queue" as unknown, not
+   * missing: retry-pushing it would duplicate a track that's just deeper in
+   * the provider queue.
    */
   private async reconcileQueue(
     sessionId: string,
@@ -746,6 +760,7 @@ export class NowPlayingPoller {
     let skipDispatched = false;
     const sessionState = this.state.get(sessionId);
     const lastPushedAt = sessionState?.lastPushedAt;
+    const queueTruncated = providerQueue.length >= PROVIDER_QUEUE_VISIBLE_LIMIT;
 
     // Resolve the provider once for the retry pump (only if we'll need it).
     let providerForRetry: IStreamingProvider | null = null;
@@ -754,6 +769,7 @@ export class NowPlayingPoller {
       const ageMs = now - item.createdAt.getTime();
       if (ageMs >= RECONCILE_GRACE_MS) return false;
       if (nowPlaying?.uri === item.trackUri) return false;
+      if (queueTruncated) return false;
       return !providerQueue.some((t) => t.uri === item.trackUri);
     });
     if (hasUnsyncedYoung) {
@@ -851,6 +867,7 @@ export class NowPlayingPoller {
         if (
           !isCurrent &&
           !isQueued &&
+          !queueTruncated &&
           providerForRetry &&
           supportsQueueTrack(providerForRetry) &&
           item.status === 'approved' &&
@@ -884,10 +901,14 @@ export class NowPlayingPoller {
         continue;
       }
 
-      // Past grace: deterministic terminal status.
+      // Past grace: `playing` when current; `played` only on evidence the
+      // item is gone (seen playing and since moved on, or absent from a
+      // complete visible queue).
+      const seenPlayingAndGone = item.status === 'playing';
+      const absentFromCompleteQueue = !isQueued && !queueTruncated;
       if (isCurrent && item.status !== 'playing') {
         await repo.setStatus({ id: item.id, status: 'playing' });
-      } else if (!isCurrent && !isQueued) {
+      } else if (!isCurrent && (seenPlayingAndGone || absentFromCompleteQueue)) {
         await repo.setStatus({ id: item.id, status: 'played', decidedAt: new Date(now) });
       }
     }

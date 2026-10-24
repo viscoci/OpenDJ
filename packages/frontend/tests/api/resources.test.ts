@@ -5,6 +5,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import { OpenDjClient } from '../../src/api/OpenDjClient.js';
+import { ApiError } from '../../src/api/errors.js';
 
 interface Capture {
   url: string;
@@ -147,6 +148,49 @@ describe('QueueApi', () => {
     const result = await client.queue.voteSkip('sess-1', 'item-1', 'slt_abc');
     expect(captures[0]?.url).toBe('https://api.test/api/v1/sessions/sess-1/queue/item-1/skip-vote');
     expect(result).toEqual({ votes: 3, threshold: 5 });
+  });
+
+  it('search sends the slot token as Bearer when given', async () => {
+    const { client, captures } = makeClient({ body: { results: [], providerId: 'spotify' } });
+    await client.queue.search('sess-1', 'daft punk', 10, { slotToken: 'slt_abc' });
+    expect(captures[0]?.url).toBe(
+      'https://api.test/api/v1/sessions/sess-1/search?q=daft+punk&limit=10',
+    );
+    const headers = captures[0]?.init?.headers as Record<string, string>;
+    expect(headers['authorization']).toBe('Bearer slt_abc');
+  });
+
+  it('search without options sends no Authorization header', async () => {
+    const { client, captures } = makeClient({ body: { results: [], providerId: 'spotify' } });
+    await client.queue.search('sess-1', 'daft');
+    const headers = captures[0]?.init?.headers as Record<string, string>;
+    expect(headers['authorization']).toBeUndefined();
+  });
+
+  it('search passes the abort signal to fetch', async () => {
+    const { client, captures } = makeClient({ body: { results: [], providerId: 'spotify' } });
+    const controller = new AbortController();
+    await client.queue.search('sess-1', 'daft', 10, { signal: controller.signal });
+    expect(captures[0]?.init?.signal).toBe(controller.signal);
+  });
+
+  it('search returns the slowDown hint intact', async () => {
+    const { client } = makeClient({
+      body: { results: [], providerId: 'spotify', slowDown: { debounceMs: 1200, ttlSec: 30 } },
+    });
+    const res = await client.queue.search('sess-1', 'daft', 10);
+    expect(res.slowDown).toEqual({ debounceMs: 1200, ttlSec: 30 });
+  });
+
+  it('search rejects search_busy with a readable code and retryAfterSec', async () => {
+    const { client } = makeClient({
+      status: 503,
+      body: { error: 'search_busy', retryAfterSec: 4 },
+    });
+    const err = await client.queue.search('sess-1', 'daft', 10).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).code).toBe('search_busy');
+    expect((err as ApiError).payload).toMatchObject({ retryAfterSec: 4 });
   });
 });
 

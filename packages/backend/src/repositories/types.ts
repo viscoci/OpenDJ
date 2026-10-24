@@ -8,6 +8,7 @@
  */
 
 import type { Claim } from '@opendj/auth';
+import type { ProviderQuotaGroup } from '../providers/streaming/ProviderCooldowns.js';
 
 export interface UserRecord {
   id: string;
@@ -233,6 +234,8 @@ export interface QueueItemRecord {
 export interface QueueItemRepository {
   findById(id: string): Promise<QueueItemRecord | null>;
   findAllForSession(sessionId: string): Promise<QueueItemRecord[]>;
+  /** Every queue item in every session. Only for the one-time track catalog backfill. */
+  findAll(): Promise<QueueItemRecord[]>;
   create(input: {
     sessionId: string;
     guestId: string;
@@ -610,6 +613,18 @@ export interface ProviderConnectionRecord {
   expiresAt: Date | null;
   scopes: string[] | null;
   tokenType: string | null;
+  /**
+   * End of the provider's persisted `player` quota-group cooldown (see
+   * `ProviderCooldowns`), or null. May be in the past: expired values stay.
+   */
+  rateLimitedUntil: Date | null;
+  /** Same as `rateLimitedUntil`, for the `search` quota group. */
+  searchRateLimitedUntil: Date | null;
+  /**
+   * Provider app client id both persisted cooldowns were recorded under,
+   * or null when unknown. Seeding ignores cooldowns from another client id.
+   */
+  rateLimitedClientId: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -674,6 +689,22 @@ export interface ProviderConnectionRepository {
     expiresAt?: Date | null;
     tokenType?: string | null;
   }): Promise<void>;
+  /**
+   * Raise the persisted rate-limit deadline of `group` to `until` — never
+   * lowers it (`GREATEST`), so out-of-order writes keep the later deadline —
+   * and record `clientId` as the app the cooldowns belong to. When the row
+   * holds cooldowns from a different client id, those are dropped instead
+   * (this group's deadline becomes `until`, the other group's NULL): they
+   * counted against another app's quota. Update only: a missing row is not
+   * created and the call resolves `false`. Leaves `updatedAt` alone.
+   */
+  extendRateLimitedUntil(input: {
+    accountId: string;
+    providerId: string;
+    group: ProviderQuotaGroup;
+    until: Date;
+    clientId: string | null;
+  }): Promise<boolean>;
   delete(id: string): Promise<void>;
 }
 
@@ -709,6 +740,60 @@ export interface SessionAuditEventRepository {
   ): Promise<SessionAuditEventRecord[]>;
 }
 
+/** One `track_catalog` row: a track a provider search returned or a guest requested. */
+export interface TrackCatalogRecord {
+  providerId: string;
+  trackUri: string;
+  trackName: string;
+  artistName: string;
+  albumArtUrl: string | null;
+  durationMs: number | null;
+  timesSeen: number;
+  timesRequested: number;
+  lastSeenAt: Date;
+  /** The recording's ISRC, when a source reported one. Absent when unknown. */
+  isrc?: string;
+}
+
+/**
+ * One write to the catalog. Inserts the track, or adds the increments to an
+ * existing `(providerId, trackUri)` row, refreshes its metadata (keeping a
+ * known album art / duration when this write has none), and keeps the later
+ * `seenAt`.
+ */
+export interface TrackCatalogUpsert {
+  providerId: string;
+  trackUri: string;
+  trackName: string;
+  artistName: string;
+  albumArtUrl: string | null;
+  durationMs: number | null;
+  seenIncrement: number;
+  requestedIncrement: number;
+  seenAt: Date;
+  /** The recording's ISRC. A write without one never erases a known one. */
+  isrc?: string;
+}
+
+export interface TrackCatalogRepository {
+  /** Apply every upsert; duplicate `(providerId, trackUri)` pairs in one batch are folded. */
+  upsertMany(entries: ReadonlyArray<TrackCatalogUpsert>): Promise<void>;
+  /** Every row, any provider. Loads the in-process search index. */
+  findAll(): Promise<TrackCatalogRecord[]>;
+  /**
+   * Ranked matches for `query` among one provider's tracks (see
+   * `rankCatalogMatches`): every query token prefix-matches a word of
+   * "name artist", accent- and punctuation-insensitive.
+   */
+  search(input: {
+    providerId: string;
+    query: string;
+    limit: number;
+  }): Promise<TrackCatalogRecord[]>;
+  /** One provider's rows for a recording, any URI. */
+  findByIsrc(input: { providerId: string; isrc: string }): Promise<TrackCatalogRecord[]>;
+}
+
 export interface Repositories {
   users: UserRepository;
   accounts: AccountRepository;
@@ -732,4 +817,5 @@ export interface Repositories {
   lyricsFeedback: LyricsFeedbackRepository;
   abuseSubjects: AbuseSubjectRepository;
   actionEvents: ActionEventRepository;
+  trackCatalog: TrackCatalogRepository;
 }
